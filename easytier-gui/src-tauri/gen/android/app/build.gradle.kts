@@ -82,6 +82,7 @@ android {
             }
         }
         getByName("release") {
+            manifestPlaceholders["usesCleartextTraffic"] = "true"
             isMinifyEnabled = true
             proguardFiles(
                 *fileTree(".") { include("**/*.pro") }

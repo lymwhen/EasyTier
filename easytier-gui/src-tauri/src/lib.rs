@@ -524,6 +524,59 @@ async fn is_web_client_connected() -> Result<bool, String> {
     }
 }
 
+#[tauri::command]
+async fn http_get(url: String, proxy: Option<String>) -> Result<String, String> {
+    let mut builder = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5));
+    if let Some(ref p) = proxy {
+        builder = builder.proxy(reqwest::Proxy::all(p).map_err(|e| format!("Invalid proxy: {}", e))?);
+    }
+    let client = builder.build().map_err(|e| format!("Failed to create client: {}", e))?;
+    client.get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("HTTP request failed: {}", e))?
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read response: {}", e))
+}
+
+#[tauri::command]
+async fn http_post(url: String, proxy: Option<String>) -> Result<String, String> {
+    let mut builder = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5));
+    if let Some(ref p) = proxy {
+        builder = builder.proxy(reqwest::Proxy::all(p).map_err(|e| format!("Invalid proxy: {}", e))?);
+    }
+    let client = builder.build().map_err(|e| format!("Failed to create client: {}", e))?;
+    client.post(&url)
+        .send()
+        .await
+        .map_err(|e| format!("HTTP request failed: {}", e))?
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read response: {}", e))
+}
+
+#[tauri::command]
+async fn tcp_ping(host: String, port: u16) -> Result<String, String> {
+    let addr = format!("{}:{}", host, port);
+    let start = std::time::Instant::now();
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tokio::net::TcpStream::connect(&addr),
+    )
+    .await
+    {
+        Ok(Ok(_stream)) => {
+            let ms = start.elapsed().as_millis();
+            Ok(format!("OK {}ms", ms))
+        }
+        Ok(Err(e)) => Err(format!("TCP connect failed: {}", e)),
+        Err(_) => Err(format!("TCP connect timeout (5s)")),
+    }
+}
+
 // 获取日志目录的辅助函数
 fn get_log_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, tauri::Error> {
     if cfg!(target_os = "android") {
@@ -1387,6 +1440,9 @@ pub fn run_gui() -> std::process::ExitCode {
             is_client_running,
             init_web_client,
             is_web_client_connected,
+            http_get,
+            http_post,
+            tcp_ping,
             get_log_dir_path,
         ])
         .on_window_event(|_win, event| match event {

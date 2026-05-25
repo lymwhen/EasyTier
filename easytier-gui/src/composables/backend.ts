@@ -146,3 +146,15 @@ export async function initWebClient(url?: string) {
 export async function isWebClientConnected() {
   return await invoke<boolean>('is_web_client_connected')
 }
+
+export async function httpGet(url: string, proxy?: string) {
+  return await invoke<string>('http_get', { url, proxy: proxy || null })
+}
+
+export async function httpPost(url: string, proxy?: string) {
+  return await invoke<string>('http_post', { url, proxy: proxy || null })
+}
+
+export async function tcpPing(host: string, port: number) {
+  return await invoke<string>('tcp_ping', { host, port })
+}

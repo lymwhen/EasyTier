@@ -30,6 +30,8 @@ declare global {
   const getNetworkMetas: typeof import('./composables/backend')['getNetworkMetas']
   const getServiceStatus: typeof import('./composables/backend')['getServiceStatus']
   const h: typeof import('vue')['h']
+  const httpGet: typeof import('./composables/backend')['httpGet']
+  const httpPost: typeof import('./composables/backend')['httpPost']
   const initMobileVpnService: typeof import('./composables/mobile_vpn')['initMobileVpnService']
   const initRpcConnection: typeof import('./composables/backend')['initRpcConnection']
   const initService: typeof import('./composables/backend')['initService']
@@ -94,6 +96,7 @@ declare global {
   const shallowRef: typeof import('vue')['shallowRef']
   const storeToRefs: typeof import('pinia')['storeToRefs']
   const syncMobileVpnService: typeof import('./composables/mobile_vpn')['syncMobileVpnService']
+  const tcpPing: typeof import('./composables/backend')['tcpPing']
   const toRaw: typeof import('vue')['toRaw']
   const toRef: typeof import('vue')['toRef']
   const toRefs: typeof import('vue')['toRefs']
@@ -155,6 +158,8 @@ declare module 'vue' {
     readonly getNetworkMetas: UnwrapRef<typeof import('./composables/backend')['getNetworkMetas']>
     readonly getServiceStatus: UnwrapRef<typeof import('./composables/backend')['getServiceStatus']>
     readonly h: UnwrapRef<typeof import('vue')['h']>
+    readonly httpGet: UnwrapRef<typeof import('./composables/backend')['httpGet']>
+    readonly httpPost: UnwrapRef<typeof import('./composables/backend')['httpPost']>
     readonly initMobileVpnService: UnwrapRef<typeof import('./composables/mobile_vpn')['initMobileVpnService']>
     readonly initRpcConnection: UnwrapRef<typeof import('./composables/backend')['initRpcConnection']>
     readonly initService: UnwrapRef<typeof import('./composables/backend')['initService']>
@@ -219,6 +224,7 @@ declare module 'vue' {
     readonly shallowRef: UnwrapRef<typeof import('vue')['shallowRef']>
     readonly storeToRefs: UnwrapRef<typeof import('pinia')['storeToRefs']>
     readonly syncMobileVpnService: UnwrapRef<typeof import('./composables/mobile_vpn')['syncMobileVpnService']>
+    readonly tcpPing: UnwrapRef<typeof import('./composables/backend')['tcpPing']>
     readonly toRaw: UnwrapRef<typeof import('vue')['toRaw']>
     readonly toRef: UnwrapRef<typeof import('vue')['toRef']>
     readonly toRefs: UnwrapRef<typeof import('vue')['toRefs']>

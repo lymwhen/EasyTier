@@ -3,3 +3,7 @@ packages:
   - 'easytier-web/frontend-lib'
   - 'easytier-gui'
   - 'tauri-plugin-vpnservice'
+allowBuilds:
+  esbuild: true
+  unrs-resolver: true
+  vue-demi: true
