@@ -4,42 +4,44 @@ import { isClientRunning } from '~/composables/backend'
 import pkg from '~/../package.json'
 
 const router = useRouter()
-const ready = ref(false)
+const backendReady = ref(false)
+const splashShow = ref(true)
 
 onBeforeMount(async () => {
   await getCurrentWindow().setTitle(`Easytier GUI: v${pkg.version}`)
 })
 
 onMounted(async () => {
-  // Wait for the backend to initialize (index.vue handles init in its onMounted)
-  const maxWait = 20000 // 20 second timeout
   const start = Date.now()
-  while (!ready.value) {
+  const maxWait = 20000
+
+  // Wait for backend
+  while (!backendReady.value) {
     await new Promise(r => setTimeout(r, 500))
-    try { ready.value = await isClientRunning() } catch { /* not yet */ }
+    try { backendReady.value = await isClientRunning() } catch { /* not yet */ }
     if (Date.now() - start > maxWait) break
   }
 
-  // Navigate regardless — even if not ready, show the networks page
+  // Navigate to home BEFORE hiding splash
   try {
-    const raw = localStorage.getItem('networkList')
-    const list = JSON.parse(raw || '[]')
-    if (list.length === 1) {
-      router.replace('/home')
-    } else {
-      router.replace('/home')
-    }
+    await router.replace('/home')
   } catch {
-    router.replace('/networks')
+    try { await router.replace('/networks') } catch { /* */ }
   }
+
+  // Minimum 500ms splash
+  const elapsed = Date.now() - start
+  if (elapsed < 500) await new Promise(r => setTimeout(r, 500 - elapsed))
+
+  splashShow.value = false
 })
 </script>
 
 <template>
   <!-- Splash overlay (covers RouterView during init) -->
-  <div v-if="!ready" class="splash">
+  <div v-if="splashShow" class="splash">
     <div class="splash-inner">
-      <svg class="splash-icon" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#1976d2" stroke-width="1.5">
+      <svg class="splash-icon" width="64" height="64" viewBox="0 0 24 24" fill="#1976d2">
         <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
       </svg>
       <div class="splash-title">EasyTier</div>

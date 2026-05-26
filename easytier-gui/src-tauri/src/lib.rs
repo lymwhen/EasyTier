@@ -30,6 +30,14 @@ use easytier::{
 };
 use std::ops::Deref;
 use std::sync::Arc;
+use hyper::body::Incoming;
+use hyper::server::conn::http1;
+use hyper::service::service_fn;
+use hyper::{Request, Response, StatusCode};
+use hyper_util::rt::TokioIo;
+use http_body_util::{BodyExt, Full};
+use bytes::Bytes;
+use tokio::net::TcpListener;
 use tokio::sync::{Mutex, RwLock, RwLockReadGuard};
 use uuid::Uuid;
 
@@ -527,7 +535,7 @@ async fn is_web_client_connected() -> Result<bool, String> {
 #[tauri::command]
 async fn http_get(url: String, proxy: Option<String>) -> Result<String, String> {
     let mut builder = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5));
+        .timeout(std::time::Duration::from_secs(3));
     if let Some(ref p) = proxy {
         builder = builder.proxy(reqwest::Proxy::all(p).map_err(|e| format!("Invalid proxy: {}", e))?);
     }
@@ -544,7 +552,7 @@ async fn http_get(url: String, proxy: Option<String>) -> Result<String, String> 
 #[tauri::command]
 async fn http_post(url: String, proxy: Option<String>) -> Result<String, String> {
     let mut builder = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5));
+        .timeout(std::time::Duration::from_secs(3));
     if let Some(ref p) = proxy {
         builder = builder.proxy(reqwest::Proxy::all(p).map_err(|e| format!("Invalid proxy: {}", e))?);
     }
@@ -574,6 +582,268 @@ async fn tcp_ping(host: String, port: u16) -> Result<String, String> {
         }
         Ok(Err(e)) => Err(format!("TCP connect failed: {}", e)),
         Err(_) => Err(format!("TCP connect timeout (5s)")),
+    }
+}
+
+// ============================================================
+// LuCI HTTP Reverse Proxy (local iframe → router)
+// ============================================================
+
+struct ProxyHandle {
+    port: u16,
+    shutdown_tx: tokio::sync::oneshot::Sender<()>,
+    shared: Arc<SharedState>,
+}
+
+struct SharedState {
+    last_path: std::sync::Mutex<String>,
+    last_path_type: std::sync::Mutex<String>, // "tunnel" or "lan"
+}
+
+struct ProxyCtx {
+    client: reqwest::Client,
+    cookie: Mutex<String>,
+    router_ip: String,
+    username: String,
+    password: String,
+    shared: Arc<SharedState>,
+}
+
+static PROXY: once_cell::sync::Lazy<std::sync::Mutex<Option<ProxyHandle>>> =
+    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(None));
+
+fn build_proxy_client(socks5_proxy: &Option<String>) -> Result<reqwest::Client, String> {
+    let mut builder = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .redirect(reqwest::redirect::Policy::none());
+    if let Some(p) = socks5_proxy {
+        builder = builder.proxy(reqwest::Proxy::all(p).map_err(|e| format!("Invalid proxy: {}", e))?);
+    }
+    builder.build().map_err(|e| format!("Failed to create proxy client: {}", e))
+}
+
+async fn luci_login(
+    client: &reqwest::Client,
+    router_ip: &str,
+    username: &str,
+    password: &str,
+) -> Result<String, String> {
+    let login_url = format!("http://{}/cgi-bin/luci/", router_ip);
+    let resp = client
+        .post(&login_url)
+        .form(&[
+            ("luci_username", username),
+            ("luci_password", password),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("Login request failed: {}", e))?;
+    let status = resp.status().as_u16();
+    let mut found_cookie = String::new();
+    for cookie in resp.headers().get_all("set-cookie") {
+        let s = cookie.to_str().unwrap_or("");
+        if s.starts_with("sysauth=") || s.starts_with("sysauth_http=") {
+            found_cookie = s.split(';').next().unwrap_or("").to_string();
+            break;
+        }
+    }
+    if !found_cookie.is_empty() {
+        return Ok(found_cookie);
+    }
+    // Collect first 3 cookies for debug
+    let debug_cookies: Vec<_> = resp.headers().get_all("set-cookie").iter()
+        .filter_map(|c| c.to_str().ok())
+        .take(3)
+        .collect();
+    Err(format!("No sysauth cookie in login response (HTTP {status}, cookies: {:?})", debug_cookies))
+}
+
+async fn proxy_request(
+    req: Request<Incoming>,
+    ctx: &Arc<ProxyCtx>,
+) -> Result<Response<Full<Bytes>>, hyper::Error> {
+    let path = req.uri().path_and_query()
+        .map(|pq| pq.as_str())
+        .unwrap_or("/");
+    // Track last path for refresh
+    *ctx.shared.last_path.lock().unwrap() = path.to_string();
+    let target_url = format!("http://{}{}", ctx.router_ip, path);
+    let method: reqwest::Method = req.method().clone().try_into().unwrap_or(reqwest::Method::GET);
+
+    let cookie = ctx.cookie.lock().await.clone();
+    let mut proxy_req = ctx.client.request(method, &target_url)
+        .header("Cookie", &cookie);
+
+    for (name, value) in req.headers() {
+        let n = name.as_str().to_lowercase();
+        if n != "host" && n != "cookie" && n != "content-length" && n != "origin" && n != "referer" {
+            if let Ok(v) = value.to_str() {
+                proxy_req = proxy_req.header(name.as_str(), v);
+            }
+        }
+    }
+
+    let (parts, body) = req.into_parts();
+    let body_bytes = match body.collect().await {
+        Ok(b) => b.to_bytes(),
+        Err(_) => return build_error_response("Failed to read request body"),
+    };
+    if !body_bytes.is_empty() {
+        proxy_req = proxy_req.body(body_bytes.to_vec());
+    }
+
+    let resp = match proxy_req.send().await {
+        Ok(r) => r,
+        Err(e) => return build_error_response(&e.to_string()),
+    };
+
+    // If session expired (redirect to login), re-login and retry once
+    let is_login_redirect = resp.status() == reqwest::StatusCode::FOUND
+        && resp.headers().get("location")
+            .and_then(|v| v.to_str().ok())
+            .map(|loc| loc.contains("login"))
+            .unwrap_or(false);
+
+    if is_login_redirect {
+        drop(resp);
+        match luci_login(&ctx.client, &ctx.router_ip, &ctx.username, &ctx.password).await {
+            Ok(new_cookie) => {
+                *ctx.cookie.lock().await = new_cookie.clone();
+                if !body_bytes.is_empty() {
+                    return build_error_response("Session expired during POST, please retry");
+                }
+                let retry_req = ctx.client.request(
+                    reqwest::Method::from_bytes(parts.method.as_str().as_bytes()).unwrap_or(reqwest::Method::GET),
+                    &target_url,
+                ).header("Cookie", &new_cookie);
+                match retry_req.send().await {
+                    Ok(r) => return build_proxy_response(r).await,
+                    Err(e) => return build_error_response(&e.to_string()),
+                }
+            }
+            Err(e) => return build_error_response(&e.to_string()),
+        }
+    }
+
+    build_proxy_response(resp).await
+}
+
+async fn build_proxy_response(resp: reqwest::Response) -> Result<Response<Full<Bytes>>, hyper::Error> {
+    let status = StatusCode::from_u16(resp.status().as_u16())
+        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    // Collect headers before consuming body
+    let headers: Vec<_> = resp.headers().iter()
+        .filter(|(name, _)| {
+            let n = name.as_str().to_lowercase();
+            n != "transfer-encoding" && n != "content-encoding"
+                && n != "x-frame-options" && n != "content-security-policy"
+        })
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect();
+    let resp_body = resp.bytes().await.unwrap_or_default();
+    let mut builder = Response::builder().status(status);
+    for (name, value) in headers {
+        if let Ok(v) = value.to_str() {
+            builder = builder.header(name.as_str(), v);
+        }
+    }
+    Ok(builder.body(Full::new(resp_body)).unwrap())
+}
+
+fn build_error_response(msg: &str) -> Result<Response<Full<Bytes>>, hyper::Error> {
+    let mut builder = Response::builder()
+        .status(StatusCode::BAD_GATEWAY)
+        .header("content-type", "text/plain; charset=utf-8");
+    Ok(builder.body(Full::new(Bytes::from(msg.to_string()))).unwrap())
+}
+
+async fn run_proxy(
+    listener: TcpListener,
+    ctx: Arc<ProxyCtx>,
+    mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+) {
+    loop {
+        tokio::select! {
+            _ = &mut shutdown_rx => { break; }
+            result = listener.accept() => {
+                match result {
+                    Ok((stream, _addr)) => {
+                        let io = TokioIo::new(stream);
+                        let ctx2 = ctx.clone();
+                        tokio::spawn(async move {
+                            let svc = service_fn(move |req| {
+                                let ctx3 = ctx2.clone();
+                                async move { proxy_request(req, &ctx3).await }
+                            });
+                            let _ = http1::Builder::new()
+                                .half_close(true)
+                                .serve_connection(io, svc)
+                                .await;
+                        });
+                    }
+                    Err(_) => { /* accept error, continue */ }
+                }
+            }
+        }
+    }
+}
+
+fn stop_proxy_inner() {
+    let mut guard = PROXY.lock().unwrap();
+    if let Some(handle) = guard.take() {
+        let _ = handle.shutdown_tx.send(());
+    }
+}
+
+#[tauri::command]
+async fn luci_proxy_start(
+    router_ip: String,
+    username: String,
+    password: String,
+    socks5_proxy: Option<String>,
+) -> Result<String, String> {
+    stop_proxy_inner();
+
+    let client = build_proxy_client(&socks5_proxy)?;
+    let cookie = luci_login(&client, &router_ip, &username, &password).await?;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await
+        .map_err(|e| format!("Failed to bind local port: {}", e))?;
+    let port = listener.local_addr().unwrap().port();
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let shared = Arc::new(SharedState {
+        last_path: std::sync::Mutex::new("/cgi-bin/luci/admin/".to_string()),
+        last_path_type: std::sync::Mutex::new(if socks5_proxy.is_some() { "tunnel" } else { "lan" }.to_string()),
+    });
+    *PROXY.lock().unwrap() = Some(ProxyHandle { port, shutdown_tx, shared: shared.clone() });
+
+    let ctx = Arc::new(ProxyCtx {
+        client,
+        cookie: Mutex::new(cookie),
+        router_ip,
+        username,
+        password,
+        shared,
+    });
+
+    tokio::spawn(async move { run_proxy(listener, ctx, shutdown_rx).await });
+
+    Ok(format!("http://127.0.0.1:{}", port))
+}
+
+#[tauri::command]
+async fn luci_proxy_stop() -> Result<(), String> {
+    stop_proxy_inner();
+    Ok(())
+}
+
+#[tauri::command]
+async fn luci_get_last_path() -> Result<String, String> {
+    let guard = PROXY.lock().unwrap();
+    match guard.as_ref() {
+        Some(h) => Ok(h.shared.last_path.lock().unwrap().clone()),
+        None => Ok("/cgi-bin/luci/admin/".to_string()),
     }
 }
 
@@ -1443,6 +1713,9 @@ pub fn run_gui() -> std::process::ExitCode {
             http_get,
             http_post,
             tcp_ping,
+            luci_proxy_start,
+            luci_proxy_stop,
+            luci_get_last_path,
             get_log_dir_path,
         ])
         .on_window_event(|_win, event| match event {

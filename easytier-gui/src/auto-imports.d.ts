@@ -47,6 +47,9 @@ declare global {
   const listenGlobalEvents: typeof import('./composables/event')['listenGlobalEvents']
   const loadLastNetworkInstanceId: typeof import('./composables/config')['loadLastNetworkInstanceId']
   const loadMode: typeof import('./composables/mode')['loadMode']
+  const luciGetLastPath: typeof import('./composables/backend')['luciGetLastPath']
+  const luciProxyStart: typeof import('./composables/backend')['luciProxyStart']
+  const luciProxyStop: typeof import('./composables/backend')['luciProxyStop']
   const mapActions: typeof import('pinia')['mapActions']
   const mapGetters: typeof import('pinia')['mapGetters']
   const mapState: typeof import('pinia')['mapState']
@@ -175,6 +178,9 @@ declare module 'vue' {
     readonly listenGlobalEvents: UnwrapRef<typeof import('./composables/event')['listenGlobalEvents']>
     readonly loadLastNetworkInstanceId: UnwrapRef<typeof import('./composables/config')['loadLastNetworkInstanceId']>
     readonly loadMode: UnwrapRef<typeof import('./composables/mode')['loadMode']>
+    readonly luciGetLastPath: UnwrapRef<typeof import('./composables/backend')['luciGetLastPath']>
+    readonly luciProxyStart: UnwrapRef<typeof import('./composables/backend')['luciProxyStart']>
+    readonly luciProxyStop: UnwrapRef<typeof import('./composables/backend')['luciProxyStop']>
     readonly mapActions: UnwrapRef<typeof import('pinia')['mapActions']>
     readonly mapGetters: UnwrapRef<typeof import('pinia')['mapGetters']>
     readonly mapState: UnwrapRef<typeof import('pinia')['mapState']>

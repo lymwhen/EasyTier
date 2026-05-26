@@ -158,3 +158,19 @@ export async function httpPost(url: string, proxy?: string) {
 export async function tcpPing(host: string, port: number) {
   return await invoke<string>('tcp_ping', { host, port })
 }
+
+export async function luciProxyStart(
+  routerIp: string, username: string, password: string, socks5Proxy: string | null,
+) {
+  return await invoke<string>('luci_proxy_start', {
+    routerIp, username, password, socks5Proxy,
+  })
+}
+
+export async function luciProxyStop() {
+  return await invoke<void>('luci_proxy_stop')
+}
+
+export async function luciGetLastPath() {
+  return await invoke<string>('luci_get_last_path')
+}

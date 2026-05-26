@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { generateNetworkConfig, sendConfigs, collectNetworkInfo, updateNetworkConfigState, parseNetworkConfig, httpGet, httpPost, tcpPing, deleteNetworkInstance } from '~/composables/backend'
+import { generateNetworkConfig, sendConfigs, collectNetworkInfo, updateNetworkConfigState, parseNetworkConfig, httpGet, httpPost, tcpPing, deleteNetworkInstance, luciProxyStart, luciProxyStop, luciGetLastPath } from '~/composables/backend'
 import { loadLastNetworkInstanceId, saveLastNetworkInstanceId } from '~/composables/config'
 import { Utils, I18nUtils } from 'easytier-frontend-lib'
 import pkg from '~/../package.json'
@@ -85,6 +85,12 @@ const T: Record<string, [string, string]> = {
   defaultHome: ['Default Home', '默认首页'],
   wolTab: ['WOL', 'WOL'],
   netTab: ['Network', '组网'],
+  luciTab: ['Router', '路由器'],
+  routers: ['Routers', '路由器'],
+  noRouters: ['No routers configured', '未配置路由器'],
+  addRouter: ['Add Router', '添加路由器'],
+  editRoutersToml: ['Edit routers.toml', '编辑 routers.toml'],
+  connectingRouter: ['Connecting...', '连接中...'],
 }
 function tt(key: string): string {
   const entry = T[key]
@@ -93,7 +99,7 @@ function tt(key: string): string {
 }
 
 // --- Tabs ---
-type Tab = 'wol' | 'net' | 'settings'
+type Tab = 'wol' | 'net' | 'luci' | 'settings'
 const defaultTab = ref<Tab>((localStorage.getItem('defaultTab') as Tab) || 'wol')
 const activeTab = ref<Tab>(defaultTab.value)
 const showDebug = ref(false)
@@ -102,6 +108,18 @@ function switchTab(tab: Tab) {
   activeTab.value = tab
   if (tab === 'wol') checkAllWolStatus()
   if (tab === 'net' && netInstId.value) refreshNet()
+  if (tab === 'luci') {
+    if (!proxyUrl.value && luciRouters.value.length > 0 && !luciLoading.value) {
+      luciIdx.value = luciIdx.value >= 0 ? luciIdx.value : 0
+      startLuciProxy(luciRouters.value[luciIdx.value])
+    } else if (proxyUrl.value) {
+      // If path type changed (ET-LAN ↔ LAN), fully restart proxy
+      const curType = getSocks5Proxy() ? 'tunnel' : 'lan'
+      if (lastLuciPathType.value && lastLuciPathType.value !== curType) {
+        refreshLuciIframe()
+      }
+    }
+  }
 }
 
 async function toggleLang() {
@@ -206,11 +224,12 @@ function readClipboard(): string {
   return (window as any)._easytier_paste?.readClipboard?.() || ''
 }
 
-function importFromClipboard(refName: 'wol' | 'net') {
+function importFromClipboard(refName: 'wol' | 'net' | 'luci') {
   const text = readClipboard()
   if (!text) { showSnack('Clipboard is empty'); return }
   if (refName === 'wol') wolToml.value = text
-  else editingNetToml.value = text
+  else if (refName === 'net') editingNetToml.value = text
+  else luciToml.value = text
 }
 
 function getWolPhaseLabel(w: WolDevice & { status: { online: boolean; phase: string } }): string {
@@ -288,7 +307,7 @@ const currentNet = computed(() => netIndex.value >= 0 ? networks.value[netIndex.
 const netInstId = computed(() => currentNet.value?.config?.instance_id || '')
 const netDiscovering = computed(() => netRunning.value && !netPeers.length && !netServers.length && netConnectTime.value > 0 && Date.now() - netConnectTime.value < 12000)
 
-async function fetchNetInfo() { if (!netInstId.value) return; try { const resp = await collectNetworkInfo(netInstId.value); const infoMap = resp.info?.map || {}; const info = infoMap[netInstId.value] || Object.values(infoMap)[0]; if (info) { netRunning.value = info.running; netDevName.value = info.dev_name || ''; const my = info.my_node_info; netSelfIp.value = formatIp(my?.virtual_ipv4); netSelfIpv6.value = formatIpv6(my?.ips?.public_ipv6); netSelfNat.value = my?.stun_info || null; const all = (info.peer_route_pairs || []).filter((p: any) => p.route?.cost > 0); netPeers.value = all.filter((p: any) => !isServer(p)); netServers.value = all.filter((p: any) => isServer(p)) } } catch { /* */ } }
+async function fetchNetInfo() { if (!netInstId.value) return; try { const resp = await collectNetworkInfo(netInstId.value); const infoMap = resp.info?.map || {}; const info = infoMap[netInstId.value] || Object.values(infoMap)[0]; if (info) { netRunning.value = info.running; netDevName.value = info.dev_name || ''; const my = info.my_node_info; netSelfIp.value = formatIp(my?.virtual_ipv4); netSelfIpv6.value = formatIpv6(my?.ips?.public_ipv6); netSelfNat.value = my?.stun_info || null; const all = (info.peer_route_pairs || []).filter((p: any) => p.route?.cost > 0); netPeers.value = all.filter((p: any) => !isServer(p)); netServers.value = all.filter((p: any) => isServer(p)) } } catch { /* */ } updateTrafficSpeed() }
 async function refreshNet() { netLoading.value = true; await fetchNetInfo(); netLoading.value = false }
 
 async function doConnect() {
@@ -420,6 +439,202 @@ const sortedPeers = computed(() => {
 
 const sortedServers = computed(() => [...netServers.value].sort((a, b) => (a.route?.hostname || '').localeCompare(b.route?.hostname || '')))
 
+// Traffic speed tracking
+const netTrafficSpeed = reactive({ up: '', down: '', upBytes: 0, downBytes: 0, upTotal: '', downTotal: '' })
+const trafficHistory = reactive<{ up: number; down: number }[]>([])
+const TRAFFIC_MAX_POINTS = 60 // ~3 min at 3s interval
+let lastTraffic = { up: 0, down: 0, ts: 0 }
+const TRAFFIC_UP_COLOR = '#1976d2'
+const TRAFFIC_DOWN_COLOR = '#e57373'
+
+function updateTrafficSpeed() {
+  let up = 0, down = 0
+  for (const p of [...netPeers.value, ...netServers.value]) {
+    const pr = p.peer
+    if (pr?.conns?.length) {
+      for (const c of pr.conns) {
+        up += c.stats?.tx_bytes || 0
+        down += c.stats?.rx_bytes || 0
+      }
+    }
+  }
+  netTrafficSpeed.upTotal = formatBytes(up)
+  netTrafficSpeed.downTotal = formatBytes(down)
+  const now = Date.now()
+  if (lastTraffic.ts > 0 && now > lastTraffic.ts) {
+    const sec = (now - lastTraffic.ts) / 1000
+    netTrafficSpeed.upBytes = Math.max(0, Math.round((up - lastTraffic.up) / sec))
+    netTrafficSpeed.downBytes = Math.max(0, Math.round((down - lastTraffic.down) / sec))
+    netTrafficSpeed.up = formatBytes(netTrafficSpeed.upBytes) + '/s'
+    netTrafficSpeed.down = formatBytes(netTrafficSpeed.downBytes) + '/s'
+    trafficHistory.push({ up: netTrafficSpeed.upBytes, down: netTrafficSpeed.downBytes })
+    while (trafficHistory.length > TRAFFIC_MAX_POINTS) trafficHistory.shift()
+  }
+  lastTraffic = { up, down, ts: now }
+}
+
+function buildSmoothPath(data: number[], maxVal: number, height: number, width: number): string {
+  if (data.length < 2) return ''
+  const stepX = width / (data.length - 1)
+  const scaleY = (v: number) => height - (v / maxVal) * (height - 4) - 2
+  let d = `M 0,${scaleY(data[0])}`
+  for (let i = 0; i < data.length - 1; i++) {
+    const x1 = i * stepX; const y1 = scaleY(data[i])
+    const x2 = (i + 1) * stepX; const y2 = scaleY(data[i + 1])
+    const cx1 = x1 + stepX * 0.4; const cx2 = x2 - stepX * 0.4
+    d += ` C ${cx1},${y1} ${cx2},${y2} ${x2},${y2}`
+  }
+  return d
+}
+
+function formatSpeedY(v: number): string {
+  if (v < 1024) return v + 'B/s'
+  if (v < 1048576) return (v / 1024).toFixed(0) + 'K'
+  if (v < 1073741824) return (v / 1048576).toFixed(0) + 'M'
+  return (v / 1073741824).toFixed(1) + 'G'
+}
+function formatXLabel(total: number, idx: number): string {
+  const sec = (total - 1 - idx) * 3
+  if (sec === 0) return 'now'
+  if (sec < 60) return '-' + sec + 's'
+  const min = sec / 60
+  // Round to nearest 0.5 to avoid floating point quirks
+  const r = Math.round(min * 2) / 2
+  const t = r.toFixed(1)
+  return '-' + (t.endsWith('0') ? t.slice(0, -2) : t) + 'm'
+}
+
+// ==================== Router Tab (LuCI proxy) ====================
+interface LuciRouter { name: string; ip: string; username: string; password: string }
+const luciToml = ref(localStorage.getItem('luciRoutersToml') || '')
+const luciRouters = ref<LuciRouter[]>([])
+const luciIdx = ref(-1)
+const proxyUrl = ref('')
+const luciIframeSrc = ref('')
+const luciIframeKey = ref(0)
+const luciLoading = ref(false)
+const luciCurrentPath = ref('/cgi-bin/luci/admin/')
+const showLuciEditor = ref(false)
+const showLuciMenu = ref(false)
+const lastLuciPathType = ref('')
+
+function parseLuciToml(t: string): LuciRouter[] {
+  if (!t?.trim()) return []
+  const devs: LuciRouter[] = []; const lines = t.split('\n'); let cur: Record<string, any> | null = null
+  for (const line of lines) {
+    const tl = line.trim(); if (!tl || tl.startsWith('#')) continue
+    if (tl === '[[router]]') { if (cur?.ip) devs.push(cur as any); cur = {}; continue }
+    if (cur) { const m = tl.match(/^(\w+)\s*=\s*(.+)$/); if (m) { let v: any = m[2].trim(); if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1); cur[m[1]] = v } }
+  }
+  if (cur?.ip) devs.push(cur as any); return devs
+}
+function loadLuciConfig() {
+  luciRouters.value = parseLuciToml(luciToml.value)
+  if (luciIdx.value >= luciRouters.value.length) luciIdx.value = luciRouters.value.length - 1
+}
+const currentLuciRouter = computed(() => luciIdx.value >= 0 ? luciRouters.value[luciIdx.value] : null)
+
+async function startLuciProxy(r: LuciRouter) {
+  luciLoading.value = true
+  try {
+    await luciProxyStop()
+    const socks5 = getSocks5Proxy()
+    const url = await luciProxyStart(r.ip, r.username, r.password, socks5 || null)
+    proxyUrl.value = url
+    luciIframeSrc.value = url + '/cgi-bin/luci/admin/'
+    luciCurrentPath.value = '/cgi-bin/luci/admin/'
+    lastLuciPathType.value = socks5 ? 'tunnel' : 'lan'
+    luciIframeKey.value++
+    localStorage.setItem('lastLuciRouterIp', r.ip)
+  } catch (e: any) {
+    showSnack(String(e))
+    proxyUrl.value = ''
+  }
+  luciLoading.value = false
+}
+
+async function stopLuciProxyFn() {
+  try { await luciProxyStop() } catch { /* */ }
+  proxyUrl.value = ''
+}
+
+async function refreshLuciIframe() {
+  const r = currentLuciRouter.value
+  if (!r) return
+  luciLoading.value = true
+  try {
+    const socks5 = getSocks5Proxy()
+    // Get last path before restarting proxy
+    const prevPath = await luciGetLastPath().catch(() => '/cgi-bin/luci/admin/')
+    const url = await luciProxyStart(r.ip, r.username, r.password, socks5 || null)
+    proxyUrl.value = url
+    luciCurrentPath.value = prevPath
+    luciIframeSrc.value = url + prevPath
+    lastLuciPathType.value = socks5 ? 'tunnel' : 'lan'
+    luciIframeKey.value++
+  } catch (e: any) {
+    showSnack(String(e))
+  }
+  luciLoading.value = false
+}
+
+function deleteLuciRouter(idx: number, e: MouseEvent) {
+  e.stopPropagation()
+  const wasCurrent = idx === luciIdx.value
+  luciRouters.value.splice(idx, 1)
+  const lines = luciRouters.value.map(r => `[[router]]
+name = "${r.name}"
+ip = "${r.ip}"
+username = "${r.username}"
+password = "${r.password}"
+`)
+  luciToml.value = lines.join('\n')
+  saveLuciConfigSilent()
+  if (wasCurrent) {
+    stopLuciProxyFn()
+    if (luciRouters.value.length > 0) {
+      luciIdx.value = Math.min(idx, luciRouters.value.length - 1)
+      startLuciProxy(luciRouters.value[luciIdx.value])
+    } else {
+      luciIdx.value = -1
+    }
+  } else if (idx < luciIdx.value) {
+    luciIdx.value--
+  }
+}
+
+function saveLuciConfigSilent() {
+  localStorage.setItem('luciRoutersToml', luciToml.value)
+  loadLuciConfig()
+}
+
+async function switchLuciRouter(idx: number) {
+  luciIdx.value = idx; showLuciMenu.value = false
+  const r = luciRouters.value[idx]
+  if (r) await startLuciProxy(r)
+}
+
+function openLuciEditorFn() {
+  luciToml.value = localStorage.getItem('luciRoutersToml') || ''
+  showLuciEditor.value = true
+}
+function saveLuciConfig() {
+  localStorage.setItem('luciRoutersToml', luciToml.value)
+  loadLuciConfig()
+  showLuciEditor.value = false
+  showSnack(tt('configSaved'))
+  const cur = luciRouters.value[luciIdx.value] || luciRouters.value[0]
+  if (cur && luciIdx.value >= 0) {
+    luciIdx.value = luciRouters.value.findIndex(r => r.ip === cur.ip)
+    startLuciProxy(cur)
+  }
+}
+
+function onLuciDocClick(e: MouseEvent) {
+  const t = e.target as HTMLElement
+  if (!t.closest('.md-switch-menu') && !t.closest('.md-switch-btn')) showLuciMenu.value = false
+}
+
 function netName(): string { const n = currentNet.value; return n ? (n.config.instance_name || n.config.network_name || tt('unnamed')) : tt('noNetwork') }
 
 function onDocClick(e: MouseEvent) { const t = e.target as HTMLElement; if (!t.closest('.md-switch-menu') && !t.closest('.md-switch-btn')) showSwitchMenu.value = false }
@@ -427,9 +642,17 @@ function onDocClick(e: MouseEvent) { const t = e.target as HTMLElement; if (!t.c
 onMounted(() => {
   loadWolConfig(); checkAllWolStatus(); wolPeriod = new Utils.PeriodicTask(checkAllWolStatus, 30000); wolPeriod.start()
   loadNetworks(); if (netInstId.value) refreshNet(); netPeriod = new Utils.PeriodicTask(fetchNetInfo, 3000); netPeriod.start()
+  loadLuciConfig()
+  if (activeTab.value === 'luci' && luciRouters.value.length > 0) {
+    const lastIp = localStorage.getItem('lastLuciRouterIp')
+    const idx = lastIp ? luciRouters.value.findIndex(r => r.ip === lastIp) : -1
+    luciIdx.value = idx >= 0 ? idx : 0
+    startLuciProxy(luciRouters.value[luciIdx.value])
+  }
   document.addEventListener('click', onDocClick)
+  document.addEventListener('click', onLuciDocClick)
 })
-onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); for (const k of Object.keys(phaseTimers)) clearTimeout(phaseTimers[k]); if (snackTimer) clearTimeout(snackTimer); document.removeEventListener('click', onDocClick) })
+onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for (const k of Object.keys(phaseTimers)) clearTimeout(phaseTimers[k]); if (snackTimer) clearTimeout(snackTimer); document.removeEventListener('click', onDocClick); document.removeEventListener('click', onLuciDocClick) })
 </script>
 
 <template>
@@ -443,10 +666,10 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); for (const k of Object
         <span v-else-if="sortedWol.length && getWolPathType() === 'lan'" class="md-path-badge md-path-lan">LAN</span>
         <div class="flex-1" />
         <button class="md-hdr-btn" @click="openWolEditorFn" :title="tt('editConfig')">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+          <svg width="20" height="20" viewBox="0 0 1024 1024" fill="currentColor"><path d="M714.965 128l-85.333 85.333H213.333v597.334h597.334V394.368L896 309.035v544.298A42.667 42.667 0 0 1 853.333 896H170.667A42.667 42.667 0 0 1 128 853.333V170.667A42.667 42.667 0 0 1 170.667 128h544.298z m159.062-38.4l60.373 60.416-392.192 392.192-60.245 0.128-0.086-60.459L874.027 89.6z"/></svg>
         </button>
         <button class="md-hdr-btn" :class="{ 'animate-spin': checkingWol }" @click="checkAllWolStatus" :title="tt('refresh')">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+          <svg width="20" height="20" viewBox="0 0 1024 1024" fill="currentColor"><path d="M128 170.666667l92.330667 92.330666A382.378667 382.378667 0 0 1 512 128c211.754667 0 384 172.288 384 384h-85.333333c0-164.693333-134.016-298.666667-298.666667-298.666667a297.557333 297.557333 0 0 0-231.125333 110.208L384 426.666667H128V170.666667z m768 682.666666v-256h-256l103.125333 103.125334A297.514667 297.514667 0 0 1 512 810.666667c-164.650667 0-298.666667-134.016-298.666667-298.666667H128c0 211.754667 172.245333 384 384 384a382.378667 382.378667 0 0 0 291.669333-134.997333L896 853.333333z"/></svg>
         </button>
       </div>
       <div v-if="showDebug && wolDebug && sortedWol.length" class="px-4 py-1 text-xs opacity-60" style="color:var(--md-secondary);font-family:monospace;word-break:break-all">{{ wolDebug }}</div>
@@ -513,14 +736,14 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); for (const k of Object
           </template>
         </div>
         <button v-if="!netRunning" class="md-hdr-btn" @click="openNetEditor" :title="tt('editConfig')">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+          <svg width="20" height="20" viewBox="0 0 1024 1024" fill="currentColor"><path d="M714.965 128l-85.333 85.333H213.333v597.334h597.334V394.368L896 309.035v544.298A42.667 42.667 0 0 1 853.333 896H170.667A42.667 42.667 0 0 1 128 853.333V170.667A42.667 42.667 0 0 1 170.667 128h544.298z m159.062-38.4l60.373 60.416-392.192 392.192-60.245 0.128-0.086-60.459L874.027 89.6z"/></svg>
         </button>
         <div style="position:relative">
           <button v-if="netRunning" class="md-hdr-btn md-hdr-btn-off" @click="doDisconnect" :title="tt('disconnect')">
-            <svg width="22" height="22" viewBox="0 0 1024 1024" fill="currentColor"><path d="M797.248 111.936a210.944 210.944 0 0 1 114.816 114.816c10.624 25.728 16 53.312 15.936 81.216a210.624 210.624 0 0 1-61.888 150.016L744.32 580.48a11.264 11.264 0 0 1-8.256 3.328 11.2 11.2 0 0 1-8.256-3.328l-56.768-56.768a11.264 11.264 0 0 1-3.392-8.32 11.264 11.264 0 0 1 3.392-8.192l122.24-122.24a109.12 109.12 0 0 0-118.848-177.792 108.288 108.288 0 0 0-35.392 23.68L517.12 353.088a11.392 11.392 0 0 1-8.256 3.328 11.52 11.52 0 0 1-8.256-3.328l-56.768-56.832a11.456 11.456 0 0 1 0-16.128l122.176-122.24a210.88 210.88 0 0 1 150.016-61.888c27.84-0.128 55.488 5.312 81.28 15.936zM299.584 217.664a31.04 31.04 0 0 0-44.224 0l-36.224 36.096a31.168 31.168 0 0 0-6.784 34.24 31.36 31.36 0 0 0 6.784 10.24l488.384 488.32a30.976 30.976 0 0 0 34.24 6.848 30.912 30.912 0 0 0 10.176-6.848l36.16-36.16a31.36 31.36 0 0 0 0-44.416l-488.512-488.32z m224 451.136a11.2 11.2 0 0 0-8.32-3.392 11.328 11.328 0 0 0-8.192 3.392l-122.24 122.24a108.352 108.352 0 0 1-76.992 31.808 108.16 108.16 0 0 1-77.12-31.872 109.184 109.184 0 0 1 0-154.176l122.688-122.048a11.392 11.392 0 0 0 3.328-8.32 11.52 11.52 0 0 0-3.328-8.192L296.576 441.6a11.52 11.52 0 0 0-8.256-3.328 11.392 11.392 0 0 0-8.192 3.328l-122.24 122.24a210.752 210.752 0 0 0-61.888 150.016 210.496 210.496 0 0 0 61.888 150.016 210.368 210.368 0 0 0 150.016 61.888 210.752 210.752 0 0 0 150.08-61.888l122.176-122.24a11.52 11.52 0 0 0 0-16.192l-56.576-56.704z"/></svg>
+            <svg width="20" height="20" viewBox="0 0 1024 1024" fill="currentColor"><path d="M797.248 111.936a210.944 210.944 0 0 1 114.816 114.816c10.624 25.728 16 53.312 15.936 81.216a210.624 210.624 0 0 1-61.888 150.016L744.32 580.48a11.264 11.264 0 0 1-8.256 3.328 11.2 11.2 0 0 1-8.256-3.328l-56.768-56.768a11.264 11.264 0 0 1-3.392-8.32 11.264 11.264 0 0 1 3.392-8.192l122.24-122.24a109.12 109.12 0 0 0-118.848-177.792 108.288 108.288 0 0 0-35.392 23.68L517.12 353.088a11.392 11.392 0 0 1-8.256 3.328 11.52 11.52 0 0 1-8.256-3.328l-56.768-56.832a11.456 11.456 0 0 1 0-16.128l122.176-122.24a210.88 210.88 0 0 1 150.016-61.888c27.84-0.128 55.488 5.312 81.28 15.936zM299.584 217.664a31.04 31.04 0 0 0-44.224 0l-36.224 36.096a31.168 31.168 0 0 0-6.784 34.24 31.36 31.36 0 0 0 6.784 10.24l488.384 488.32a30.976 30.976 0 0 0 34.24 6.848 30.912 30.912 0 0 0 10.176-6.848l36.16-36.16a31.36 31.36 0 0 0 0-44.416l-488.512-488.32z m224 451.136a11.2 11.2 0 0 0-8.32-3.392 11.328 11.328 0 0 0-8.192 3.392l-122.24 122.24a108.352 108.352 0 0 1-76.992 31.808 108.16 108.16 0 0 1-77.12-31.872 109.184 109.184 0 0 1 0-154.176l122.688-122.048a11.392 11.392 0 0 0 3.328-8.32 11.52 11.52 0 0 0-3.328-8.192L296.576 441.6a11.52 11.52 0 0 0-8.256-3.328 11.392 11.392 0 0 0-8.192 3.328l-122.24 122.24a210.752 210.752 0 0 0-61.888 150.016 210.496 210.496 0 0 0 61.888 150.016 210.368 210.368 0 0 0 150.016 61.888 210.752 210.752 0 0 0 150.08-61.888l122.176-122.24a11.52 11.52 0 0 0 0-16.192l-56.576-56.704z"/></svg>
           </button>
           <button v-if="!netRunning" class="md-hdr-btn md-switch-btn" @click.stop="showSwitchMenu = !showSwitchMenu" :title="tt('switchNetwork')">
-            <svg width="22" height="22" viewBox="0 0 1024 1024" fill="currentColor"><path d="M900.4 424.87c19.47 0 37.03-11.73 44.49-29.73 7.46-17.98 3.33-38.7-10.43-52.48L713.97 122.19c-7.3-7.3-19.12-7.3-26.42 0l-41.69 41.69c-7.3 7.3-7.3 19.13 0 26.42l138.28 138.27H86.32c-10.19 0-18.46 8.26-18.46 18.46v59.39c0 10.19 8.26 18.46 18.46 18.46H900.4zM937.65 598.72H123.8c-19.47 0-37.03 11.73-44.49 29.73-7.46 17.98-3.33 38.7 10.43 52.48l220.49 220.48c7.3 7.3 19.12 7.3 26.42 0l41.69-41.69c7.3-7.3 7.3-19.13 0-26.42L240.06 695.02h697.59c10.32 0 18.68-8.37 18.68-18.68v-58.93c0-10.32-8.36-18.69-18.68-18.69z"/></svg>
+            <svg width="20" height="20" viewBox="0 0 1024 1024" fill="currentColor"><path d="M900.4 424.87c19.47 0 37.03-11.73 44.49-29.73 7.46-17.98 3.33-38.7-10.43-52.48L713.97 122.19c-7.3-7.3-19.12-7.3-26.42 0l-41.69 41.69c-7.3 7.3-7.3 19.13 0 26.42l138.28 138.27H86.32c-10.19 0-18.46 8.26-18.46 18.46v59.39c0 10.19 8.26 18.46 18.46 18.46H900.4zM937.65 598.72H123.8c-19.47 0-37.03 11.73-44.49 29.73-7.46 17.98-3.33 38.7 10.43 52.48l220.49 220.48c7.3 7.3 19.12 7.3 26.42 0l41.69-41.69c7.3-7.3 7.3-19.13 0-26.42L240.06 695.02h697.59c10.32 0 18.68-8.37 18.68-18.68v-58.93c0-10.32-8.36-18.69-18.68-18.69z"/></svg>
           </button>
           <div v-if="showSwitchMenu" class="md-switch-menu md-card" @click.stop>
             <div class="md-sw-item" @click="openAddNet">
@@ -563,29 +786,33 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); for (const k of Object
           <span v-if="natLabel(netSelfNat).text" class="md-chip md-chip-nat" :class="natLabel(netSelfNat).cls">{{ natLabel(netSelfNat).text }}</span>
         </div>
         <div class="flex-1 overflow-y-auto px-3 py-2">
-          <!-- Servers -->
-          <div v-if="netServers.length" class="md-section">
-            <div class="md-sec-hdr"><span class="md-sec-title">{{ tt('servers') }}</span><span class="md-badge">{{ netServers.length }}</span></div>
-            <div v-for="p in sortedServers" :key="peerKey(p)" class="md-card md-card-item" @click="netExpanded[peerKey(p)]=!netExpanded[peerKey(p)]">
-              <div class="md-row md-row-top">
-                <div class="flex-1 min-w-0 flex items-center gap-2">
-                  <span class="md-name truncate">{{ p.route?.hostname || tt('server') }}</span>
-                </div>
-                <span v-if="buildDetail(p).lat" class="md-quality" :class="qualityCls(buildDetail(p).lat, buildDetail(p).loss)">{{ qualityText(buildDetail(p).lat, buildDetail(p).loss) }}</span>
+          <!-- Traffic Chart -->
+          <div v-if="trafficHistory.length > 1" class="md-card md-traffic-card">
+            <div class="md-traffic-hdr">
+              <div class="flex-1">
+                <span class="md-traffic-label" :style="{color:TRAFFIC_UP_COLOR}">&#8593; {{ netTrafficSpeed.up || '--' }}</span>
+                <span class="md-traffic-label" :style="{color:TRAFFIC_DOWN_COLOR}">&#8595; {{ netTrafficSpeed.down || '--' }}</span>
               </div>
-              <div class="md-row md-row-bot">
-                <div class="md-sub flex-1">
-                  <template v-if="buildDetail(p).up">{{ buildDetail(p).up }}</template>
-                  <template v-if="buildDetail(p).down"> &middot; {{ buildDetail(p).down }}</template>
-                </div>
-                <div class="flex items-center gap-1 flex-shrink-0">
-                  <span class="md-rt" :class="costCls(p.route?.cost)">{{ costLabel(p.route?.cost) }}</span>
-                  <span v-if="buildDetail(p).tun" class="md-chip">{{ buildDetail(p).tun }}</span>
-                  <span v-if="natLabel(p.route?.stun_info).text" class="md-chip md-chip-nat" :class="natLabel(p.route?.stun_info).cls">{{ natLabel(p.route?.stun_info).text }}</span>
-                </div>
+              <div class="md-traffic-total">
+                <span class="md-traffic-label" :style="{color:TRAFFIC_UP_COLOR}">&#8593; {{ netTrafficSpeed.upTotal }}</span>
+                <span class="md-traffic-label" :style="{color:TRAFFIC_DOWN_COLOR}">&#8595; {{ netTrafficSpeed.downTotal }}</span>
               </div>
-              <div v-if="netExpanded[peerKey(p)]" class="md-extra"><template v-if="buildDetail(p).ver"><div>{{ tt('version') }}: {{ buildDetail(p).ver }}</div></template></div>
             </div>
+            <svg class="md-traffic-svg" viewBox="0 0 320 108">
+              <!-- Y axis -->
+              <text x="4" y="8" font-size="9" fill="var(--md-muted)" font-family="sans-serif">{{ (() => { const m = Math.max(1, ...trafficHistory.map(p => Math.max(p.up, p.down))); return formatSpeedY(m); })() }}</text>
+              <text x="4" y="82" font-size="9" fill="var(--md-muted)" font-family="sans-serif">0</text>
+              <!-- X axis labels -->
+              <text x="34" y="95" font-size="8" fill="var(--md-muted)" font-family="sans-serif">{{ formatXLabel(trafficHistory.length, 0) }}</text>
+              <text x="162" y="95" font-size="8" fill="var(--md-muted)" font-family="sans-serif" text-anchor="middle">{{ formatXLabel(trafficHistory.length, Math.floor(trafficHistory.length/2)) }}</text>
+              <text x="300" y="95" font-size="8" fill="var(--md-muted)" font-family="sans-serif" text-anchor="end">{{ formatXLabel(trafficHistory.length, trafficHistory.length-1) }}</text>
+              <!-- Up line -->
+              <path v-if="trafficHistory.length > 1" :d="buildSmoothPath(trafficHistory.map(p => p.up), Math.max(1, ...trafficHistory.map(p => Math.max(p.up, p.down))), 80, 282)" fill="none" :stroke="TRAFFIC_UP_COLOR" stroke-width="1.5" transform="translate(32,2)"/>
+              <!-- Down line -->
+              <path v-if="trafficHistory.length > 1" :d="buildSmoothPath(trafficHistory.map(p => p.down), Math.max(1, ...trafficHistory.map(p => Math.max(p.up, p.down))), 80, 282)" fill="none" :stroke="TRAFFIC_DOWN_COLOR" stroke-width="1.5" transform="translate(32,2)"/>
+              <!-- Bottom axis -->
+              <line x1="32" y1="88" x2="318" y2="88" stroke="var(--md-border)" stroke-width="0.5"/>
+            </svg>
           </div>
 
           <!-- Network Devices -->
@@ -615,6 +842,31 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); for (const k of Object
             </div>
           </div>
 
+          <!-- Servers -->
+          <div v-if="netServers.length" class="md-section">
+            <div class="md-sec-hdr"><span class="md-sec-title">{{ tt('servers') }}</span><span class="md-badge">{{ netServers.length }}</span></div>
+            <div v-for="p in sortedServers" :key="peerKey(p)" class="md-card md-card-item" @click="netExpanded[peerKey(p)]=!netExpanded[peerKey(p)]">
+              <div class="md-row md-row-top">
+                <div class="flex-1 min-w-0 flex items-center gap-2">
+                  <span class="md-name truncate">{{ p.route?.hostname || tt('server') }}</span>
+                </div>
+                <span v-if="buildDetail(p).lat" class="md-quality" :class="qualityCls(buildDetail(p).lat, buildDetail(p).loss)">{{ qualityText(buildDetail(p).lat, buildDetail(p).loss) }}</span>
+              </div>
+              <div class="md-row md-row-bot">
+                <div class="md-sub flex-1">
+                  <template v-if="buildDetail(p).up">{{ buildDetail(p).up }}</template>
+                  <template v-if="buildDetail(p).down"> &middot; {{ buildDetail(p).down }}</template>
+                </div>
+                <div class="flex items-center gap-1 flex-shrink-0">
+                  <span class="md-rt" :class="costCls(p.route?.cost)">{{ costLabel(p.route?.cost) }}</span>
+                  <span v-if="buildDetail(p).tun" class="md-chip">{{ buildDetail(p).tun }}</span>
+                  <span v-if="natLabel(p.route?.stun_info).text" class="md-chip md-chip-nat" :class="natLabel(p.route?.stun_info).cls">{{ natLabel(p.route?.stun_info).text }}</span>
+                </div>
+              </div>
+              <div v-if="netExpanded[peerKey(p)]" class="md-extra"><template v-if="buildDetail(p).ver"><div>{{ tt('version') }}: {{ buildDetail(p).ver }}</div></template></div>
+            </div>
+          </div>
+
           <div v-if="!netPeers.length && !netServers.length" class="flex flex-col items-center justify-center py-12 gap-3 opacity-50">
             <template v-if="netDiscovering || netLoading"><i class="pi pi-spin pi-spinner text-xl" style="color:var(--md-muted)" /><div class="text-base" style="color:var(--md-muted)">{{ tt('discoveringPeers') }}</div></template>
             <template v-else><div class="text-base" style="color:var(--md-muted)">{{ tt('noPeersConnected') }}</div></template>
@@ -622,6 +874,52 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); for (const k of Object
         </div>
       </template>
     </template>
+
+    <!-- ==================== Router Tab ==================== -->
+    <div v-show="activeTab === 'luci'" class="flex flex-col flex-1 min-h-0">
+      <div class="md-hdr">
+        <span class="md-hdr-title">{{ currentLuciRouter?.ip || tt('routers') }}</span>
+        <span v-if="currentLuciRouter && getWolPathType() === 'tunnel'" class="md-path-badge">ET-LAN</span>
+        <span v-else-if="currentLuciRouter && getWolPathType() === 'lan'" class="md-path-badge md-path-lan">LAN</span>
+        <div class="flex-1" />
+        <button class="md-hdr-btn" @click="openLuciEditorFn" :title="tt('editConfig')">
+          <svg width="20" height="20" viewBox="0 0 1024 1024" fill="currentColor"><path d="M714.965 128l-85.333 85.333H213.333v597.334h597.334V394.368L896 309.035v544.298A42.667 42.667 0 0 1 853.333 896H170.667A42.667 42.667 0 0 1 128 853.333V170.667A42.667 42.667 0 0 1 170.667 128h544.298z m159.062-38.4l60.373 60.416-392.192 392.192-60.245 0.128-0.086-60.459L874.027 89.6z"/></svg>
+        </button>
+        <button v-if="proxyUrl" class="md-hdr-btn" @click="refreshLuciIframe" :title="tt('refresh')">
+          <svg width="20" height="20" viewBox="0 0 1024 1024" fill="currentColor"><path d="M128 170.666667l92.330667 92.330666A382.378667 382.378667 0 0 1 512 128c211.754667 0 384 172.288 384 384h-85.333333c0-164.693333-134.016-298.666667-298.666667-298.666667a297.557333 297.557333 0 0 0-231.125333 110.208L384 426.666667H128V170.666667z m768 682.666666v-256h-256l103.125333 103.125334A297.514667 297.514667 0 0 1 512 810.666667c-164.650667 0-298.666667-134.016-298.666667-298.666667H128c0 211.754667 172.245333 384 384 384a382.378667 382.378667 0 0 0 291.669333-134.997333L896 853.333333z"/></svg>
+        </button>
+        <div v-if="luciRouters.length" style="position:relative">
+          <button class="md-hdr-btn md-switch-btn" @click.stop="showLuciMenu = !showLuciMenu" :title="tt('switchNetwork')">
+            <svg width="20" height="20" viewBox="0 0 1024 1024" fill="currentColor"><path d="M900.4 424.87c19.47 0 37.03-11.73 44.49-29.73 7.46-17.98 3.33-38.7-10.43-52.48L713.97 122.19c-7.3-7.3-19.12-7.3-26.42 0l-41.69 41.69c-7.3 7.3-7.3 19.13 0 26.42l138.28 138.27H86.32c-10.19 0-18.46 8.26-18.46 18.46v59.39c0 10.19 8.26 18.46 18.46 18.46H900.4zM937.65 598.72H123.8c-19.47 0-37.03 11.73-44.49 29.73-7.46 17.98-3.33 38.7 10.43 52.48l220.49 220.48c7.3 7.3 19.12 7.3 26.42 0l41.69-41.69c7.3-7.3 7.3-19.13 0-26.42L240.06 695.02h697.59c10.32 0 18.68-8.37 18.68-18.68v-58.93c0-10.32-8.36-18.69-18.68-18.69z"/></svg>
+          </button>
+          <div v-if="showLuciMenu" class="md-switch-menu md-card" @click.stop>
+            <div class="md-sw-item" @click="openLuciEditorFn">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="var(--md-primary)"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+              <span style="color:var(--md-primary);font-weight:500">{{ tt('addRouter') }}</span>
+            </div>
+            <div class="md-sw-divider" />
+            <div v-for="(r, i) in luciRouters" :key="r.ip" class="md-sw-item" @click="switchLuciRouter(i)">
+              <span v-if="i === luciIdx" class="md-sw-check">&#10003;</span>
+              <span v-else style="width:18px;display:inline-block" />
+              <span class="flex-1 truncate" :style="i === luciIdx ? 'color:var(--md-primary);font-weight:500' : ''">{{ r.ip }}</span>
+              <button class="md-sw-del" @click="deleteLuciRouter(i, $event)">&times;</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="flex-1 overflow-hidden">
+        <div v-if="!luciRouters.length" class="flex flex-col items-center justify-center h-full gap-3 opacity-50">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--md-muted)" stroke-width="1.2"><rect x="2" y="2" width="20" height="20" rx="2"/><circle cx="12" cy="12" r="3"/><line x1="4.93" y1="4.93" x2="9.17" y2="9.17"/><line x1="14.83" y1="14.83" x2="19.07" y2="19.07"/></svg>
+          <div class="text-base" style="color:var(--md-muted)">{{ tt('noRouters') }}</div>
+          <div class="text-sm text-center px-4" style="color:var(--md-muted)">{{ tt('tapToAdd') }}</div>
+        </div>
+        <iframe v-else-if="luciIframeSrc" :src="luciIframeSrc" :key="luciIframeKey" class="luci-iframe" />
+        <div v-else class="flex flex-col items-center justify-center h-full gap-3">
+          <svg class="animate-spin" width="32" height="32" viewBox="0 0 24 24" fill="var(--md-muted)"><path d="M12 4V2A10 10 0 0 0 2 12h2a8 8 0 0 1 8-8z"/></svg>
+          <div class="text-base" style="color:var(--md-muted)">{{ tt('connectingRouter') }}</div>
+        </div>
+      </div>
+    </div>
 
     <!-- ==================== Settings Tab ==================== -->
     <template v-if="activeTab === 'settings'">
@@ -633,7 +931,7 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); for (const k of Object
       <div class="flex-1 overflow-y-auto">
         <div class="md-card md-settings-card" @click="router.push('/')">
           <div class="md-row">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.488.488 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.488.488 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
             <div class="flex-1">
               <div class="md-name">{{ tt('advancedSettings') }}</div>
               <div class="md-sub">{{ tt('advancedSettingsDesc') }}</div>
@@ -643,7 +941,7 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); for (const k of Object
         </div>
         <div class="md-card md-settings-card" @click="toggleLang">
           <div class="md-row">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zm6.93 6h-2.95a15.65 15.65 0 00-1.38-3.56A8.03 8.03 0 0118.92 8zM12 4.04c.83 1.2 1.48 2.53 1.91 3.96h-3.82c.43-1.43 1.08-2.76 1.91-3.96zM4.26 14C4.1 13.36 4 12.69 4 12s.1-1.36.26-2h3.38c-.08.66-.14 1.32-.14 2 0 .68.06 1.34.14 2H4.26zm.82 2h2.95c.32 1.25.78 2.45 1.38 3.56A7.987 7.987 0 015.08 16zm2.95-8H5.08a7.987 7.987 0 014.33-3.56A15.65 15.65 0 008.03 8zM12 19.96c-.83-1.2-1.48-2.53-1.91-3.96h3.82c-.43 1.43-1.08 2.76-1.91 3.96zM14.34 14H9.66c-.09-.66-.16-1.32-.16-2 0-.68.07-1.35.16-2h4.68c.09.65.16 1.32.16 2 0 .68-.07 1.34-.16 2zm.25 5.56c.6-1.11 1.06-2.31 1.38-3.56h2.95a8.03 8.03 0 01-4.33 3.56zM16.36 14c.08-.66.14-1.32.14-2 0-.68-.06-1.34-.14-2h3.38c.16.64.26 1.31.26 2s-.1 1.36-.26 2h-3.38z"/></svg>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zm6.93 6h-2.95a15.65 15.65 0 00-1.38-3.56A8.03 8.03 0 0118.92 8zM12 4.04c.83 1.2 1.48 2.53 1.91 3.96h-3.82c.43-1.43 1.08-2.76 1.91-3.96zM4.26 14C4.1 13.36 4 12.69 4 12s.1-1.36.26-2h3.38c-.08.66-.14 1.32-.14 2 0 .68.06 1.34.14 2H4.26zm.82 2h2.95c.32 1.25.78 2.45 1.38 3.56A7.987 7.987 0 015.08 16zm2.95-8H5.08a7.987 7.987 0 014.33-3.56A15.65 15.65 0 008.03 8zM12 19.96c-.83-1.2-1.48-2.53-1.91-3.96h3.82c-.43 1.43-1.08 2.76-1.91 3.96zM14.34 14H9.66c-.09-.66-.16-1.32-.16-2 0-.68.07-1.35.16-2h4.68c.09.65.16 1.32.16 2 0 .68-.07 1.34-.16 2zm.25 5.56c.6-1.11 1.06-2.31 1.38-3.56h2.95a8.03 8.03 0 01-4.33 3.56zM16.36 14c.08-.66.14-1.32.14-2 0-.68-.06-1.34-.14-2h3.38c.16.64.26 1.31.26 2s-.1 1.36-.26 2h-3.38z"/></svg>
             <div class="flex-1">
               <div class="md-name">{{ tt('language') }}</div>
               <div class="md-sub">{{ locale === 'cn' ? tt('chinese') : tt('english') }} — {{ tt('tapToSwitch') }}</div>
@@ -653,20 +951,21 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); for (const k of Object
         </div>
         <div class="md-card md-settings-card">
           <div class="md-row">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>
             <div class="flex-1">
               <div class="md-name">{{ tt('defaultHome') }}</div>
-              <div class="md-sub">{{ tt(defaultTab === 'wol' ? 'wolTab' : 'netTab') }}</div>
+              <div class="md-sub">{{ tt(defaultTab === 'wol' ? 'wolTab' : defaultTab === 'luci' ? 'luciTab' : 'netTab') }}</div>
             </div>
             <select class="md-select" :value="defaultTab" @change="setDefaultTab(($event.target as HTMLSelectElement).value as Tab)" @click.stop>
               <option value="wol">{{ tt('wolTab') }}</option>
+              <option value="luci">{{ tt('luciTab') }}</option>
               <option value="net">{{ tt('netTab') }}</option>
             </select>
           </div>
         </div>
         <div class="md-card md-settings-card" @click="showDebug = !showDebug">
           <div class="md-row">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.488.488 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.488.488 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
             <div class="flex-1">
               <div class="md-name">{{ tt('debug') }}</div>
               <div class="md-sub">{{ tt('debugDesc') }}</div>
@@ -676,7 +975,7 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); for (const k of Object
         </div>
         <div class="md-card md-settings-card">
           <div class="md-row">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M11 17h2v-6h-2v6zm1-15C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zM11 9h2V7h-2v2z"/></svg>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M11 17h2v-6h-2v6zm1-15C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zM11 9h2V7h-2v2z"/></svg>
             <div class="flex-1">
               <div class="md-name">{{ tt('about') }}</div>
               <div class="md-sub">{{ tt('version') }} {{ pkg.version }}</div>
@@ -689,15 +988,19 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); for (const k of Object
     <!-- ==================== Bottom Tab Bar ==================== -->
     <div class="md-tabs">
       <button class="md-tab" :class="{ 'md-tab-active': activeTab === 'wol' }" @click="switchTab('wol')">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2v2.05c3.94.49 7 3.85 7 7.95 0 .34-.03.67-.08 1H22v2h-2.08c-.49 3.07-2.73 5.56-5.69 6.39l-.46 1.36-1.86-.64.4-1.17C10.94 20.56 9.44 20 8 18.34V22H6v-3.66C3.65 16.93 1.89 13.62 1.52 9.81L.1 9.44l.62-1.87 1.43.38C2.56 5.74 5.05 3.5 8.12 2.56L8.57 1.2l1.86.64-.44 1.31c1.29.38 2.4 1.1 3.26 2.09L15 3.59l1.41 1.41-1.78 1.78c.46.67.78 1.46.93 2.31H18V11h-2.06c-.05.33-.08.66-.08 1s.03.67.08 1H18v2h-2.46A8.005 8.005 0 0113 17.95V20h-2v-2.05A7.97 7.97 0 017.06 16H5v-2h2.06A7.96 7.96 0 015 10c0-.34.03-.67.08-1H3v-2h2.46c.49-3.07 2.73-5.56 5.69-6.39L11.56 2h.87L13 2z"/></svg>
+        <svg width="20" height="20" viewBox="0 0 1024 1024" fill="currentColor"><path d="M864 752H624v64h136c12.8 0 24 11.2 24 24s-11.2 24-24 24h-480c-12.8 0-24-11.2-24-24s11.2-24 24-24H400v-64H160c-17.6 0-32-14.4-32-32V192c0-17.6 14.4-32 32-32h704c17.6 0 32 14.4 32 32v528c0 17.6-14.4 32-32 32z m-16-544H176v464h672V208z m-48 416H224V256h576v368z"/></svg>
         <span class="md-tab-label">{{ tt('wol') }}</span>
       </button>
+      <button class="md-tab" :class="{ 'md-tab-active': activeTab === 'luci' }" @click="switchTab('luci')">
+        <svg width="20" height="20" viewBox="0 0 1024 1024" fill="currentColor"><path d="M881.777778 597.333333h-56.888889V199.111111c0-17.066667-11.377778-28.444444-28.444445-28.444444s-28.444444 11.377778-28.444444 28.444444v398.222222h-227.555556V199.111111c0-17.066667-11.377778-28.444444-28.444444-28.444444s-28.444444 11.377778-28.444444 28.444444v398.222222H256V199.111111c0-17.066667-11.377778-28.444444-28.444444-28.444444s-28.444444 11.377778-28.444445 28.444444v398.222222H142.222222c-31.288889 0-56.888889 25.6-56.888889 56.888889v142.222222c0 31.288889 25.6 56.888889 56.888889 56.888889h739.555556c31.288889 0 56.888889-25.6 56.888889-56.888889v-142.222222c0-31.288889-25.6-56.888889-56.888889-56.888889z m-327.111111 170.666667c-22.755556 0-42.666667-19.911111-42.666667-42.666667s19.911111-42.666667 42.666667-42.666666 42.666667 19.911111 42.666666 42.666666-19.911111 42.666667-42.666666 42.666667z m142.222222 0c-22.755556 0-42.666667-19.911111-42.666667-42.666667s19.911111-42.666667 42.666667-42.666666 42.666667 19.911111 42.666667 42.666666-19.911111 42.666667-42.666667 42.666667z m142.222222 0c-22.755556 0-42.666667-19.911111-42.666667-42.666667s19.911111-42.666667 42.666667-42.666666 42.666667 19.911111 42.666667 42.666666-19.911111 42.666667-42.666667 42.666667z"/></svg>
+        <span class="md-tab-label">{{ tt('routers') }}</span>
+      </button>
       <button class="md-tab" :class="{ 'md-tab-active': activeTab === 'net' }" @click="switchTab('net')">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
         <span class="md-tab-label">{{ tt('network') }}</span>
       </button>
       <button class="md-tab" :class="{ 'md-tab-active': activeTab === 'settings' }" @click="switchTab('settings')">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.488.488 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.488.488 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
         <span class="md-tab-label">{{ tt('settings') }}</span>
       </button>
     </div>
@@ -724,6 +1027,20 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); for (const k of Object
           <div class="flex-1" />
           <button class="md-dlg-btn" @click="showNetEditor = false">{{ tt('cancel') }}</button>
           <button class="md-dlg-btn md-dlg-btn-save" @click="saveNetConfig" :disabled="savingNet">{{ savingNet ? '...' : tt('saveAndRun') }}</button>
+        </div>
+      </template>
+    </Dialog>
+
+    <!-- LuCI Router Config Editor -->
+    <Dialog v-model:visible="showLuciEditor" modal :header="tt('editRoutersToml')" :style="{ width: '90vw', maxWidth: '520px' }" class="md-dialog" :pt="{ closeButton: { style: 'display:none' }, header: { class: 'md-dialog-hdr' }, content: { class: 'md-dialog-content' }, footer: { class: 'md-dialog-ft' } }">
+      <Textarea v-model="luciToml" rows="12" class="w-full" style="font-family:'Courier New',monospace;font-size:0.9rem;line-height:1.5"
+        placeholder='[[router]]&#10;name = "Home Router"&#10;ip = "192.168.2.1"&#10;username = "root"&#10;password = "admin"' />
+      <template #footer>
+        <div class="md-dlg-ft">
+          <button class="md-dlg-btn" @click="importFromClipboard('luci')">{{ tt('importFromClipboard') }}</button>
+          <div class="flex-1" />
+          <button class="md-dlg-btn" @click="showLuciEditor = false">{{ tt('cancel') }}</button>
+          <button class="md-dlg-btn md-dlg-btn-save" @click="saveLuciConfig">{{ tt('save') }}</button>
         </div>
       </template>
     </Dialog>
@@ -815,7 +1132,7 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); for (const k of Object
 @media (prefers-color-scheme: dark) { .md-connected-text { color:#66bb6a; } }
 .md-hdr-btn { display:flex; align-items:center; border:none; background:none; padding:8px; border-radius:50%; cursor:pointer; color:var(--md-secondary); }
 .md-hdr-btn:active { background:rgba(0,0,0,0.08); }
-.md-hdr-btn-off { color:#ef5350; }
+.md-hdr-btn-off { color:#c62828; }
 
 /* Connection bar */
 .md-conn { display:flex; align-items:center; gap:10px; padding:8px 16px; font-size:0.78rem; flex-shrink:0; min-height:32px; }
@@ -973,4 +1290,17 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); for (const k of Object
   max-width:85vw; text-align:center;
 }
 @keyframes md-snack-in { from{opacity:0;transform:translateX(-50%) translateY(12px)} to{opacity:1;transform:translateX(-50%) translateY(0)} }
+
+/* Traffic speed chart */
+.md-traffic-card { padding:10px 10px 4px; margin-top:6px; margin-bottom:8px; cursor:default; }
+.md-traffic-hdr { display:flex; justify-content:space-between; font-size:0.7rem; font-weight:500; margin-bottom:2px; }
+.md-traffic-label { margin-right:12px; }
+.md-traffic-total { text-align:right; font-size:0.68rem; color:var(--md-muted); }
+.md-traffic-svg { width:100%; display:block; }
+@media (prefers-color-scheme: dark) {
+  .md-traffic-total { color:var(--md-secondary); }
+}
+
+/* LuCI iframe */
+.luci-iframe { width:100%; height:100%; border:none; }
 </style>
