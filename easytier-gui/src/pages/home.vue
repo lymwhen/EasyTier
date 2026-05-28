@@ -78,7 +78,7 @@ const T: Record<string, [string, string]> = {
   delete: ['Delete', '删除'],
   deleteNetworkConfirm: ['Delete this network?', '确定删除此网络？'],
   debug: ['Debug', '调试'],
-  debugDesc: ['WOL diagnostic info', 'WOL 调试信息'],
+  debugDesc: ['Diagnostic info', '调试信息'],
   clear: ['Clear', '清空'],
   paste: ['Paste', '粘贴'],
   importFromClipboard: ['From clipboard', '从剪切板导入'],

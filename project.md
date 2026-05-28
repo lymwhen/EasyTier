@@ -163,24 +163,15 @@ App → Tauri invoke → easytier-core (嵌入式)
 
 ```bash
 # 1. 前端 (easytier-gui/)
-export PATH="$HOME/.npm-global:$PATH"
-cd easytier-gui && npx vite build
+export PATH="$HOME/.cargo/bin:$HOME/.npm-global:$PATH"
+cd easytier-gui && pnpm vite build
 
 # 2. Rust .so (Android aarch64 交叉编译)
-export ANDROID_HOME="D:/tools/Android/Sdk"
-export NDK_HOME="$ANDROID_HOME/ndk/27.0.12077973"
-export JAVA_HOME="D:/tools/Java/jdk-17.0.12"
-export NDK_TOOLCHAIN="$NDK_HOME/toolchains/llvm/prebuilt/windows-x86_64"
-export PROTOC="$HOME/protoc/bin/protoc.exe"
-export LIBCLANG_PATH="$HOME/llvm-dll"
+#    CC/AR/BINDGEN/linker 已固化在 .cargo/config.toml，无需 export
+#    PROTOC 和 LIBCLANG_PATH 必须用固定绝对路径（不拼接变量）确保指纹稳定
+export PROTOC="C:/Users/lymly/protoc/bin/protoc.exe"
+export LIBCLANG_PATH="C:/Users/lymly/llvm-dll"
 
-# NDK 交叉编译工具链
-export CC_aarch64_linux_android="$NDK_TOOLCHAIN/bin/aarch64-linux-android21-clang.cmd"
-export AR_aarch64_linux_android="$NDK_TOOLCHAIN/bin/llvm-ar.exe"
-export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$NDK_TOOLCHAIN/bin/aarch64-linux-android21-clang.cmd"
-export BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android="-resource-dir=$NDK_TOOLCHAIN/lib/clang/18 --sysroot=$NDK_TOOLCHAIN/sysroot -I$NDK_TOOLCHAIN/sysroot/usr/include"
-
-export PATH="$HOME/.cargo/bin:$NDK_TOOLCHAIN/bin:$HOME/protoc/bin:$HOME/llvm-dll:$HOME/mingw64/mingw64/bin:$PATH"
 cd src-tauri
 cargo build --lib --release --target aarch64-linux-android --features "tauri/custom-protocol"
 
@@ -198,27 +189,15 @@ cd gen/android
 
 ### 增量构建（重要：三步缺一不可）
 
-Tauri 在 Rust 编译阶段通过 build.rs 将 `dist/` 目录嵌入到 `.so` 二进制中。**即使只改前端，也必须重新构建 .so，否则 APK 里是旧前端。**
+Tauri 在 Rust 编译阶段通过 build.rs（`tauri_build::build()`）将 `dist/` 目录嵌入到 `.so` 二进制中。**即使只改前端，也必须重新构建 .so，否则 APK 里是旧前端。**
 
-| 改动范围 | 步骤 1 (Vite) | 步骤 2 (Cargo) | 步骤 3 (Gradle) | 注意事项 |
+| 改动范围 | 步骤 1 (Vite) | 步骤 2 (Cargo) | 步骤 3 (Gradle) | 预计耗时 |
 |----------|:---:|:---:|:---:|------|
-| 仅前端 (Vue/TS/CSS) | ✅ | ✅ 快速模式 | ✅ | 删 `.so` + build 缓存，秒级重链 |
-| Rust 源码 | ✅ | ✅ 全量 | ✅ | 必须全量 Cargo build |
-| 前端 + Rust | ✅ | ✅ 全量 | ✅ | 三步全跑 |
+| 仅前端 (Vue/TS/CSS) | ✅ | ✅ | ✅ | ~2m30s（Vite 53s + Cargo 1m25s + Gradle 13s） |
+| Rust 源码 | ✅ | ✅ | ✅ | ~10min（easytier 全量重编译） |
+| 前端 + Rust | ✅ | ✅ | ✅ | ~10min |
 
-#### 纯前端改动的快速 Cargo build
-
-删掉 easytier-gui 自身的构建产物，依赖 crate 全部缓存命中，Cargo 只重跑 build.rs + 重链接：
-
-```bash
-# 删除 easytier-gui 构建产物（保留所有依赖 crate 缓存）
-rm -rf target/aarch64-linux-android/release/build/easytier-gui-*
-rm -f target/aarch64-linux-android/release/libapp_lib.so
-rm -rf target/aarch64-linux-android/release/.fingerprint/easytier-gui-*
-# 然后正常 build — 依赖全部缓存，只有 build.rs + link
-```
-
-> 注意不要在 bash 下用 `rm -rf target/...`，改用 PowerShell 或保留 `.cargo` 路径一致。
+**无需手动删除构建产物**——env var 固化后 Cargo 指纹稳定，Cargo 自行判断哪些 crate 需要重编译。纯前端变更时 easytier 自动缓存命中（<2s），仅 easytier-gui 重编。
 
 步骤 3 的 `assembleArm64Release` 只编译 arm64 架构（速度快），完整构建用 `assembleRelease`。
 
@@ -248,7 +227,7 @@ rm -rf target/aarch64-linux-android/release/.fingerprint/easytier-gui-*
 | Gradle `Could not move temporary workspace` | bash on Windows 与 Gradle transforms 文件锁不兼容（bash 通过 MSYS2 模拟文件操作，与 Windows 原生锁冲突） | 用 **PowerShell** + `$env:GRADLE_USER_HOME = "D:/tmp/gradle-tmp"` 临时缓存目录，不要用 bash |
 | `usesCleartextTraffic` 占位符不生效 | Release 构建默认 `false` | Manifest 硬编码 `"true"` + build.gradle.kts 设 `manifestPlaceholders` |
 | Windows 符号链接失败 | 系统不允许非管理员创建符号链接 | 修改 BuildTask.kt 改为文件复制 |
-| 前端构建后 APK 不更新 | Tauri 将 `dist/` 嵌入 `.so`，只重编前端不重编 Rust 会导致 APK 里的 WebView 加载旧前端 | **任何改动都三步全跑**；纯前端改动可删 easytier-gui 的 build 指纹 + .so，秒级重链 |
+| 前端构建后 APK 不更新 | Tauri 将 `dist/` 嵌入 `.so`，只重编前端不重编 Rust 会导致 APK 里的 WebView 加载旧前端 | **任何改动都三步全跑**；env var 固化后 Cargo 自动增量编译，easytier 缓存命中仅 easytier-gui 重编（~1m25s） |
 | Gradle 缓存损坏反复发生 | JDK 版本切换或磁盘问题 | 删除整个 `~/.gradle/caches` 重建 |
 | `sortedWol` computed 被误删 | 替换代码时边界未对齐 | 替换 `getWolPath` 函数时注意不要覆盖相邻的 computed |
 
@@ -466,6 +445,52 @@ home.vue:
 ### 21. 语言标签样式更新
 - 灰色（`.md-lang-badge`）→ 蓝色（ET-LAN 同款 `#e3f2fd` / `#1565c0`）
 - 文字从缩写 `中` / `EN` → 完整 `中文` / `English`
+
+### 22. Cargo 增量编译缓存修复（构建加速 4 倍）
+
+**问题**：每次构建 easytier 都全量重编译（~8min），即使只改前端。
+
+**根因**：构建脚本每次动态 `export` 交叉编译 env vars（CC/AR/BINDGEN/PROTOC/LIBCLANG_PATH），这些变量被依赖 crate 的 build.rs 通过 `rerun-if-env-changed` 追踪。Cargo 每次看到不同的 env var 来源/值，指纹失效导致依赖链（bindgen → kcp-sys → prost-wkt-types → easytier）全量重编译。
+
+**为什么 `config.toml` 的 `[env]` 能解决但仅限部分变量**：
+- Cargo 将 `[env]` 中的值视为**静态配置**，首次写入指纹后不随构建次数变化——只要值不变，指纹就稳定。
+- `CC_aarch64_linux_android`、`AR_aarch64_linux_android`、`BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android` → **target 级变量**，放 `[env]` 安全，仅影响 Android 交叉编译。
+- `PROTOC`、`LIBCLANG_PATH` → **全局变量**，如放 `[env]` 会影响所有 target 的 cargo 调用且实测破坏缓存。必须在 shell 中用**固定绝对路径** export（不拼接变量、不引用 `$NDK_HOME`），保证每次值完全一致。
+
+**最终配置**：
+
+`.cargo/config.toml`：
+```toml
+[env]
+CC_aarch64_linux_android = "D:/tools/Android/Sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/windows-x86_64/bin/aarch64-linux-android21-clang.cmd"
+AR_aarch64_linux_android = "D:/tools/Android/Sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-ar.exe"
+BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android = "-resource-dir=... --sysroot=... -I..."
+
+[target.aarch64-linux-android]
+linker = "D:/tools/Android/Sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/windows-x86_64/bin/aarch64-linux-android21-clang.cmd"
+ar = "D:/tools/Android/Sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-ar.exe"
+```
+
+Shell 构建命令：
+```bash
+export PROTOC="C:/Users/lymly/protoc/bin/protoc.exe"
+export LIBCLANG_PATH="C:/Users/lymly/llvm-dll"
+cargo build --lib --release --target aarch64-linux-android --features "tauri/custom-protocol"
+```
+
+**效果对比**：
+
+| 场景 | 修复前 | 修复后 |
+|------|--------|--------|
+| 全量构建（config 变更后） | ~8min | ~8min（首次） |
+| 前端变更 | ~8min | **~2min**（Vite 53s + Cargo 1m25s） |
+| 无任何变更 | ~8min | **~55s**（Vite 53s + Cargo 1.3s） |
+
+- easytier（及其全部依赖）→ **缓存命中**，不再重编译
+- easytier-gui → 仅因前端 dist/ 变更重编译 build.rs + 重链（~1m25s）
+- **不需要手动删 build 指纹或 .so**——Cargo 自行判断增量，比人工 rm + relink 更可靠
+
+**CI 影响**：`BINDGEN_EXTRA_CLANG_ARGS` 指向 Windows NDK 路径，Linux CI 上该路径无效。如需 CI 构建 Android，需在 workflow 中设置 `BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android=""` 覆盖。
 
 ## 开发教训
 
