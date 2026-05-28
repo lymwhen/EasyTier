@@ -26,10 +26,8 @@ export PATH="$HOME/.cargo/bin:$HOME/.npm-global:$PATH"
 cd easytier-gui && pnpm vite build
 
 # 2. Cargo (bash OK)
-#    CC/AR/BINDGEN/linker already in .cargo/config.toml — no export needed
-#    PROTOC & LIBCLANG_PATH must be fixed absolute paths (no var splicing)
-export PROTOC="C:/Users/lymly/protoc/bin/protoc.exe"
-export LIBCLANG_PATH="C:/Users/lymly/llvm-dll"
+#    ALL cross-compile env vars (CC/AR/BINDGEN/PROTOC/LIBCLANG_PATH/linker)
+#    are in .cargo/config.toml [env] — no export needed
 cd src-tauri && cargo build --lib --release --target aarch64-linux-android --features "tauri/custom-protocol"
 
 # 3. Gradle — MUST use PowerShell (NOT bash):
@@ -46,7 +44,7 @@ Copy-Item -Force "...\app-arm64-release.apk" "F:\tmp\app-arm64-release.apk"
 
 **Why 3 steps always**: Tauri build.rs embeds `dist/` into `.so`. Frontend change without Cargo → old UI in APK.
 
-**Incremental cache**: CC/AR/BINDGEN env vars are in `.cargo/config.toml` [env] → stable fingerprints. PROTOC & LIBCLANG_PATH exported with fixed paths (no variable splicing). Result: easytier stays cached, only easytier-gui recompiles (~1m25s) on frontend changes. No manual `rm` of build artifacts needed—Cargo handles it.
+**Incremental cache**: ALL cross-compile env vars (CC/AR/BINDGEN/PROTOC/LIBCLANG_PATH) + linker/ar are in `.cargo/config.toml` [env] → stable fingerprints. DO NOT export these in shell — MSYS2 path translation distorts values each run, breaking the fingerprint. Result: easytier stays cached, only easytier-gui recompiles (~1m25s) on frontend changes. No manual `rm` of build artifacts needed—Cargo handles it.
 
 ## Key Architecture Decisions
 

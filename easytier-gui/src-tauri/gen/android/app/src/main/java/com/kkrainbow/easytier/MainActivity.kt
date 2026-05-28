@@ -39,6 +39,17 @@ class MainActivity : TauriActivity() {
             latch.await(500, TimeUnit.MILLISECONDS)
             return text
         }
+
+        @JavascriptInterface
+        fun writeClipboard(text: String) {
+            val latch = CountDownLatch(1)
+            mainHandler.post {
+                val cm = webView.context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                cm?.setPrimaryClip(android.content.ClipData.newPlainText("easytier_config", text))
+                latch.countDown()
+            }
+            latch.await(500, TimeUnit.MILLISECONDS)
+        }
     }
 
     private fun initService() {

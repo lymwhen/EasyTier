@@ -24,10 +24,10 @@ function showSnack(msg: string) {
 
 // --- i18n ---
 const T: Record<string, [string, string]> = {
-  wolDevices: ['WOL Devices', 'WOL 设备'],
+  wolDevices: ['PC Devices', '电脑设备'],
   refresh: ['Refresh', '刷新'],
   editConfig: ['Edit config', '编辑配置'],
-  noWolDevices: ['No WOL devices', '无 WOL 设备'],
+  noWolDevices: ['No PC devices', '无电脑设备'],
   tapToAdd: ['Tap ✏️ to add devices via TOML config', '点击 ✏️ 通过 TOML 配置添加设备'],
   online: ['Online', '在线'],
   offline: ['Offline', '离线'],
@@ -59,11 +59,11 @@ const T: Record<string, [string, string]> = {
   advancedSettings: ['Advanced Settings', '高级设置'],
   advancedSettingsDesc: ['Mode, logging, config server, language', '模式、日志、配置服务器、语言'],
   language: ['Language', '语言'],
-  tapToSwitch: ['Tap to switch', '点击切换'],
+  tapToSwitch: ['Tap to switch language', '点击切换语言'],
   about: ['About', '关于'],
   version: ['Version', '版本'],
   network: ['Network', '组网'],
-  wol: ['WOL', 'WOL'],
+  wol: ['PC', '电脑'],
   configSaved: ['Config saved', '配置已保存'],
   signalSent: ['Signal sent', '信号已发送'],
   saved: ['Saved', '已保存'],
@@ -77,13 +77,13 @@ const T: Record<string, [string, string]> = {
   chinese: ['中文', '中文'],
   delete: ['Delete', '删除'],
   deleteNetworkConfirm: ['Delete this network?', '确定删除此网络？'],
-  debug: ['Debug', '调试'],
-  debugDesc: ['Diagnostic info', '调试信息'],
+  debug: ['Debug Info', '调试信息'],
+  debugDesc: ['Show diagnostic info', '显示调试信息'],
   clear: ['Clear', '清空'],
   paste: ['Paste', '粘贴'],
   importFromClipboard: ['From clipboard', '从剪切板导入'],
   defaultHome: ['Default Home', '默认首页'],
-  wolTab: ['WOL', 'WOL'],
+  wolTab: ['PC', '电脑'],
   netTab: ['Network', '组网'],
   luciTab: ['Router', '路由器'],
   routers: ['Routers', '路由器'],
@@ -91,6 +91,15 @@ const T: Record<string, [string, string]> = {
   addRouter: ['Add Router', '添加路由器'],
   editRoutersToml: ['Edit routers.toml', '编辑 routers.toml'],
   connectingRouter: ['Connecting...', '连接中...'],
+  oneClickConfig: ['Configuration Info', '配置信息'],
+  oneClickConfigDesc: ['Import/Export all data', '全部数据导入与导出'],
+  exportLabel: ['Export', '导出'],
+  importLabel: ['Import', '导入'],
+  exportedToClipboard: ['Config exported to clipboard', '配置信息已导出到剪切板'],
+  importConfig: ['Import Config', '导入配置'],
+  importConfirmMsg: ['This will overwrite ALL PC, router, and network configs. Continue?', '本次操作将会覆盖电脑、路由器和组网所有的配置，确定继续？'],
+  importSuccess: ['Config imported', '配置已导入'],
+  importFailed: ['Invalid config format', '配置格式无效'],
 }
 function tt(key: string): string {
   const entry = T[key]
@@ -311,7 +320,7 @@ async function fetchNetInfo() { if (!netInstId.value) return; try { const resp =
 async function refreshNet() { netLoading.value = true; await fetchNetInfo(); netLoading.value = false }
 
 async function doConnect() {
-  if (!currentNet.value || netConnecting.value) return; netConnecting.value = true
+  if (!currentNet.value || netConnecting.value) return; netConnecting.value = true; trafficHistory.splice(0, trafficHistory.length); lastTraffic = { up: 0, down: 0, ts: 0 }
   try {
     const ids = networks.value.map(e => e.config.instance_id)
     await sendConfigs(ids)
@@ -635,6 +644,93 @@ function onLuciDocClick(e: MouseEvent) {
   if (!t.closest('.md-switch-menu') && !t.closest('.md-switch-btn')) showLuciMenu.value = false
 }
 
+// ==================== One-Click Config (Export/Import) ====================
+const showImportDlg = ref(false)
+const showImportConfirm = ref(false)
+const importText = ref('')
+const importPendingData = ref<any>(null)
+const importTextareaRef = ref<any>(null)
+
+async function doExport() {
+  const nets: StoredNet[] = JSON.parse(localStorage.getItem('networkList') || '[]')
+  const netTomls: string[] = []
+  for (const n of nets) {
+    if (n.rawToml) { netTomls.push(n.rawToml); continue }
+    if (n.config) { try { netTomls.push(await parseNetworkConfig(n.config)) } catch { /* skip */ } }
+  }
+  const data = {
+    v: 1,
+    wol: wolToml.value,
+    luci: luciToml.value,
+    net: netTomls,
+  }
+  const text = JSON.stringify(data, null, 2)
+  ;(window as any)._easytier_paste?.writeClipboard?.(text)
+  showSnack(tt('exportedToClipboard'))
+}
+
+function openImportDlg() {
+  importText.value = ''
+  showImportDlg.value = true
+}
+
+function doImportFromClipboard() {
+  const text = readClipboard()
+  if (!text) { showSnack('Clipboard is empty'); return }
+  importText.value = text
+}
+
+function confirmImport() {
+  let data: any
+  try { data = JSON.parse(importText.value) } catch { showSnack(tt('importFailed')); return }
+  if (!data || typeof data.v !== 'number' || typeof data.wol !== 'string' || typeof data.luci !== 'string' || !Array.isArray(data.net) || !data.net.every((s: any) => typeof s === 'string')) {
+    showSnack(tt('importFailed')); return
+  }
+  importPendingData.value = data
+  showImportConfirm.value = true
+}
+
+async function executeImport() {
+  const data = importPendingData.value
+  if (!data) return
+  showImportConfirm.value = false
+  showImportDlg.value = false
+
+  if (netRunning.value) await doDisconnect()
+
+  localStorage.setItem('wolDevicesToml', data.wol)
+  wolToml.value = data.wol
+  loadWolConfig()
+
+  localStorage.setItem('luciRoutersToml', data.luci)
+  luciToml.value = data.luci
+  loadLuciConfig()
+  if (activeTab.value === 'luci' && luciRouters.value.length > 0) {
+    luciIdx.value = 0
+    startLuciProxy(luciRouters.value[0])
+  }
+
+  // Delete all old network instances
+  const oldList: StoredNet[] = JSON.parse(localStorage.getItem('networkList') || '[]')
+  for (const n of oldList) {
+    try { await deleteNetworkInstance(n.config.instance_id) } catch { /* */ }
+  }
+  // Generate new network configs from TOML
+  const newList: StoredNet[] = []
+  for (const toml of data.net) {
+    if (!toml.trim()) continue
+    try {
+      const config = await generateNetworkConfig(toml)
+      newList.push({ config, source: 'user', rawToml: toml })
+    } catch { /* skip invalid */ }
+  }
+  localStorage.setItem('networkList', JSON.stringify(newList))
+  loadNetworks()
+
+  importPendingData.value = null
+  showSnack(tt('importSuccess'))
+}
+
 function netName(): string { const n = currentNet.value; return n ? (n.config.instance_name || n.config.network_name || tt('unnamed')) : tt('noNetwork') }
 
 function onDocClick(e: MouseEvent) { const t = e.target as HTMLElement; if (!t.closest('.md-switch-menu') && !t.closest('.md-switch-btn')) showSwitchMenu.value = false }
@@ -696,15 +792,15 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
               </div>
             </div>
             <button v-if="w.ip && w.status.phase==='idle' && routerOnline === true && !w.status.online" class="md-wake-btn" @click.stop="doWake(w)">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2v2.05c3.94.49 7 3.85 7 7.95 0 .34-.03.67-.08 1H22v2h-2.08c-.49 3.07-2.73 5.56-5.69 6.39l-.46 1.36-1.86-.64.4-1.17C10.94 20.56 9.44 20 8 18.34V22H6v-3.66C3.65 16.93 1.89 13.62 1.52 9.81L.1 9.44l.62-1.87 1.43.38C2.56 5.74 5.05 3.5 8.12 2.56L8.57 1.2l1.86.64-.44 1.31c1.29.38 2.4 1.1 3.26 2.09L15 3.59l1.41 1.41-1.78 1.78c.46.67.78 1.46.93 2.31H18V11h-2.06c-.05.33-.08.66-.08 1s.03.67.08 1H18v2h-2.46A8.005 8.005 0 0113 17.95V20h-2v-2.05A7.97 7.97 0 017.06 16H5v-2h2.06A7.96 7.96 0 015 10c0-.34.03-.67.08-1H3v-2h2.46c.49-3.07 2.73-5.56 5.69-6.39L11.56 2h.87L13 2z"/></svg>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
               {{ tt('wake') }}
             </button>
             <button v-if="w.ip && w.status.phase==='idle' && routerOnline === true && w.status.online" class="md-shutdown-btn" @click.stop="doShutdown(w)">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14.5v-9h2v9h-2z"/></svg>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M13 3h-2v10h2V3zm4.83 2.17l-1.42 1.42C17.99 7.86 19 9.81 19 12c0 3.87-3.13 7-7 7s-7-3.13-7-7c0-2.19 1.01-4.14 2.59-5.42L6.17 5.17C4.23 6.82 3 9.26 3 12c0 4.97 4.03 9 9 9s9-4.03 9-9c0-2.74-1.23-5.18-3.17-6.83z"/></svg>
               {{ tt('shutdown') }}
             </button>
             <button v-if="!w.ip && routerOnline === true" class="md-wake-btn" @click.stop="doWake(w)">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2v2.05c3.94.49 7 3.85 7 7.95 0 .34-.03.67-.08 1H22v2h-2.08c-.49 3.07-2.73 5.56-5.69 6.39l-.46 1.36-1.86-.64.4-1.17C10.94 20.56 9.44 20 8 18.34V22H6v-3.66C3.65 16.93 1.89 13.62 1.52 9.81L.1 9.44l.62-1.87 1.43.38C2.56 5.74 5.05 3.5 8.12 2.56L8.57 1.2l1.86.64-.44 1.31c1.29.38 2.4 1.1 3.26 2.09L15 3.59l1.41 1.41-1.78 1.78c.46.67.78 1.46.93 2.31H18V11h-2.06c-.05.33-.08.66-.08 1s.03.67.08 1H18v2h-2.46A8.005 8.005 0 0113 17.95V20h-2v-2.05A7.97 7.97 0 017.06 16H5v-2h2.06A7.96 7.96 0 015 10c0-.34.03-.67.08-1H3v-2h2.46c.49-3.07 2.73-5.56 5.69-6.39L11.56 2h.87L13 2z"/></svg>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
               {{ tt('wake') }}
             </button>
           </div>
@@ -975,7 +1071,18 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
         </div>
         <div class="md-card md-settings-card">
           <div class="md-row">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M11 17h2v-6h-2v6zm1-15C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zM11 9h2V7h-2v2z"/></svg>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/></svg>
+            <div class="flex-1">
+              <div class="md-name">{{ tt('oneClickConfig') }}</div>
+              <div class="md-sub">{{ tt('oneClickConfigDesc') }}</div>
+            </div>
+            <button class="md-settings-btn md-settings-btn-export" @click.stop="doExport">{{ tt('exportLabel') }}</button>
+            <button class="md-settings-btn md-settings-btn-primary" @click.stop="openImportDlg">{{ tt('importLabel') }}</button>
+          </div>
+        </div>
+        <div class="md-card md-settings-card">
+          <div class="md-row">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
             <div class="flex-1">
               <div class="md-name">{{ tt('about') }}</div>
               <div class="md-sub">{{ tt('version') }} {{ pkg.version }}</div>
@@ -1052,6 +1159,30 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
         <div class="md-dlg-ft">
           <button class="md-dlg-btn" @click="showDeleteConfirm = false">{{ tt('cancel') }}</button>
           <button class="md-dlg-btn md-dlg-btn-del" @click="doDeleteNet">OK</button>
+        </div>
+      </template>
+    </Dialog>
+
+    <!-- Import Config Dialog -->
+    <Dialog v-model:visible="showImportDlg" modal :header="tt('importConfig')" :style="{ width: '90vw', maxWidth: '520px' }" class="md-dialog" :pt="{ closeButton: { style: 'display:none' }, header: { class: 'md-dialog-hdr' }, content: { class: 'md-dialog-content' }, footer: { class: 'md-dialog-ft' } }" @show="importTextareaRef?.$el?.querySelector('textarea')?.focus()">
+      <Textarea ref="importTextareaRef" v-model="importText" rows="16" class="w-full" style="font-family:'Courier New',monospace;font-size:0.9rem;line-height:1.5" placeholder='{ "v": 1, "wol": "...", "luci": "...", "net": ["..."] }' />
+      <template #footer>
+        <div class="md-dlg-ft">
+          <button class="md-dlg-btn" @click="doImportFromClipboard">{{ tt('importFromClipboard') }}</button>
+          <div class="flex-1" />
+          <button class="md-dlg-btn" @click="showImportDlg = false">{{ tt('cancel') }}</button>
+          <button class="md-dlg-btn md-dlg-btn-save" @click="confirmImport">{{ tt('save') }}</button>
+        </div>
+      </template>
+    </Dialog>
+
+    <!-- Import Confirm Dialog -->
+    <Dialog v-model:visible="showImportConfirm" modal :header="tt('importConfig')" :style="{ width: '85vw', maxWidth: '400px' }" class="md-dialog" :pt="{ header: { class: 'md-dialog-hdr' }, content: { class: 'md-dialog-content' }, footer: { class: 'md-dialog-ft' } }">
+      <p class="text-base py-2" style="color:var(--md-text)">{{ tt('importConfirmMsg') }}</p>
+      <template #footer>
+        <div class="md-dlg-ft" style="justify-content:flex-end;gap:8px">
+          <button class="md-dlg-btn" @click="showImportConfirm = false">{{ tt('cancel') }}</button>
+          <button class="md-dlg-btn md-dlg-btn-save" @click="executeImport">OK</button>
         </div>
       </template>
     </Dialog>
@@ -1303,4 +1434,30 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
 
 /* LuCI iframe */
 .luci-iframe { width:100%; height:100%; border:none; }
+
+/* Settings action buttons */
+.md-settings-btn {
+  display:inline-flex; align-items:center; gap:4px;
+  padding:5px 12px; border:none; border-radius:16px;
+  font-size:0.75rem; font-weight:500; cursor:pointer;
+  transition:background 0.15s; flex-shrink:0;
+  background:#f5f5f5; color:var(--md-secondary);
+}
+.md-settings-btn:active { background:#e0e0e0; }
+.md-settings-btn-export {
+  background:#e8f5e9; color:#2e7d32; font-weight:600;
+}
+.md-settings-btn-export:active { background:#c8e6c9; }
+.md-settings-btn-primary {
+  background:#e3f2fd; color:#1565c0; font-weight:600;
+}
+.md-settings-btn-primary:active { background:#bbdefb; }
+@media (prefers-color-scheme: dark) {
+  .md-settings-btn { background:#333; color:var(--md-muted); }
+  .md-settings-btn:active { background:#444; }
+  .md-settings-btn-export { background:#1b3a1b; color:#66bb6a; }
+  .md-settings-btn-export:active { background:#2a4a2a; }
+  .md-settings-btn-primary { background:#1a3050; color:#64b5f6; }
+  .md-settings-btn-primary:active { background:#234a7e; }
+}
 </style>
