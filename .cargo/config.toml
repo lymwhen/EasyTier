@@ -85,14 +85,4 @@ PKG_CONFIG_LIBDIR = "/usr/local/ohos-sdk/linux/native/sysroot/usr/lib:/usr/local
 PKG_CONFIG_SYSROOT_DIR = "/usr/local/ohos-sdk/linux/native/sysroot"
 SYSROOT = "/usr/local/ohos-sdk/linux/native/sysroot"
 
-# Android aarch64 构建 — 环境变量固化为配置文件以保证 Cargo 增量编译指纹稳定
-# CI 影响: BINDGEN_EXTRA_CLANG_ARGS 指向 Windows NDK 路径，Linux CI 上无效路径可能导致
-# kcp-sys bindgen 编译失败。如需 CI 构建 Android，需在 workflow 中 override 此变量为空值。
-[env]
-CC_aarch64_linux_android = "D:/tools/Android/Sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/windows-x86_64/bin/aarch64-linux-android21-clang.cmd"
-AR_aarch64_linux_android = "D:/tools/Android/Sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-ar.exe"
-BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android = "-resource-dir=D:/tools/Android/Sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/18 --sysroot=D:/tools/Android/Sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/windows-x86_64/sysroot -ID:/tools/Android/Sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include"
-
-[target.aarch64-linux-android]
-linker = "D:/tools/Android/Sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/windows-x86_64/bin/aarch64-linux-android21-clang.cmd"
-ar = "D:/tools/Android/Sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-ar.exe"
+# endregion
