@@ -2,7 +2,7 @@
 
 ## Project
 Tauri v2 Android app (`easytier-gui`) — WOL device management + EasyTier VPN control.  
-Detail: see `project.md`.
+Detail: see `docs/project.md`. Build details: see `docs/项目构建方式.md`.
 
 ## Constraints
 - **Never modify `easytier/` (easytier-core)** — router uses official binary
@@ -19,32 +19,9 @@ Detail: see `project.md`.
 | `easytier-gui/src-tauri/gen/android/.../MainActivity.kt` | Android activity (text selection fix) |
 | `easytier-gui/src/composables/mobile_vpn.ts` | VPN service setup (routes, `disallowedApplications`) |
 
-## Build (3 steps, do NOT skip any)
-```bash
-# 1. Vite (bash OK)
-export PATH="$HOME/.cargo/bin:$HOME/.npm-global:$PATH"
-cd easytier-gui && pnpm vite build
+## Build
 
-# 2. Cargo (bash OK)
-#    ALL cross-compile env vars (CC/AR/BINDGEN/PROTOC/LIBCLANG_PATH/linker)
-#    are in .cargo/config.toml [env] — no export needed
-cd src-tauri && cargo build --lib --release --target aarch64-linux-android --features "tauri/custom-protocol"
-
-# 3. Gradle — MUST use PowerShell (NOT bash):
-$env:ANDROID_HOME = "D:/tools/Android/Sdk"
-$env:JAVA_HOME = "D:/tools/Java/jdk-17.0.12"
-$env:GRADLE_USER_HOME = "D:/tmp/gradle-tmp"
-cd gen/android; .\gradlew.bat assembleArm64Release --no-daemon
-
-# Copy to test directory:
-Copy-Item -Force "...\app-arm64-release.apk" "F:\tmp\app-arm64-release.apk"
-```
-
-**Why not bash for Gradle**: MSYS2 file ops conflict with Windows NTFS locks → `Could not move temporary workspace`.
-
-**Why 3 steps always**: Tauri build.rs embeds `dist/` into `.so`. Frontend change without Cargo → old UI in APK.
-
-**Incremental cache**: ALL cross-compile env vars (CC/AR/BINDGEN/PROTOC/LIBCLANG_PATH) + linker/ar are in `.cargo/config.toml` [env] → stable fingerprints. DO NOT export these in shell — MSYS2 path translation distorts values each run, breaking the fingerprint. Result: easytier stays cached, only easytier-gui recompiles (~1m25s) on frontend changes. No manual `rm` of build artifacts needed—Cargo handles it.
+详见 [docs/项目构建方式.md](docs/项目构建方式.md)。
 
 ## Key Architecture Decisions
 

@@ -894,21 +894,21 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
                 <span class="md-traffic-label" :style="{color:TRAFFIC_DOWN_COLOR}">&#8595; {{ netTrafficSpeed.downTotal }}</span>
               </div>
             </div>
-            <svg class="md-traffic-svg" viewBox="0 0 320 108">
-              <!-- Y axis -->
-              <text x="4" y="8" font-size="9" fill="var(--md-muted)" font-family="sans-serif">{{ (() => { const m = Math.max(1, ...trafficHistory.map(p => Math.max(p.up, p.down))); return formatSpeedY(m); })() }}</text>
-              <text x="4" y="82" font-size="9" fill="var(--md-muted)" font-family="sans-serif">0</text>
-              <!-- X axis labels -->
-              <text x="34" y="95" font-size="8" fill="var(--md-muted)" font-family="sans-serif">{{ formatXLabel(trafficHistory.length, 0) }}</text>
-              <text x="162" y="95" font-size="8" fill="var(--md-muted)" font-family="sans-serif" text-anchor="middle">{{ formatXLabel(trafficHistory.length, Math.floor(trafficHistory.length/2)) }}</text>
-              <text x="300" y="95" font-size="8" fill="var(--md-muted)" font-family="sans-serif" text-anchor="end">{{ formatXLabel(trafficHistory.length, trafficHistory.length-1) }}</text>
-              <!-- Up line -->
-              <path v-if="trafficHistory.length > 1" :d="buildSmoothPath(trafficHistory.map(p => p.up), Math.max(1, ...trafficHistory.map(p => Math.max(p.up, p.down))), 80, 282)" fill="none" :stroke="TRAFFIC_UP_COLOR" stroke-width="1.5" transform="translate(32,2)"/>
-              <!-- Down line -->
-              <path v-if="trafficHistory.length > 1" :d="buildSmoothPath(trafficHistory.map(p => p.down), Math.max(1, ...trafficHistory.map(p => Math.max(p.up, p.down))), 80, 282)" fill="none" :stroke="TRAFFIC_DOWN_COLOR" stroke-width="1.5" transform="translate(32,2)"/>
-              <!-- Bottom axis -->
-              <line x1="32" y1="88" x2="318" y2="88" stroke="var(--md-border)" stroke-width="0.5"/>
-            </svg>
+            <div class="md-traffic-chart-wrap">
+              <svg class="md-traffic-svg" viewBox="0 0 320 108" preserveAspectRatio="none">
+                <!-- Up line -->
+                <path v-if="trafficHistory.length > 1" :d="buildSmoothPath(trafficHistory.map(p => p.up), Math.max(1, ...trafficHistory.map(p => Math.max(p.up, p.down))), 80, 316)" fill="none" :stroke="TRAFFIC_UP_COLOR" stroke-width="1.5" transform="translate(2,2)"/>
+                <!-- Down line -->
+                <path v-if="trafficHistory.length > 1" :d="buildSmoothPath(trafficHistory.map(p => p.down), Math.max(1, ...trafficHistory.map(p => Math.max(p.up, p.down))), 80, 316)" fill="none" :stroke="TRAFFIC_DOWN_COLOR" stroke-width="1.5" transform="translate(2,2)"/>
+                <!-- Bottom axis -->
+                <line x1="2" y1="88" x2="318" y2="88" stroke="var(--md-border)" stroke-width="0.5"/>
+              </svg>
+              <span class="md-chart-label md-chart-y-max">{{ (() => { const m = Math.max(1, ...trafficHistory.map(p => Math.max(p.up, p.down))); return formatSpeedY(m); })() }}</span>
+              <span class="md-chart-label md-chart-y-zero">0</span>
+              <span class="md-chart-label md-chart-x-start">{{ formatXLabel(trafficHistory.length, 0) }}</span>
+              <span class="md-chart-label md-chart-x-mid">{{ formatXLabel(trafficHistory.length, Math.floor(trafficHistory.length/2)) }}</span>
+              <span class="md-chart-label md-chart-x-end">{{ formatXLabel(trafficHistory.length, trafficHistory.length-1) }}</span>
+            </div>
           </div>
 
           <!-- Network Devices -->
@@ -1427,7 +1427,14 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
 .md-traffic-hdr { display:flex; justify-content:space-between; font-size:0.7rem; font-weight:500; margin-bottom:2px; }
 .md-traffic-label { margin-right:12px; }
 .md-traffic-total { text-align:right; font-size:0.68rem; color:var(--md-muted); }
-.md-traffic-svg { width:100%; display:block; }
+.md-traffic-svg { width:100%; height:90px; display:block; }
+.md-traffic-chart-wrap { position:relative; padding-left:20px; }
+.md-chart-label { position:absolute; font-size:0.5rem; color:var(--md-muted); font-family:sans-serif; pointer-events:none; white-space:nowrap; }
+.md-chart-y-max { left:2px; top:1px; }
+.md-chart-y-zero { left:2px; bottom:14px; }
+.md-chart-x-start { left:20px; bottom:0; }
+.md-chart-x-mid { left:50%; transform:translateX(-50%); bottom:0; }
+.md-chart-x-end { right:2px; bottom:0; }
 @media (prefers-color-scheme: dark) {
   .md-traffic-total { color:var(--md-secondary); }
 }
