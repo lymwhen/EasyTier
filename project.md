@@ -492,6 +492,52 @@ cargo build --lib --release --target aarch64-linux-android --features "tauri/cus
 
 **CI 影响**：`BINDGEN_EXTRA_CLANG_ARGS` 指向 Windows NDK 路径，Linux CI 上该路径无效。如需 CI 构建 Android，需在 workflow 中设置 `BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android=""` 覆盖。
 
+**本地与 CI 兼容方案调研**（暂不开展深入研究）
+
+方案 A — CI 覆盖：
+- `.cargo/config.toml` 保持本地快速构建配置不变
+- CI workflow 中通过 `env:` 设置 Linux NDK 路径，覆盖 `[env]` 中 Windows 路径
+- 优点：本地零改动；缺点：BINDGEN_EXTRA_CLANG_ARGS 需在 Linux 上设为空或 Linux sysroot
+
+方案 B — 全部移到 shell：
+- CC/AR/BINDGEN 也从 config.toml 移除
+- 本地和 CI 各自用脚本 export 固定绝对路径
+- 优点：config.toml 不含机器路径，远端干净；缺点：需验证 shell export 是否与 `[env]` 一样保持 Cargo 指纹稳定（之前认为动态注入会导致失效，但固定硬编码路径的 shell export 未经单独测试）
+
+方案 C — 环境配置文件：
+- 创建 `.cargo/config.local.toml`（gitignore），CI 不感知
+- 本地将 `[env]` 和 `[target.aarch64-linux-android]` 放入此文件
+- 优点：本地 CI 完全隔离；缺点：Cargo 不原生支持 include，需用脚本合并或 `CARGO_HOME` 变通
+
+**当前方案**（采用中）：
+
+使用 `git update-index --skip-worktree` 隔离本地 CI 配置：
+
+```
+本地 `.cargo/config.toml` 包含 `[env]` 和 `[target.aarch64-linux-android]` 块
+远端 `.cargo/config.toml` 保持与上游官方仓库完全一致
+
+git update-index --skip-worktree .cargo/config.toml
+```
+
+`--skip-worktree` 效果：
+- `git status` / `git diff` 不显示该文件改动，不会误提交
+- `git pull` / `git merge` 不覆盖本地版本
+- 比 `--assume-unchanged` 更强力，不会被 update-index 自动重置
+
+上游更新检测与合并：
+```bash
+# 检查上游是否有更新
+git diff .cargo/config.toml      # 本地 vs 索引（远端），有输出→上游有变动
+git log -1 -- .cargo/config.toml # 看最新提交时间
+
+# 合并流程（上游低频率变更，几个月一次）
+git update-index --no-skip-worktree .cargo/config.toml
+git checkout .cargo/config.toml          # 获取上游新版本
+# 手动将本地 [env] + [target] 块 merge 进新版本
+git update-index --skip-worktree .cargo/config.toml
+```
+
 ## 开发教训
 
 1. **有 v-model 绑定就不要手动操作 DOM**：`el.value = text` + `dispatchEvent('input')` 和 `wolToml.value = text` 三件事相互冲突。v-model 下只需设 ref 值，Vue 自己渲染到 DOM
