@@ -658,15 +658,21 @@ async fn luci_login(
     Err(format!("No sysauth cookie in login response (HTTP {status}, cookies: {:?})", debug_cookies))
 }
 
+fn is_html(resp: &reqwest::Response) -> bool {
+    resp.headers().get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .map(|ct| ct.contains("text/html"))
+        .unwrap_or(false)
+}
+
 async fn proxy_request(
     req: Request<Incoming>,
     ctx: &Arc<ProxyCtx>,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     let path = req.uri().path_and_query()
         .map(|pq| pq.as_str())
-        .unwrap_or("/");
-    // Track last path for refresh
-    *ctx.shared.last_path.lock().unwrap() = path.to_string();
+        .unwrap_or("/")
+        .to_string();
     let target_url = format!("http://{}{}", ctx.router_ip, path);
     let method: reqwest::Method = req.method().clone().try_into().unwrap_or(reqwest::Method::GET);
 
@@ -697,6 +703,11 @@ async fn proxy_request(
         Err(e) => return build_error_response(&e.to_string()),
     };
 
+    // Only track page navigations (HTML), not resource loads (CSS/JS/images)
+    if is_html(&resp) {
+        *ctx.shared.last_path.lock().unwrap() = path.to_string();
+    }
+
     // If session expired (redirect to login), re-login and retry once
     let is_login_redirect = resp.status() == reqwest::StatusCode::FOUND
         && resp.headers().get("location")
@@ -717,7 +728,12 @@ async fn proxy_request(
                     &target_url,
                 ).header("Cookie", &new_cookie);
                 match retry_req.send().await {
-                    Ok(r) => return build_proxy_response(r).await,
+                    Ok(r) => {
+                        if is_html(&r) {
+                            *ctx.shared.last_path.lock().unwrap() = path.to_string();
+                        }
+                        return build_proxy_response(r).await;
+                    }
                     Err(e) => return build_error_response(&e.to_string()),
                 }
             }
@@ -802,8 +818,6 @@ async fn luci_proxy_start(
     password: String,
     socks5_proxy: Option<String>,
 ) -> Result<String, String> {
-    stop_proxy_inner();
-
     let client = build_proxy_client(&socks5_proxy)?;
     let cookie = luci_login(&client, &router_ip, &username, &password).await?;
 
@@ -816,6 +830,8 @@ async fn luci_proxy_start(
         last_path: std::sync::Mutex::new("/cgi-bin/luci/admin/".to_string()),
         last_path_type: std::sync::Mutex::new(if socks5_proxy.is_some() { "tunnel" } else { "lan" }.to_string()),
     });
+
+    stop_proxy_inner();
     *PROXY.lock().unwrap() = Some(ProxyHandle { port, shutdown_tx, shared: shared.clone() });
 
     let ctx = Arc::new(ProxyCtx {

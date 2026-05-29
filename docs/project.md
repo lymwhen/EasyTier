@@ -181,17 +181,20 @@ PC
 
 ```
 Tauri IPC (luci_proxy_start)
-  → Rust: reqwest 向路由器发起 LuCI 登录请求（POST /cgi-bin/luci/admin/login）
-    → 获取 session cookie
+  → Rust: reqwest 向路由器发起 LuCI 登录请求（POST /cgi-bin/luci/）
+    → 从响应 Set-Cookie 中提取 sysauth 或 sysauth_http cookie
   → Rust: TcpListener 绑定 127.0.0.1 随机端口，启动 Hyper HTTP 代理服务
-    → 代理服务在每次转发请求时自动注入登录 cookie
+    → 代理在每次转发请求时自动注入登录 cookie
+    → 检测 session 过期（302 重定向到 login），自动重新登录并重试
   → 返回代理 URL: http://127.0.0.1:<port>
   → 前端 iframe src 指向代理 URL + /cgi-bin/luci/admin/
 ```
 
 **路径模式**：与 WOL 设备检测一致，ET 模式下 `luciProxyStart` 接收可选 `socks5Proxy` 参数，reqwest 经 SOCKS5 代理连接路由器。LAN 模式下直连。路径模式改变时（ET-LAN ↔ LAN），代理自动完全重启（`refreshLuciIframe`）。
 
-**路由持久化**：代理记录 `last_path`（最后一次请求的 LuCI 路径），切换路由器时或路径模式变更时恢复上次浏览位置。
+**路径持久化**：代理通过 `last_path` 记录用户当前浏览的 LuCI 页面路径。刷新或路径模式切换时，代理重启后自动恢复到上次浏览位置，而非回到首页。
+
+`last_path` 仅在响应 `Content-Type: text/html` 时更新，过滤掉 CSS/JS/图片/API 等资源请求，避免资源路径污染页面追踪（详见重难点 5）。
 
 #### 多路由器管理
 
@@ -409,6 +412,46 @@ home.vue:
 **排查结论**：CSS/JS 无拦截、wry 无 ActionMode 覆盖、AppCompat 正确透传、手动 `startActionMode` 可弹出。反射调用 `setCustomSelectionActionModeCallback` 在 SDK 34 stubs 中隐藏无效。
 
 **状态**：不计划修复。JS 桥接 + 反射方案可弹出菜单和复制，但粘贴被安全策略禁用。
+
+### 5. LuCI 刷新后 iframe 白屏（last_path 资源污染）
+
+**现象**：LuCI 页面正常浏览后点击标题栏刷新按钮，iframe 变为空白，且 spinner 未显示。首次加载正常，仅刷新触发。
+
+**根因链**：
+
+1. `proxy_request` 对**每个代理请求**都更新 `last_path`，包括页面导航请求（如 `/cgi-bin/luci/admin/status/overview`）和资源请求（如 `/cgi-bin/luci-static/resources/...js`、`/cgi-bin/luci-static/resources/...css`、API 端点）
+2. LuCI 页面加载后会触发大量资源请求（JS/CSS/图标/轮询 API）
+3. 用户点击刷新时，`luciGetLastPath()` 返回的极可能是最后一次资源请求的路径（如 `.../xhr.js`），而非当前 HTML 页面路径
+4. `luciIframeSrc = url + prevPath` 将资源路径作为 iframe src → WebView 尝试将 JS/CSS 文本作为 HTML 渲染 → **白屏**（无可见内容）
+5. 此时 iframe 元素存在且 `luciIframeSrc` 非空，template 走 `v-else-if="luciIframeSrc"` 分支渲染 iframe，不会回退到 loading spinner 分支
+
+**关键代码路径**：
+
+```
+proxy_request (Rust)
+  → 旧: 无条件 *last_path = path  // 每个请求都更新
+  → 新: 仅在 is_html(&resp) 时更新  // 只追踪 HTML 页面
+
+refreshLuciIframe (JS)
+  → luciIframeSrc = ''             // 立即隐藏 iframe，显示 spinner
+  → luciGetLastPath()              // 读取 last_path（现在只含 HTML 页面路径）
+  → luciProxyStop()                // 显式停旧代理
+  → luciProxyStart()               // 启新代理
+  → luciIframeSrc = url + prevPath // 恢复正确的页面路径
+```
+
+**方案**：
+
+1. **Rust 侧**：新增 `is_html()` 辅助函数，检查响应的 `Content-Type` 是否包含 `text/html`。`last_path` 仅在 HTML 响应时更新，过滤掉所有资源请求
+2. **Rust 侧**：`luci_proxy_start` 中将 `stop_proxy_inner()` 移到 `luci_login` + `TcpListener::bind` 成功之后。新代理一切就绪才杀旧代理，避免登录失败导致旧代理提前死亡
+3. **JS 侧**：`refreshLuciIframe` 开头立即设 `luciIframeSrc = ''`（隐藏 iframe 显示 spinner），然后 `luciGetLastPath` → `luciProxyStop` → `luciProxyStart` → 恢复 `luciIframeSrc`。失败时清除 `proxyUrl`，回退到 spinner
+
+**为何首次加载不触发**：`startLuciProxy` 使用硬编码 `/cgi-bin/luci/admin/`（始终是合法 HTML 页面），不依赖 `last_path`。
+
+**教训**：
+- HTTP 代理的路径追踪必须区分页面导航和资源请求，仅靠 URL 模式不可靠（不同 Web 应用的路径规范不同），响应 `Content-Type` 是更通用的判断依据
+- 刷新类操作应先隐藏当前内容（显示加载态），等新资源就绪后再展示，避免残留旧 URL 指向已销毁的代理
+- Rust 侧 proxy 生命周期管理应与 JS 侧的显式控制（`luciProxyStop` → `luciProxyStart`）保持一致的双向确认模式
 
 ## 配置规范
 

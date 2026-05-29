@@ -571,18 +571,21 @@ async function refreshLuciIframe() {
   const r = currentLuciRouter.value
   if (!r) return
   luciLoading.value = true
+  luciIframeSrc.value = ''  // hide iframe immediately, show spinner during restart
   try {
     const socks5 = getSocks5Proxy()
-    // Get last path before restarting proxy
     const prevPath = await luciGetLastPath().catch(() => '/cgi-bin/luci/admin/')
+    await luciProxyStop()
     const url = await luciProxyStart(r.ip, r.username, r.password, socks5 || null)
     proxyUrl.value = url
     luciCurrentPath.value = prevPath
     luciIframeSrc.value = url + prevPath
     lastLuciPathType.value = socks5 ? 'tunnel' : 'lan'
     luciIframeKey.value++
+    localStorage.setItem('lastLuciRouterIp', r.ip)
   } catch (e: any) {
     showSnack(String(e))
+    proxyUrl.value = ''
   }
   luciLoading.value = false
 }
