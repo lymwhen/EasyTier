@@ -2,7 +2,7 @@
 
 ## Project
 Tauri v2 Android app (`easytier-gui`) — WOL device management + EasyTier VPN control.  
-Detail: see `docs/project.md`. Build details: see `docs/项目构建方式.md`.
+Detail: see `docs/project.md`。构建细节: `docs/本地Android构建.md`（本地） / `docs/CI全平台构建.md`（CI）。
 
 ## Constraints
 - **Never modify `easytier/` (easytier-core)** — router uses official binary
@@ -21,7 +21,8 @@ Detail: see `docs/project.md`. Build details: see `docs/项目构建方式.md`.
 
 ## Build
 
-详见 [docs/项目构建方式.md](docs/项目构建方式.md)。
+本地 Android 构建详见 [docs/本地Android构建.md](docs/本地Android构建.md)。
+CI 全平台构建详见 [docs/CI全平台构建.md](docs/CI全平台构建.md)。
 
 ## Key Architecture Decisions
 

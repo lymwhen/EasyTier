@@ -1,10 +1,12 @@
-# 项目构建方式
+# 本地 Android 构建
 
-EasyTier Tauri v2 Android App 构建完整指南。
+EasyTier Tauri v2 Android App 本地（Windows）构建完整指南。
+
+> **CI 全平台构建**请参阅 [docs/CI全平台构建.md](CI全平台构建.md)。
 
 ---
 
-## 一、现行本地构建方式
+## 一、日常构建
 
 ### 1.1 关键配置文件
 
@@ -23,9 +25,9 @@ linker = "D:/tools/Android/Sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/window
 ar = "D:/tools/Android/Sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-ar.exe"
 ```
 
-> CI 影响说明：`BINDGEN_EXTRA_CLANG_ARGS` 指向 Windows NDK 路径，Linux CI 上无效。如需 CI 构建 Android，在 workflow 中覆盖此变量为空值。
+> `.cargo/config.toml` 包含本机路径，使用 `git update-index --skip-worktree .cargo/config.toml` 防止误提交。详见 [1.6 节](#16-与远端仓库的隔离)。
 
-### 1.2 日常增量构建（推荐，~1m40s）
+### 1.2 增量构建（推荐，~1m40s）
 
 **适用条件**：
 
@@ -72,21 +74,21 @@ Copy-Item -Force "D:\projects\projectsAlpha\EasyTier\easytier-gui\src-tauri\gen\
 | easytier-core 依赖 | ~53s | 重编 ~7m | 重编+链 ~1m | ~11s | **~10min** |
 | 无任何变更 | ~53s | 缓存命中 | 缓存命中 ~1.3s | ~11s | ~1m05s |
 
-### 1.5 构建问题解释
+### 1.5 构建步骤说明
 
-#### 1.5.1 为什么三步缺一不可
+#### 为什么三步缺一不可
 
 Tauri 通过 `tauri_build::build()` 在 Cargo 编译阶段将 `dist/` 目录嵌入到 `.so` 二进制中。**即使只改前端，也必须重新构建 .so**，否则 APK 加载的是旧前端。
 
-#### 1.5.2 为什么 Vite + Cargo 必须同一 bash 调用
+#### 为什么 Vite + Cargo 必须同一 bash 调用
 
 MSYS2 bash 每次调用时初始化环境。分开调用 → 两次会话之间存在细微环境差异 → 依赖 crate 的 build.rs（`rerun-if-env-changed` in kcp-sys, prost-wkt-types）检测到 env var 变化 → easytier 指纹失效 → 全量重编译（~7m47s）。同一调用内环境快照一致 → 指纹稳定 → 增量编译（~1m27s）。
 
-#### 1.5.3 为什么 Gradle 必须用 PowerShell
+#### 为什么 Gradle 必须用 PowerShell
 
 bash (MSYS2) 的文件操作与 Windows NTFS 文件锁不兼容，Gradle transforms 阶段出现 `Could not move temporary workspace` 错误。PowerShell 使用 Windows 原生文件 API，无此冲突。
 
-#### 1.5.4 增量编译的 Cargo 配置
+#### 增量编译的 Cargo 配置
 
 ALL 交叉编译环境变量已固化在 `.cargo/config.toml` 的 `[env]` 块中：
 
@@ -95,6 +97,35 @@ ALL 交叉编译环境变量已固化在 `.cargo/config.toml` 的 `[env]` 块中
 - `[target.aarch64-linux-android]` — linker、ar
 
 **绝对不要在 shell 中再次 export 这些变量** — MSYS2 路径转换会破坏指纹稳定性。
+
+### 1.6 与远端仓库的隔离
+
+`.cargo/config.toml` 包含本机绝对路径，通过 `skip-worktree` 防止误提交：
+
+```
+本地 .cargo/config.toml — 包含 [env] + [target.aarch64-linux-android]
+远端 .cargo/config.toml — 与上游官方仓库一致（不含本地路径）
+
+git update-index --skip-worktree .cargo/config.toml
+```
+
+**效果**：
+- `git status` / `git diff` 不显示该文件改动，不会误提交
+- `git pull` / `git merge` 不覆盖本地版本
+- 比 `--assume-unchanged` 更强力，不会被 update-index 自动重置
+
+**上游更新此文件时**（上游低频变更，几个月一次）：
+```bash
+# 检查上游是否有更新
+git diff .cargo/config.toml      # 有输出 → 上游有变动
+git log -1 -- .cargo/config.toml # 看最新提交时间
+
+# 合并流程
+git update-index --no-skip-worktree .cargo/config.toml
+git checkout .cargo/config.toml          # 获取上游新版本
+# 手动将本地 [env] + [target] 块合并进新版本
+git update-index --skip-worktree .cargo/config.toml
+```
 
 ---
 
@@ -135,7 +166,7 @@ ALL 交叉编译环境变量已固化在 `.cargo/config.toml` 的 `[env]` 块中
 | 前端变更 | ~8min | ~2min（Vite 53s + Cargo 1m25s） |
 | 无变更 | ~8min | ~55s |
 
-### 3.2 MSYS2 跨会话环境漂移（最近发现）
+### 3.2 MSYS2 跨会话环境漂移
 
 **现象**：3.1 修复后，同一 bash 会话内两次 Cargo 调用缓存正常（第二次 ~1.37s），但跨会话仍全量重编译（~7m47s）。Vite + Cargo 在同一 bash 调用中执行时正常（~1m27s），分开调用时异常。
 
@@ -192,7 +223,7 @@ PROTOC 不稳定 → prost-wkt-types 重编译 → easytier 重编译
 
 ---
 
-## 四、构建踩坑速查表
+## 四、踩坑速查表
 
 | 问题 | 原因 | 解决 |
 |------|------|------|
@@ -208,74 +239,3 @@ PROTOC 不稳定 → prost-wkt-types 重编译 → easytier 重编译
 | Windows 符号链接失败 | 非管理员无权限 | BuildTask.kt 改用文件复制 |
 | Gradle 缓存损坏 | JDK 切换或磁盘问题 | 删除 `~/.gradle/caches` |
 | `sortedWol` computed 被误删 | 替换代码时边界未对齐 | 注意不覆盖相邻声明 |
-
----
-
-## 五、兼容本地构建与 CI 的可能方案
-
-### 背景
-
-`.cargo/config.toml` `[env]` 块中 `BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android` 指向 Windows NDK 路径，Linux CI 上该路径无效，可能导致 kcp-sys bindgen 编译失败。
-
-### 方案 A — CI 覆盖环境变量（当前暂未实施）
-
-`.cargo/config.toml` 保持本地配置不变。CI workflow 中通过 `env:` 设置 Linux NDK 路径覆盖 `[env]` 中的 Windows 路径。
-
-```
-优点：本地零改动
-缺点：BINDGEN_EXTRA_CLANG_ARGS 需在 Linux 上设为空或 Linux sysroot 路径
-```
-
-CI workflow 示例：
-```yaml
-env:
-  BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android: ""
-  CC_aarch64_linux_android: "..."
-  AR_aarch64_linux_android: "..."
-```
-
-### 方案 B — 全部移到 shell（未充分验证）
-
-从 config.toml 移除所有环境变量。本地和 CI 各自用脚本 export 固定绝对路径。
-
-```
-优点：config.toml 不含机器路径，远端干净
-缺点：需验证 shell export 是否与 [env] 一样保持 Cargo 指纹稳定（之前发现 MSYS2 下 shell export 会导致波动，Linux CI 上可能无此问题）
-```
-
-### 方案 C — 环境配置文件隔离
-
-创建 `.cargo/config.local.toml`（gitignore），本地将 `[env]` 和 `[target.aarch64-linux-android]` 放入此文件。
-
-```
-优点：本地 CI 完全隔离
-缺点：Cargo 不原生支持 include 多个 config 文件，需脚本合并或 CARGO_HOME 变通
-```
-
-### 当前方案 — `git update-index --skip-worktree`
-
-```
-本地 .cargo/config.toml — 包含 [env] + [target.aarch64-linux-android]
-远端 .cargo/config.toml — 与上游官方仓库一致（不含本地路径）
-
-git update-index --skip-worktree .cargo/config.toml
-```
-
-**效果**：
-- `git status` / `git diff` 不显示该文件改动，不会误提交
-- `git pull` / `git merge` 不覆盖本地版本
-- 比 `--assume-unchanged` 更强力，不会被 update-index 自动重置
-
-**上游更新检测与合并**（上游低频变更，几个月一次）：
-```bash
-# 检查上游是否有更新
-git diff .cargo/config.toml      # 有输出 → 上游有变动
-git log -1 -- .cargo/config.toml # 看最新提交时间
-
-# 合并流程
-git update-index --no-skip-worktree .cargo/config.toml
-git checkout .cargo/config.toml          # 获取上游新版本
-# 手动将本地 [env] + [target] 块 merge 进新版本
-git update-index --skip-worktree .cargo/config.toml
-```
-
