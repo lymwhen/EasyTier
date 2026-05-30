@@ -10,6 +10,60 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 4. **配置驱动**：WOL 设备通过 TOML 配置文件管理（独立于网络 TOML），不提供图形化添加。
 5. **Material Design 风格**：参考 WOLPlus 的卡片设计。
 
+## 功能清单（相对上游新增/优化）
+
+> 以下梳理自 `a72a593`（首个 WOL 功能提交）至 `HEAD` 的所有变更，覆盖功能增强、UI 优化、CI 建设、平台适配等维度。
+
+<table>
+<tr><th>模块</th><th>功能项</th><th>平台支持情况</th></tr>
+<tr><td rowspan="8"><b>整体UI</b></td><td>Material Design 风格全面美化 — 自定义 CSS 变量体系（<code>:root</code> 级）、卡片 12px 圆角 + 阴影、暗色模式 <code>@media (prefers-color-scheme: dark)</code> 自动跟随</td><td>全平台</td></tr>
+<tr><td>底部 Tab 导航栏（电脑 / 组网 / LuCI / 设置），默认首页可配置（localStorage 持久化）</td><td>全平台</td></tr>
+<tr><td>App 图标更换为 EasyTier 网络层叠图标 + Splash 遮罩优化（路由跳转完成后隐藏，最低 500ms）</td><td>全平台</td></tr>
+<tr><td>全部操作图标统一更换 — 标题栏编辑/刷新/切换、底部 Tab、唤醒铃铛面型图标、关机电源面型图标、Connect 链式连接、断开断链 SVG</td><td>全平台</td></tr>
+<tr><td>断开按钮颜色匹配网络质量最差红（<code>#ef5350</code>），编辑器关闭按钮隐藏、Textarea 间距优化</td><td>全平台</td></tr>
+<tr><td>图表 SVG translate + CSS left 固定 20px Y 轴标签区 — 平板/窄屏适配，不再左侧过宽</td><td>全平台</td></tr>
+<tr><td>自定义 Material snackbar 底部居中胶囊 Toast（替代 PrimeVue useToast）— 2.5s 滑入动画</td><td>全平台</td></tr>
+<tr><td>中英双语 — 自定义 <code>tt(key)</code> 函数 + 内联 i18n 字典（不依赖 easytier-frontend-lib），用户面文本全部双语化</td><td>全平台</td></tr>
+<tr><td rowspan="7"><b>电脑<br>(WOL)</b></td><td>设备卡片 — 在线状态指示灯（脉冲动画）+ 名称 + IP + 状态文字，点击展开详情（MAC / Router IP / Interface / Agent Port）</td><td>全平台</td></tr>
+<tr><td>远程唤醒 — App → HTTP GET 路由器 CGI（<code>luci-app-wolplus</code>）→ <code>etherwake</code> 发送魔术包；局域网直连 / EasyTier SOCKS5 隧道双路径</td><td>全平台</td></tr>
+<tr><td>在线状态检测 — App → HTTP GET PC Agent（Go，32249 端口，<code>/api/v1/status</code>）；30 秒自动轮询，路由器离线时中止并置灰卡片</td><td>全平台</td></tr>
+<tr><td>远程关机 — App → HTTP POST PC Agent（<code>/api/v1/shutdown</code>），Agent 执行 <code>shutdown /s /t 5</code>；含关机失败回退 online 机制（12 次 / 60s 检测）</td><td>全平台</td></tr>
+<tr><td>唤醒/关机状态机 — idle → waking（橙色脉冲 5s）→ online / offline；online → shutting（红色脉冲）→ offline / 回退 online</td><td>全平台</td></tr>
+<tr><td>设备配置 TOML 文本编辑器（等宽字体 Dialog）— 支持从剪贴板导入；路由器离线时卡片半透明（opacity 0.55）、操作按钮隐藏</td><td>全平台</td></tr>
+<tr><td>路径标签（ET-LAN / LAN 蓝色胶囊）— 根据 <code>netRunning</code> 与 <code>router_ip</code> 自动判断路径模式</td><td>全平台</td></tr>
+<tr><td rowspan="7"><b>组网</b></td><td>Peer 卡片展示 — IP + 主机名 + 延迟/丢包率 + 上下行流量 + P2P/Relay 标签 + NAT 类型芯片 + 隧道协议标签；点击展开版本号</td><td>全平台</td></tr>
+<tr><td>网络质量颜色分级 — 绿（正常）/ 蓝（loss>3% 或 lat>50）/ 橙（loss>5% 或 lat>100）/ 红（loss>10% 或 lat>300）；NAT 标签：绿/绿/绿/蓝/橙对应 Open/NAT1/NAT2/NAT3/NAT4</td><td>全平台</td></tr>
+<tr><td>Peer 排序 — 路由器优先（hostname 匹配 <code>/route|wrt|路由|home|家/i</code>），其余按 IP 排序；服务器按 hostname 字母排序</td><td>全平台</td></tr>
+<tr><td>实时速率图表 — SVG 平滑折线图，蓝色上行 / 柔红下行，3 分钟窗口（60 点），HTML 坐标轴标签覆盖 SVG 之上；连接重建时速率防负值 + 清空旧数据</td><td>全平台</td></tr>
+<tr><td>多网络管理 — 切换/新增/删除网络，当前网络标记 ✓，底部 "Add Network" 入口；网络配置 TOML 编辑器（含剪贴板导入）</td><td>全平台</td></tr>
+<tr><td>连接状态条 — 本机 IP + 设备名 + 版本号 + 红色断开按钮；连接中显示 "Connecting..."；netDiscovering 12 秒内空列表显示 "Waiting for peers..."</td><td>全平台</td></tr>
+<tr><td>3 秒自动刷新 Peer 数据；连接时自动检测全部 WOL 设备状态</td><td>全平台</td></tr>
+<tr><td rowspan="5"><b>LuCI</b></td><td>Hyper 本地 HTTP 反向代理 — 自动向路由器发起 LuCI 登录（POST <code>/cgi-bin/luci/</code>），提取 <code>sysauth</code> / <code>sysauth_http</code> cookie，后续请求自动注入</td><td>全平台</td></tr>
+<tr><td>iframe 嵌入路由器管理页面 — 全屏 100%×100%；SOCKS5 代理支持 EasyTier 隧道访问远程路由器</td><td>全平台</td></tr>
+<tr><td>会话过期自动重登（检测 302 重定向到 login），刷新保持当前 URL（<code>last_path</code> 仅追踪 <code>text/html</code> 响应，过滤 CSS/JS/API 资源请求）</td><td>全平台</td></tr>
+<tr><td>多路由器管理 — TOML 配置路由器列表，支持切换/新增/删除；删除当前路由器自动切换至剩余第一个</td><td>全平台</td></tr>
+<tr><td>路径持久化 — 刷新或路径模式切换（ET-LAN ↔ LAN）后，代理重启自动恢复上次浏览位置；v-show 切回 Tab 不重载 iframe</td><td>全平台</td></tr>
+<tr><td rowspan="6"><b>设置</b></td><td>高级设置入口 — 跳转原 <code>index.vue</code>（<code>/</code> 路由）访问 easytier-frontend-lib 自带高级面板</td><td>全平台</td></tr>
+<tr><td>语言切换 — 地球图标 + 当前语言蓝色胶囊标签（中文 / English），点击 <code>toggleLang()</code> 即时切换所有 UI 文字</td><td>全平台</td></tr>
+<tr><td>默认首页 — 原生 <code>&lt;select&gt;</code> 下拉（电脑 / 组网 / LuCI），<code>localStorage['defaultTab']</code> 持久化</td><td>全平台</td></tr>
+<tr><td>Debug 信息 — toggle 开关，开启后在组网页底部显示本机 IP / 端口 / raw TOML 等诊断信息</td><td>全平台</td></tr>
+<tr><td>一键配置导入/导出 — WOL + LuCI + 网络配置打包为 JSON（<code>v:1</code> 结构），Export 写入剪贴板；Import 含 JSON 校验 + 二次确认弹窗防误操作覆盖</td><td>全平台</td></tr>
+<tr><td>关于 — 显示版本号（来自 <code>package.json</code> 的 <code>pkg.version</code>）</td><td>全平台</td></tr>
+<tr><td rowspan="5"><b>Android<br>平台适配</b></td><td>剪贴板双向桥接 — <code>MainActivity.kt</code> 新增 <code>PasteBridge</code>（<code>@JavascriptInterface</code>），<code>readClipboard()</code> 通过 <code>CountDownLatch</code> + <code>mainHandler.post</code> 在 UI 线程读取；<code>writeClipboard()</code> 写入剪贴板</td><td>Android</td></tr>
+<tr><td>VPN 路由配置 — <code>mobile_vpn.ts</code> 设置 <code>disallowedApplications</code> 将 App 自身排除出 VPN 避免路由死循环；配置 <code>routes</code> 将虚拟网段路由至 TUN</td><td>Android</td></tr>
+<tr><td><code>AndroidManifest.xml</code> 添加 <code>usesCleartextTraffic="true"</code> 允许 HTTP 明文请求（访问局域网路由器 CGI 和 PC Agent）</td><td>Android</td></tr>
+<tr><td>文本选择上下文菜单 — 已调查（Chromium WebView 147 边界 bug，<code>SelectionPopupController</code> 不触发 ActionMode），不计划修复，已提供 JS 桥接 + 剪贴板按钮替代方案</td><td>Android</td></tr>
+<tr><td>APK 四架构构建 — aarch64 / armv7 / i686 / x86_64</td><td>Android</td></tr>
+<tr><td rowspan="4"><b>CI / 构建</b></td><td>Tag 推送自动触发全平台构建 + GitHub Release Draft — <code>release-tag.yml</code> (456 行)，矩阵含 Core CLI ×16、GUI 桌面 ×7、Android APK ×4、Magisk 模块</td><td>全平台（CI 产物）</td></tr>
+<tr><td>CI 兼容适配 — <code>prepare-pnpm</code> 添加 <code>--no-frozen-lockfile</code>、<code>docker.yml</code> 仓库名通用化、<code>vue-tsc</code> 类型检查临时跳过、<code>BuildTask.kt</code> 还原上游跨平台版本</td><td>Linux CI Runner</td></tr>
+<tr><td>Rust 代码 CI 合规 — <code>lib.rs</code> 通过 <code>cargo fmt</code> 格式检查 + <code>cargo clippy -D warnings</code>，确保上游 OHOS / Test workflow 通过</td><td>Linux CI Runner</td></tr>
+<tr><td>Cargo 增量编译缓存修复 — CC/AR/BINDGEN/PROTOC/LIBCLANG_PATH 环境变量固化到 <code>.cargo/config.toml [env]</code>，构建加速 4 倍（~10min → ~2m30s）</td><td>本地开发（Windows + MSYS2）</td></tr>
+<tr><td rowspan="2"><b>跨平台 GUI</b></td><td>桌面安装包构建 — Linux（deb/rpm/AppImage，x86_64 + aarch64）、macOS（dmg，x86_64 + aarch64）、Windows（nsis installer，x86_64 + i686 + aarch64）</td><td>Windows / macOS / Linux</td></tr>
+<tr><td>Desktop GUI 基于 Tauri v2 — 内嵌 easytier-core，Core 模式直连（无需 easytier-web），TOML 配置文件驱动</td><td>Windows / macOS / Linux</td></tr>
+</table>
+
+> **平台说明**："全平台"指 Windows / macOS / Linux 桌面端 + Android 移动端均支持。标记为特定平台的项仅在对应平台上生效。
+
 ## 系统架构
 
 ### 涉及项目
