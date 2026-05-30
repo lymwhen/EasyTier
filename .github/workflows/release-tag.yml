@@ -1,0 +1,455 @@
+name: Release (Tag)
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+concurrency:
+  group: release-tag-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # ── Web Dashboard ──────────────────────────────────────────────
+  build-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Setup Frontend Environment
+        uses: ./.github/actions/prepare-pnpm
+        with:
+          build-filter: './easytier-web/*'
+      - uses: actions/upload-artifact@v5
+        with:
+          name: easytier-web-dashboard
+          path: easytier-web/frontend/dist/*
+
+  # ── Core (CLI) ─────────────────────────────────────────────────
+  build-core:
+    needs: build-web
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - TARGET: x86_64-unknown-linux-musl
+            OS: ubuntu-24.04
+            ARTIFACT_NAME: linux-x86_64
+          - TARGET: aarch64-unknown-linux-musl
+            OS: ubuntu-24.04-arm
+            ARTIFACT_NAME: linux-aarch64
+          - TARGET: riscv64gc-unknown-linux-musl
+            OS: ubuntu-24.04
+            ARTIFACT_NAME: linux-riscv64
+          - TARGET: loongarch64-unknown-linux-musl
+            OS: ubuntu-24.04
+            ARTIFACT_NAME: linux-loongarch64
+          - TARGET: armv7-unknown-linux-musleabihf
+            OS: ubuntu-24.04
+            ARTIFACT_NAME: linux-armv7hf
+          - TARGET: armv7-unknown-linux-musleabi
+            OS: ubuntu-24.04
+            ARTIFACT_NAME: linux-armv7
+          - TARGET: arm-unknown-linux-musleabihf
+            OS: ubuntu-24.04
+            ARTIFACT_NAME: linux-armhf
+          - TARGET: arm-unknown-linux-musleabi
+            OS: ubuntu-24.04
+            ARTIFACT_NAME: linux-arm
+          - TARGET: mips-unknown-linux-musl
+            OS: ubuntu-24.04
+            ARTIFACT_NAME: linux-mips
+          - TARGET: mipsel-unknown-linux-musl
+            OS: ubuntu-24.04
+            ARTIFACT_NAME: linux-mipsel
+          - TARGET: x86_64-unknown-freebsd
+            OS: ubuntu-24.04
+            ARTIFACT_NAME: freebsd-13.2-x86_64
+            BSD_VERSION: 13.2
+          - TARGET: x86_64-apple-darwin
+            OS: macos-latest
+            ARTIFACT_NAME: macos-x86_64
+          - TARGET: aarch64-apple-darwin
+            OS: macos-latest
+            ARTIFACT_NAME: macos-aarch64
+          - TARGET: x86_64-pc-windows-msvc
+            OS: windows-latest
+            ARTIFACT_NAME: windows-x86_64
+          - TARGET: i686-pc-windows-msvc
+            OS: windows-latest
+            ARTIFACT_NAME: windows-i686
+          - TARGET: aarch64-pc-windows-msvc
+            OS: windows-11-arm
+            ARTIFACT_NAME: windows-arm64
+    runs-on: ${{ matrix.OS }}
+    env:
+      TARGET: ${{ matrix.TARGET }}
+      OS: ${{ matrix.OS }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download web artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: easytier-web-dashboard
+          path: easytier-web/frontend/dist/
+
+      - name: Prepare build environment
+        uses: ./.github/actions/prepare-build
+        with:
+          target: ${{ matrix.TARGET }}
+          gui: false
+          pnpm: false
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: ""
+          shared-key: "core-registry"
+          cache-targets: "false"
+
+      - uses: mlugg/setup-zig@v2
+        if: contains(matrix.OS, 'ubuntu')
+        with:
+          version: 0.16.0
+          use-cache: true
+
+      - uses: taiki-e/install-action@v2
+        if: contains(matrix.OS, 'ubuntu')
+        with:
+          tool: cargo-zigbuild
+
+      - name: Build (standard targets)
+        if: ${{ !contains(matrix.TARGET, 'mips') }}
+        run: |
+          if [[ "$TARGET" == *windows* ]]; then
+            SUFFIX=.exe
+          else
+            SUFFIX=""
+          fi
+
+          if [[ "$TARGET" =~ (x86_64-unknown-linux-musl|aarch64-unknown-linux-musl|windows|darwin) ]]; then
+            BUILD=build
+          else
+            BUILD=zigbuild
+          fi
+
+          if [[ "$TARGET" =~ ^(riscv64|loongarch64|aarch64).*$ || "$TARGET" =~ (freebsd|windows) ]]; then
+            FEATURES="mimalloc"
+          else
+            FEATURES="jemalloc"
+          fi
+
+          cargo $BUILD --release --target $TARGET --package=easytier-web --features=embed
+          mv ./target/$TARGET/release/easytier-web"$SUFFIX" ./target/$TARGET/release/easytier-web-embed"$SUFFIX"
+
+          cargo $BUILD --release --target $TARGET --features=$FEATURES
+
+      - name: Build (MIPS)
+        if: ${{ contains(matrix.TARGET, 'mips') }}
+        env:
+          RUSTC_BOOTSTRAP: 1
+        run: |
+          cargo build -r --target $TARGET -Z build-std=std,panic_abort --package=easytier --features=jemalloc
+
+      - name: Compress and collect
+        run: |
+          mkdir -p ./artifacts/objects/
+
+          if [[ $OS =~ ^windows.*$ ]]; then
+            SUFFIX=.exe
+            case $TARGET in
+              x86_64*)  ARCH_DIR=x86_64 ;;
+              i686*)    ARCH_DIR=i686 ;;
+              aarch64*) ARCH_DIR=arm64 ;;
+            esac
+            if [[ -n "$ARCH_DIR" ]]; then
+              find "easytier/third_party/${ARCH_DIR}" -maxdepth 1 -type f \( -name "*.dll" -o -name "*.sys" \) -exec cp {} ./artifacts/objects/ \;
+            fi
+          fi
+
+          if [[ $OS =~ ^ubuntu.*$ && ! $TARGET =~ (loongarch|freebsd) ]]; then
+            HOST_ARCH=$(uname -m)
+            case $HOST_ARCH in
+              x86_64)  UPX_ARCH="amd64" ;;
+              aarch64) UPX_ARCH="arm64" ;;
+              *)       UPX_ARCH="amd64" ;;
+            esac
+            UPX_VERSION=4.2.4
+            UPX_PKG="upx-${UPX_VERSION}-${UPX_ARCH}_linux"
+            curl -L "https://github.com/upx/upx/releases/download/v${UPX_VERSION}/${UPX_PKG}.tar.xz" -s | tar xJvf -
+            cp "${UPX_PKG}/upx" .
+            UPX_BIN=./upx
+          fi
+
+          for BIN in ./target/$TARGET/release/easytier-{core,cli,web,web-embed}"$SUFFIX"; do
+            if [[ -f "$BIN" ]]; then
+              if [[ -n "$UPX_BIN" ]]; then
+                $UPX_BIN --lzma --best "$BIN" || true
+              fi
+              mv "$BIN" ./artifacts/objects/
+            fi
+          done
+
+          mv ./artifacts/objects/* ./artifacts/
+          rm -rf ./artifacts/objects/
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: easytier-${{ matrix.ARTIFACT_NAME }}
+          path: ./artifacts/*
+
+  # ── Magisk Module ──────────────────────────────────────────────
+  build-magisk:
+    runs-on: ubuntu-latest
+    needs: build-core
+    if: ${{ !cancelled() }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download Linux aarch64 binaries
+        uses: actions/download-artifact@v5
+        with:
+          name: easytier-linux-aarch64
+          path: ./downloaded-binaries/
+
+      - name: Prepare binaries
+        run: |
+          mkdir -p ./easytier-contrib/easytier-magisk/
+          cp ./downloaded-binaries/easytier-core ./easytier-contrib/easytier-magisk/
+          cp ./downloaded-binaries/easytier-cli ./easytier-contrib/easytier-magisk/
+          cp ./downloaded-binaries/easytier-web ./easytier-contrib/easytier-magisk/
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: Easytier-Magisk
+          path: |
+            ./easytier-contrib/easytier-magisk
+            !./easytier-contrib/easytier-magisk/build.sh
+            !./easytier-contrib/easytier-magisk/magisk_update.json
+          if-no-files-found: error
+
+  # ── Desktop GUI ─────────────────────────────────────────────────
+  build-gui:
+    needs: build-web
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - TARGET: x86_64-unknown-linux-musl
+            OS: ubuntu-24.04
+            GUI_TARGET: x86_64-unknown-linux-gnu
+            ARTIFACT_NAME: linux-x86_64
+          - TARGET: aarch64-unknown-linux-musl
+            OS: ubuntu-24.04-arm
+            GUI_TARGET: aarch64-unknown-linux-gnu
+            ARTIFACT_NAME: linux-aarch64
+          - TARGET: x86_64-apple-darwin
+            OS: macos-latest
+            GUI_TARGET: x86_64-apple-darwin
+            ARTIFACT_NAME: macos-x86_64
+          - TARGET: aarch64-apple-darwin
+            OS: macos-latest
+            GUI_TARGET: aarch64-apple-darwin
+            ARTIFACT_NAME: macos-aarch64
+          - TARGET: x86_64-pc-windows-msvc
+            OS: windows-latest
+            GUI_TARGET: x86_64-pc-windows-msvc
+            ARTIFACT_NAME: windows-x86_64
+          - TARGET: i686-pc-windows-msvc
+            OS: windows-latest
+            GUI_TARGET: i686-pc-windows-msvc
+            ARTIFACT_NAME: windows-i686
+          - TARGET: aarch64-pc-windows-msvc
+            OS: windows-11-arm
+            GUI_TARGET: aarch64-pc-windows-msvc
+            ARTIFACT_NAME: windows-arm64
+    runs-on: ${{ matrix.OS }}
+    env:
+      TARGET: ${{ matrix.TARGET }}
+      OS: ${{ matrix.OS }}
+      GUI_TARGET: ${{ matrix.GUI_TARGET }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Prepare build environment
+        uses: ./.github/actions/prepare-build
+        with:
+          target: ${{ matrix.TARGET }}
+          gui: true
+          pnpm: true
+          pnpm-build-filter: ''
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: ""
+          shared-key: "gui-registry"
+          cache-targets: "false"
+
+      - name: Copy Windows DLLs
+        if: contains(matrix.GUI_TARGET, 'windows')
+        run: |
+          case $TARGET in
+            x86_64*)  ARCH_DIR=x86_64 ;;
+            i686*)    ARCH_DIR=i686 ;;
+            aarch64*) ARCH_DIR=arm64 ;;
+          esac
+          if [[ -n "$ARCH_DIR" ]]; then
+            find "./easytier/third_party/${ARCH_DIR}" -maxdepth 1 -type f \( -name "*.dll" -o -name "*.sys" \) -exec cp {} ./easytier-gui/src-tauri/ \;
+          fi
+
+      - name: Build GUI
+        uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: ./easytier-gui
+          args: --verbose --target ${{ matrix.GUI_TARGET }}
+
+      - name: Collect artifact
+        run: |
+          mkdir -p ./artifacts/objects/
+
+          if [[ $GUI_TARGET =~ windows ]]; then
+            mv ./target/$GUI_TARGET/release/bundle/nsis/*.exe ./artifacts/objects/
+          elif [[ $GUI_TARGET =~ darwin ]]; then
+            mv ./target/$GUI_TARGET/release/bundle/dmg/*.dmg ./artifacts/objects/
+          elif [[ $GUI_TARGET =~ linux ]]; then
+            mv ./target/$GUI_TARGET/release/bundle/deb/*.deb ./artifacts/objects/
+            mv ./target/$GUI_TARGET/release/bundle/rpm/*.rpm ./artifacts/objects/
+            mv ./target/$GUI_TARGET/release/bundle/appimage/*.AppImage ./artifacts/objects/
+          fi
+
+          mv ./artifacts/objects/* ./artifacts/
+          rm -rf ./artifacts/objects/
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: easytier-gui-${{ matrix.ARTIFACT_NAME }}
+          path: ./artifacts/*
+
+  # ── Android APK ─────────────────────────────────────────────────
+  build-mobile:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - TARGET: aarch64-linux-android
+            ARCH: aarch64
+          - TARGET: armv7-linux-androideabi
+            ARCH: armv7
+          - TARGET: i686-linux-android
+            ARCH: i686
+          - TARGET: x86_64-linux-android
+            ARCH: x86_64
+    runs-on: ubuntu-latest
+    env:
+      TARGET: ${{ matrix.TARGET }}
+      ARCH: ${{ matrix.ARCH }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'oracle'
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: '12.0'
+          packages: 'build-tools;34.0.0 ndk;26.0.10792818 platform-tools platforms;android-34 '
+
+      - name: Setup Android Environment
+        run: |
+          echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
+          echo "$ANDROID_HOME/ndk/26.0.10792818/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
+          echo "NDK_HOME=$ANDROID_HOME/ndk/26.0.10792818/" >> $GITHUB_ENV
+
+      - name: Prepare build environment
+        uses: ./.github/actions/prepare-build
+        with:
+          target: ${{ matrix.TARGET }}
+          gui: false
+          pnpm: true
+          pnpm-build-filter: ''
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: ""
+          shared-key: "gui-registry"
+          cache-targets: "false"
+
+      - name: Build Android APK
+        run: |
+          cd easytier-gui
+          pnpm tauri android build --apk --target "$ARCH" --split-per-abi
+
+      - name: Collect artifact
+        run: |
+          mkdir -p ./artifacts/
+          mv easytier-gui/src-tauri/gen/android/app/build/outputs/apk/*/release/*.apk ./artifacts/
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: easytier-mobile-android-${{ matrix.ARCH }}
+          path: ./artifacts/*
+
+  # ── GitHub Release ──────────────────────────────────────────────
+  release:
+    runs-on: ubuntu-latest
+    needs: [build-core, build-gui, build-mobile, build-magisk]
+    if: ${{ !cancelled() }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: all_artifacts
+
+      - name: Zip and publish release
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/zipped_assets"
+
+          for dir in all_artifacts/*/; do
+            name="${dir%/}"
+            name="${name#all_artifacts/}"
+            case "$name" in
+              Easytier-Magisk)
+                (cd "all_artifacts/$name" && zip -r "$RUNNER_TEMP/zipped_assets/${name}-${VERSION}.zip" .)
+                ;;
+              easytier-gui-*|easytier-mobile-android-*)
+                find "all_artifacts/$name" -type f -exec mv {} "$RUNNER_TEMP/zipped_assets/" \;
+                ;;
+              easytier-*)
+                zip -r "$RUNNER_TEMP/zipped_assets/${name}-${VERSION}.zip" "all_artifacts/$name"
+                ;;
+            esac
+          done
+
+          mkdir -p ./zipped_assets
+          mv "$RUNNER_TEMP/zipped_assets/"* ./zipped_assets/
+          echo "=== Release assets ==="
+          ls -l ./zipped_assets/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          draft: true
+          files: |
+            ./zipped_assets/*
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: ${{ github.ref_name }}

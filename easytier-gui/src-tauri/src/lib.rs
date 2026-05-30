@@ -4,6 +4,7 @@
 mod elevate;
 
 use anyhow::Context;
+use bytes::Bytes;
 use easytier::proto::api::manage::{
     CollectNetworkInfoResponse, ValidateConfigResponse, WebClientService,
     WebClientServiceClientFactory,
@@ -28,15 +29,14 @@ use easytier::{
     tunnel::tcp::TcpTunnelListener,
     utils::panic::setup_panic_handler,
 };
-use std::ops::Deref;
-use std::sync::Arc;
+use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
-use http_body_util::{BodyExt, Full};
-use bytes::Bytes;
+use std::ops::Deref;
+use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, RwLock, RwLockReadGuard};
 use uuid::Uuid;
@@ -534,13 +534,16 @@ async fn is_web_client_connected() -> Result<bool, String> {
 
 #[tauri::command]
 async fn http_get(url: String, proxy: Option<String>) -> Result<String, String> {
-    let mut builder = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(3));
+    let mut builder = reqwest::Client::builder().timeout(std::time::Duration::from_secs(3));
     if let Some(ref p) = proxy {
-        builder = builder.proxy(reqwest::Proxy::all(p).map_err(|e| format!("Invalid proxy: {}", e))?);
+        builder =
+            builder.proxy(reqwest::Proxy::all(p).map_err(|e| format!("Invalid proxy: {}", e))?);
     }
-    let client = builder.build().map_err(|e| format!("Failed to create client: {}", e))?;
-    client.get(&url)
+    let client = builder
+        .build()
+        .map_err(|e| format!("Failed to create client: {}", e))?;
+    client
+        .get(&url)
         .send()
         .await
         .map_err(|e| format!("HTTP request failed: {}", e))?
@@ -551,13 +554,16 @@ async fn http_get(url: String, proxy: Option<String>) -> Result<String, String> 
 
 #[tauri::command]
 async fn http_post(url: String, proxy: Option<String>) -> Result<String, String> {
-    let mut builder = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(3));
+    let mut builder = reqwest::Client::builder().timeout(std::time::Duration::from_secs(3));
     if let Some(ref p) = proxy {
-        builder = builder.proxy(reqwest::Proxy::all(p).map_err(|e| format!("Invalid proxy: {}", e))?);
+        builder =
+            builder.proxy(reqwest::Proxy::all(p).map_err(|e| format!("Invalid proxy: {}", e))?);
     }
-    let client = builder.build().map_err(|e| format!("Failed to create client: {}", e))?;
-    client.post(&url)
+    let client = builder
+        .build()
+        .map_err(|e| format!("Failed to create client: {}", e))?;
+    client
+        .post(&url)
         .send()
         .await
         .map_err(|e| format!("HTTP request failed: {}", e))?
@@ -581,7 +587,7 @@ async fn tcp_ping(host: String, port: u16) -> Result<String, String> {
             Ok(format!("OK {}ms", ms))
         }
         Ok(Err(e)) => Err(format!("TCP connect failed: {}", e)),
-        Err(_) => Err(format!("TCP connect timeout (5s)")),
+        Err(_) => Err("TCP connect timeout (5s)".to_string()),
     }
 }
 
@@ -590,6 +596,7 @@ async fn tcp_ping(host: String, port: u16) -> Result<String, String> {
 // ============================================================
 
 struct ProxyHandle {
+    #[allow(dead_code)]
     port: u16,
     shutdown_tx: tokio::sync::oneshot::Sender<()>,
     shared: Arc<SharedState>,
@@ -597,6 +604,7 @@ struct ProxyHandle {
 
 struct SharedState {
     last_path: std::sync::Mutex<String>,
+    #[allow(dead_code)]
     last_path_type: std::sync::Mutex<String>, // "tunnel" or "lan"
 }
 
@@ -617,9 +625,12 @@ fn build_proxy_client(socks5_proxy: &Option<String>) -> Result<reqwest::Client, 
         .timeout(std::time::Duration::from_secs(3))
         .redirect(reqwest::redirect::Policy::none());
     if let Some(p) = socks5_proxy {
-        builder = builder.proxy(reqwest::Proxy::all(p).map_err(|e| format!("Invalid proxy: {}", e))?);
+        builder =
+            builder.proxy(reqwest::Proxy::all(p).map_err(|e| format!("Invalid proxy: {}", e))?);
     }
-    builder.build().map_err(|e| format!("Failed to create proxy client: {}", e))
+    builder
+        .build()
+        .map_err(|e| format!("Failed to create proxy client: {}", e))
 }
 
 async fn luci_login(
@@ -631,10 +642,7 @@ async fn luci_login(
     let login_url = format!("http://{}/cgi-bin/luci/", router_ip);
     let resp = client
         .post(&login_url)
-        .form(&[
-            ("luci_username", username),
-            ("luci_password", password),
-        ])
+        .form(&[("luci_username", username), ("luci_password", password)])
         .send()
         .await
         .map_err(|e| format!("Login request failed: {}", e))?;
@@ -651,15 +659,22 @@ async fn luci_login(
         return Ok(found_cookie);
     }
     // Collect first 3 cookies for debug
-    let debug_cookies: Vec<_> = resp.headers().get_all("set-cookie").iter()
+    let debug_cookies: Vec<_> = resp
+        .headers()
+        .get_all("set-cookie")
+        .iter()
         .filter_map(|c| c.to_str().ok())
         .take(3)
         .collect();
-    Err(format!("No sysauth cookie in login response (HTTP {status}, cookies: {:?})", debug_cookies))
+    Err(format!(
+        "No sysauth cookie in login response (HTTP {status}, cookies: {:?})",
+        debug_cookies
+    ))
 }
 
 fn is_html(resp: &reqwest::Response) -> bool {
-    resp.headers().get("content-type")
+    resp.headers()
+        .get("content-type")
         .and_then(|v| v.to_str().ok())
         .map(|ct| ct.contains("text/html"))
         .unwrap_or(false)
@@ -669,23 +684,31 @@ async fn proxy_request(
     req: Request<Incoming>,
     ctx: &Arc<ProxyCtx>,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
-    let path = req.uri().path_and_query()
+    let path = req
+        .uri()
+        .path_and_query()
         .map(|pq| pq.as_str())
         .unwrap_or("/")
         .to_string();
     let target_url = format!("http://{}{}", ctx.router_ip, path);
-    let method: reqwest::Method = req.method().clone().try_into().unwrap_or(reqwest::Method::GET);
+    let method = req.method().clone();
 
     let cookie = ctx.cookie.lock().await.clone();
-    let mut proxy_req = ctx.client.request(method, &target_url)
+    let mut proxy_req = ctx
+        .client
+        .request(method, &target_url)
         .header("Cookie", &cookie);
 
     for (name, value) in req.headers() {
         let n = name.as_str().to_lowercase();
-        if n != "host" && n != "cookie" && n != "content-length" && n != "origin" && n != "referer" {
-            if let Ok(v) = value.to_str() {
-                proxy_req = proxy_req.header(name.as_str(), v);
-            }
+        if n != "host"
+            && n != "cookie"
+            && n != "content-length"
+            && n != "origin"
+            && n != "referer"
+            && let Ok(v) = value.to_str()
+        {
+            proxy_req = proxy_req.header(name.as_str(), v);
         }
     }
 
@@ -710,7 +733,9 @@ async fn proxy_request(
 
     // If session expired (redirect to login), re-login and retry once
     let is_login_redirect = resp.status() == reqwest::StatusCode::FOUND
-        && resp.headers().get("location")
+        && resp
+            .headers()
+            .get("location")
             .and_then(|v| v.to_str().ok())
             .map(|loc| loc.contains("login"))
             .unwrap_or(false);
@@ -723,10 +748,14 @@ async fn proxy_request(
                 if !body_bytes.is_empty() {
                     return build_error_response("Session expired during POST, please retry");
                 }
-                let retry_req = ctx.client.request(
-                    reqwest::Method::from_bytes(parts.method.as_str().as_bytes()).unwrap_or(reqwest::Method::GET),
-                    &target_url,
-                ).header("Cookie", &new_cookie);
+                let retry_req = ctx
+                    .client
+                    .request(
+                        reqwest::Method::from_bytes(parts.method.as_str().as_bytes())
+                            .unwrap_or(reqwest::Method::GET),
+                        &target_url,
+                    )
+                    .header("Cookie", &new_cookie);
                 match retry_req.send().await {
                     Ok(r) => {
                         if is_html(&r) {
@@ -744,15 +773,21 @@ async fn proxy_request(
     build_proxy_response(resp).await
 }
 
-async fn build_proxy_response(resp: reqwest::Response) -> Result<Response<Full<Bytes>>, hyper::Error> {
-    let status = StatusCode::from_u16(resp.status().as_u16())
-        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+async fn build_proxy_response(
+    resp: reqwest::Response,
+) -> Result<Response<Full<Bytes>>, hyper::Error> {
+    let status =
+        StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     // Collect headers before consuming body
-    let headers: Vec<_> = resp.headers().iter()
+    let headers: Vec<_> = resp
+        .headers()
+        .iter()
         .filter(|(name, _)| {
             let n = name.as_str().to_lowercase();
-            n != "transfer-encoding" && n != "content-encoding"
-                && n != "x-frame-options" && n != "content-security-policy"
+            n != "transfer-encoding"
+                && n != "content-encoding"
+                && n != "x-frame-options"
+                && n != "content-security-policy"
         })
         .map(|(name, value)| (name.clone(), value.clone()))
         .collect();
@@ -767,10 +802,12 @@ async fn build_proxy_response(resp: reqwest::Response) -> Result<Response<Full<B
 }
 
 fn build_error_response(msg: &str) -> Result<Response<Full<Bytes>>, hyper::Error> {
-    let mut builder = Response::builder()
+    let builder = Response::builder()
         .status(StatusCode::BAD_GATEWAY)
         .header("content-type", "text/plain; charset=utf-8");
-    Ok(builder.body(Full::new(Bytes::from(msg.to_string()))).unwrap())
+    Ok(builder
+        .body(Full::new(Bytes::from(msg.to_string())))
+        .unwrap())
 }
 
 async fn run_proxy(
@@ -821,18 +858,30 @@ async fn luci_proxy_start(
     let client = build_proxy_client(&socks5_proxy)?;
     let cookie = luci_login(&client, &router_ip, &username, &password).await?;
 
-    let listener = TcpListener::bind("127.0.0.1:0").await
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
         .map_err(|e| format!("Failed to bind local port: {}", e))?;
     let port = listener.local_addr().unwrap().port();
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let shared = Arc::new(SharedState {
         last_path: std::sync::Mutex::new("/cgi-bin/luci/admin/".to_string()),
-        last_path_type: std::sync::Mutex::new(if socks5_proxy.is_some() { "tunnel" } else { "lan" }.to_string()),
+        last_path_type: std::sync::Mutex::new(
+            if socks5_proxy.is_some() {
+                "tunnel"
+            } else {
+                "lan"
+            }
+            .to_string(),
+        ),
     });
 
     stop_proxy_inner();
-    *PROXY.lock().unwrap() = Some(ProxyHandle { port, shutdown_tx, shared: shared.clone() });
+    *PROXY.lock().unwrap() = Some(ProxyHandle {
+        port,
+        shutdown_tx,
+        shared: shared.clone(),
+    });
 
     let ctx = Arc::new(ProxyCtx {
         client,
