@@ -24,6 +24,8 @@ class MainActivity : TauriActivity() {
         super.onWebViewCreate(webView)
         webView.isLongClickable = true
         webView.addJavascriptInterface(PasteBridge(webView), "_easytier_paste")
+        webView.settings.setSupportZoom(false)
+        webView.settings.builtInZoomControls = false
     }
 
     private inner class PasteBridge(private val webView: WebView) {
