@@ -82,6 +82,7 @@ android {
             }
         }
         getByName("release") {
+            // Allow HTTP cleartext in release — needed for LAN router/PC agent access
             manifestPlaceholders["usesCleartextTraffic"] = "true"
             isMinifyEnabled = true
             proguardFiles(

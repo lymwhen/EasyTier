@@ -147,6 +147,8 @@ export async function isWebClientConnected() {
   return await invoke<boolean>('is_web_client_connected')
 }
 
+// ── Custom commands for WOL/LuCI (not from upstream) ──
+
 export async function httpGet(url: string, proxy?: string) {
   return await invoke<string>('http_get', { url, proxy: proxy || null })
 }

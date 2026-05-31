@@ -3,6 +3,8 @@ packages:
   - 'easytier-web/frontend-lib'
   - 'easytier-gui'
   - 'tauri-plugin-vpnservice'
+# Allow native builds for packages that ship platform-specific binaries;
+# required after pnpm lockfile differs from upstream (--no-frozen-lockfile)
 allowBuilds:
   esbuild: true
   unrs-resolver: true

@@ -9,6 +9,7 @@
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:theme="@style/Theme.easytier_gui"
+        <!-- Allow HTTP cleartext: needed for LAN router CGI and PC agent communication -->
         android:usesCleartextTraffic="true">
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"

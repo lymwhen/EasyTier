@@ -74,3 +74,15 @@ Router first (hostname matches `/route|wrt|路由|home|家/i`), then by IP. Serv
 - Dialog buttons are custom `<button>` not PrimeVue `<Button>`
 - Network cards: P2P/RELAY tags are at **bottom-right** (before tcp/nat chips)
 - Text selection context menu on Android — still unresolved
+
+## Commit
+
+- **格式**：`type: description`，type = `feat` / `fix` / `docs` / `chore` / `refactor`
+- **禁止**以 `@` 开头，禁止在 commit message 两端使用 `@'...'@` 包裹
+- **结尾**必须包含 `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>`
+- **推送前**检查 `git log --oneline -1` 确认格式正确
+
+## Upstream Tracking
+
+- **一切对上游的改动必须补充到** `docs/project.md` 的「相对上游变更清单」表格中
+- 每次新增/修改对上游文件的变更时，同步更新该表格：文件路径、变更说明、必要性（必要/Fork适配/附带）

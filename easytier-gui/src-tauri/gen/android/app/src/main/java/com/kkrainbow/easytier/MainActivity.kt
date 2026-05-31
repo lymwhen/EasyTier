@@ -24,6 +24,7 @@ class MainActivity : TauriActivity() {
         super.onWebViewCreate(webView)
         webView.isLongClickable = true
         webView.addJavascriptInterface(PasteBridge(webView), "_easytier_paste")
+        // Disable pinch-to-zoom (two-finger gesture) on Android WebView
         webView.settings.setSupportZoom(false)
         webView.settings.builtInZoomControls = false
     }

@@ -10,6 +10,77 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 4. **配置驱动**：WOL 设备通过 TOML 配置文件管理（独立于网络 TOML），不提供图形化添加。
 5. **Material Design 风格**：参考 WOLPlus 的卡片设计。
 
+## 相对上游变更清单
+
+> 以下为 `HEAD` 相对 `upstream/main` 的全部文件级变更及必要性说明。
+> 每次对上游文件进行新增/修改后，**必须**同步更新此表格。
+> 分支 `main` 的 merge base: `73bea01`，上游最新: `upstream/main`。
+
+### 核心功能变更（必要）
+
+| 文件 | 变更 | 必要性 |
+|------|------|--------|
+| `easytier-gui/src/pages/home.vue` | **[新增]** WOL/网络/路由器/设置四个 Tab 主界面（~1500行） | 必要 — 项目核心 |
+| `easytier-gui/src/App.vue` | 启动 Splash 遮罩 + 后端就绪检测 + 自动跳转 `/home` | 必要 — 初始化流程 |
+| `easytier-gui/src/composables/backend.ts` | 新增 `httpGet`/`httpPost`/`tcpPing`/`luciProxy*` IPC 封装 | 必要 — 前端 HTTP/代理调用 |
+| `easytier-gui/src-tauri/src/lib.rs` | 新增 `http_get`/`http_post`/`tcp_ping` 命令 + LuCI HTTP 反向代理完整实现（~360行） | 必要 — 后端 HTTP/代理支持 |
+| `easytier-gui/src-tauri/Cargo.toml` | 新增 `reqwest(socks)`/`hyper`/`http-body-util`/`hyper-util`/`bytes` 依赖 | 必要 — Rust 侧 HTTP 客户端 + 代理服务器 |
+| `easytier-gui/index.html` | viewport 添加 `maximum-scale=1.0, user-scalable=no` | 必要 — 禁用 Android 双指缩放 |
+
+### Android 原生层（必要）
+
+| 文件 | 变更 | 必要性 |
+|------|------|--------|
+| `MainActivity.kt` | 新增剪贴板 Bridge（`PasteBridge`）+ 禁用双指缩放 | 必要 — Android 剪贴板/缩放 |
+| `AndroidManifest.xml` | `usesCleartextTraffic="true"` 硬编码 | 必要 — 局域网 HTTP 请求 |
+| `app/build.gradle.kts` | release 构建添加 `manifestPlaceholders["usesCleartextTraffic"]="true"` | 必要 — 配合明文 HTTP |
+| `themes.xml` / `values-night/themes.xml` | 状态栏/导航栏颜色（浅色 `#f5f5f5` / 深色 `#121212`） | 必要 — UI 适配 |
+| 所有 `mipmap-*` 图标 | 替换为 EasyTier 品牌图标 | 必要 — 品牌 |
+| `ic_launcher_foreground.xml` | 矢量图标改为 EasyTier 三层 V 形 | 必要 — 品牌 |
+| `ic_launcher_background.xml` | 背景色改为白色，移除网格线 | 必要 — 品牌 |
+
+### 构建/配置（必要，含副作用）
+
+| 文件 | 变更 | 必要性 |
+|------|------|--------|
+| `easytier-gui/package.json` | build script 移除 `vue-tsc --noEmit`（跳过 TS 类型检查加速构建） | 必要 — 构建加速 |
+| `pnpm-workspace.yaml` | 添加 `allowBuilds: esbuild, unrs-resolver, vue-demi` | 必要 — pnpm 原生构建许可 |
+| `pnpm-lock.yaml` | 依赖锁文件更新（因新增依赖变更） | 必要 — 附带产物 |
+| `Cargo.lock` | Rust 依赖锁更新（新增 reqwest/hyper + kcp-sys rev） | 必要 — 附带产物 |
+| `easytier-gui/src/auto-imports.d.ts` | **[自动生成]** unplugin-auto-import 更新 | 附带 — 新增 IPC 函数自动导入声明 |
+| `easytier-gui/src/typed-router.d.ts` | **[自动生成]** 新增 `/home` 路由声明 | 附带 — 新增页面自动路由注册 |
+| `.gitignore` | 新增 1 行忽略规则 | 必要 — 忽略本地构建产物 |
+
+### CI/CD（Fork 适配）
+
+| 文件 | 变更 | 必要性 |
+|------|------|--------|
+| `.github/workflows/release-tag.yml` | **[新增]** 全平台构建 + GitHub Release 自动发布（455行） | 必要 — CI 全平台构建 |
+| `.github/actions/prepare-pnpm/action.yml` | 添加 `--no-frozen-lockfile`（因 lockfile 与上游不一致） | Fork 适配 |
+| `.github/workflows/docker.yml` | Docker 镜像标签通用化为 `${{ github.repository_owner }}` | Fork 适配 |
+
+### 文档/资源
+
+| 文件 | 变更 | 必要性 |
+|------|------|--------|
+| `CLAUDE.md` | **[新增]** Claude Code 项目指令 | 必要 — 开发规范 |
+| `docs/project.md` | **[新增]** 结构化项目文档 | 必要 — 文档 |
+| `docs/CI全平台构建.md` | **[新增]** CI 构建文档 | 必要 — 文档 |
+| `docs/本地Android构建.md` | **[新增]** 本地 Android 构建文档 | 必要 — 文档 |
+| `README.md` | 重写为中文 README + 功能清单表 + 截图 | 必要 — 文档 |
+| `assets/image-*.png` | **[新增]** 4 张界面截图 | 必要 — 文档配图 |
+
+### 已同步至上游（无差异）
+
+以下文件此前与上游存在差异，已在 `16b7d7e` 合并 `upstream/main` 后归零：
+
+| 文件 | 说明 |
+|------|------|
+| `easytier/Cargo.toml` | kcp-sys rev 跟随上游回退至 `d7427c22`（上游在 `bfa3383` 主动 revert） |
+| `.github/workflows/Dockerfile` | HEALTHCHECK 跟随上游恢复 |
+| `easytier-gui/.../BuildTask.kt` | 文件末尾空行移除，与上游一致 |
+| `easytier-contrib/easytier-ohrs/Cargo.lock` | kcp-sys rev 跟随上游同步 |
+
 ## 功能清单（相对上游新增/优化）
 
 > 以下梳理自 `a72a593`（首个 WOL 功能提交）至 `HEAD` 的所有变更，覆盖功能增强、UI 优化、CI 建设、平台适配等维度。

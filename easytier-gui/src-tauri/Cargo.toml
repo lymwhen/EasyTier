@@ -21,6 +21,7 @@ tauri = { version = "2.7.0", features = [
     "devtools",
 ] }
 
+# HTTP client with SOCKS5 proxy support — used by WOL/LuCI HTTP requests
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "socks"] }
 
 # LuCI reverse proxy
