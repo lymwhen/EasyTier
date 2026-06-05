@@ -46,6 +46,8 @@
     "os:allow-arch",
     "os:allow-hostname",
     "os:allow-platform",
-    "os:allow-locale"
+    "os:allow-locale",
+    "opener:allow-open-url",
+    "opener:default"
   ]
 }

@@ -1,7 +1,5 @@
 package com.kkrainbow.easytier
 
-import android.content.ClipboardManager
-import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
@@ -9,8 +7,6 @@ import android.os.Handler
 import android.os.Looper
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 
 class MainActivity : TauriActivity() {
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -23,35 +19,28 @@ class MainActivity : TauriActivity() {
     override fun onWebViewCreate(webView: WebView) {
         super.onWebViewCreate(webView)
         webView.isLongClickable = true
-        webView.addJavascriptInterface(PasteBridge(webView), "_easytier_paste")
+        webView.addJavascriptInterface(ThemeBridge(), "_easytier_theme")
         // Disable pinch-to-zoom (two-finger gesture) on Android WebView
         webView.settings.setSupportZoom(false)
         webView.settings.builtInZoomControls = false
     }
 
-    private inner class PasteBridge(private val webView: WebView) {
+    private inner class ThemeBridge {
         @JavascriptInterface
-        fun readClipboard(): String {
-            val latch = CountDownLatch(1)
-            var text = ""
+        @Suppress("DEPRECATION")
+        fun setStatusBarStyle(dark: Boolean) {
             mainHandler.post {
-                val cm = webView.context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                text = cm?.primaryClip?.getItemAt(0)?.text?.toString() ?: ""
-                latch.countDown()
+                val window = window ?: return@post
+                if (dark) {
+                    window.statusBarColor = 0xFF121212.toInt()
+                    window.navigationBarColor = 0xFF121212.toInt()
+                    window.decorView.systemUiVisibility = 0
+                } else {
+                    window.statusBarColor = 0xFFF5F5F5.toInt()
+                    window.navigationBarColor = 0xFFF5F5F5.toInt()
+                    window.decorView.systemUiVisibility = android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+                }
             }
-            latch.await(500, TimeUnit.MILLISECONDS)
-            return text
-        }
-
-        @JavascriptInterface
-        fun writeClipboard(text: String) {
-            val latch = CountDownLatch(1)
-            mainHandler.post {
-                val cm = webView.context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                cm?.setPrimaryClip(android.content.ClipData.newPlainText("easytier_config", text))
-                latch.countDown()
-            }
-            latch.await(500, TimeUnit.MILLISECONDS)
         }
     }
 
@@ -64,4 +53,3 @@ class MainActivity : TauriActivity() {
         }
     }
 }
-

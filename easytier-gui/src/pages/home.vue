@@ -6,6 +6,8 @@ import pkg from '~/../package.json'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import Textarea from 'primevue/textarea'
+import { openUrl } from '@tauri-apps/plugin-opener'
+import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager'
 import type { NetworkTypes } from 'easytier-frontend-lib'
 
 const router = useRouter()
@@ -100,6 +102,26 @@ const T: Record<string, [string, string]> = {
   importConfirmMsg: ['This will overwrite ALL PC, router, and network configs. Continue?', '本次操作将会覆盖电脑、路由器和组网所有的配置，确定继续？'],
   importSuccess: ['Config imported', '配置已导入'],
   importFailed: ['Invalid config format', '配置格式无效'],
+  help: ['Help', '帮助'],
+  helpDesc: ['Usage guide for all modules', '各模块使用说明'],
+  helpWolTitle: ['WOL — PC Wake-on-LAN', '电脑 — 网络唤醒'],
+  helpWolDesc: ['Remotely wake, monitor, and shut down PCs. Works via router CGI (luci-app-wolplus) for wake-up and PC agent (Go, port 32249) for status/shutdown. Supports both direct LAN and EasyTier tunnel paths.', '远程唤醒、监控和关闭电脑。通过路由器 CGI（luci-app-wolplus）发送魔术包唤醒，通过 PC 端 agent（Go，32249 端口）检测在线状态和执行关机。支持局域网直连和 EasyTier 隧道两种路径。'],
+  helpWolDep: ['Dependencies: luci-app-wolplus (install on OpenWrt router) + wol-agent (run on each PC)', '依赖：luci-app-wolplus（安装到 OpenWrt 路由器）+ wol-agent（每台电脑上运行）'],
+  helpWolLink: ['Download Dependencies', '下载依赖组件'],
+  helpNetTitle: ['EasyTier — Virtual Networking', '组网 — EasyTier 虚拟组网'],
+  helpNetDesc: ['Connect your phone, PC, and router into a virtual LAN — access them as if they\'re on the same local network, no public IP required.', '将手机、电脑、路由器组成虚拟局域网，无论身在何处都能像在同一网络下互相访问。无需公网 IP，无需复杂配置。'],
+  helpNetFeat: ['Auto P2P direct connection — low latency, high speed\nAuto relay fallback when P2P is unavailable — always connected\nReal-time latency, packet loss, and bandwidth charts\nMulti-network profile management with one-tap switching\nColor-coded connection quality at a glance', '自动 P2P 直连，延迟低速度快\n无法直连时自动中转，确保稳定连接\n实时显示延迟、丢包率和网速图表\n支持多网络配置，一键切换\n颜色标识连接质量，一目了然'],
+  helpLuciTitle: ['LuCI — Router Management', 'LuCI — 路由器管理'],
+  helpLuciDesc: ['Manage your OpenWrt router directly in the app — no browser needed. Automatic login with full LuCI admin panel access.', '在 App 内直接管理 OpenWrt 路由器，无需打开浏览器。自动完成登录，提供完整 LuCI 后台面板。'],
+  helpLuciFeat: ['Auto login — configure once, no repeated password entry\nMulti-router support — add and switch between routers anytime\nOver EasyTier tunnel — manage home router remotely\nBrowsing position memory — restores last page after refresh', '自动登录，首次配置后无需每次输密码\n支持多台路由器，随时切换管理\n通过 EasyTier 隧道也能远程管理家里路由器\n刷新后自动恢复上次浏览位置'],
+  helpBackupTitle: ['Import & Export', '配置导入导出'],
+  helpBackupDesc: ['In Settings > Configuration Info, you can export all WOL devices, network profiles, and router configs to the clipboard with one tap, or import from clipboard to restore. Perfect for switching phones or sharing configs — no need to set up everything again.', '在设置页的「配置信息」中，可将 WOL 设备、网络配置、路由器配置一键导出到剪贴板保存，也可从剪贴板导入恢复。更换手机或分享给他人时无需重新配置。'],
+  helpCfgTitle: ['Config Example', '配置示例'],
+  amoled: ['AMOLED Black', 'AMOLED 纯黑模式'],
+  amoledDesc: ['Pure black background for AMOLED screens. Only active in dark mode.', 'AMOLED 屏幕纯黑色模式，仅在深色模式下生效。'],
+  close: ['Close', '关闭'],
+  copyCode: ['Copy', '复制'],
+  copiedCode: ['Copied', '已复制'],
 }
 function tt(key: string): string {
   const entry = T[key]
@@ -229,12 +251,12 @@ function saveWolConfig() { localStorage.setItem('wolDevicesToml', wolToml.value)
 // --- Dialog textarea helpers ---
 const wolTextareaRef = ref<any>(null)
 const netTextareaRef = ref<any>(null)
-function readClipboard(): string {
-  return (window as any)._easytier_paste?.readClipboard?.() || ''
+async function readClipboard(): Promise<string> {
+  try { return await readText() } catch { return '' }
 }
 
-function importFromClipboard(refName: 'wol' | 'net' | 'luci') {
-  const text = readClipboard()
+async function importFromClipboard(refName: 'wol' | 'net' | 'luci') {
+  const text = await readClipboard()
   if (!text) { showSnack('Clipboard is empty'); return }
   if (refName === 'wol') wolToml.value = text
   else if (refName === 'net') editingNetToml.value = text
@@ -647,6 +669,79 @@ function onLuciDocClick(e: MouseEvent) {
   if (!t.closest('.md-switch-menu') && !t.closest('.md-switch-btn')) showLuciMenu.value = false
 }
 
+// ==================== Help Dialog ====================
+const showHelpDlg = ref(false)
+const HELP_WOL_URL = 'https://github.com/lymwhen/luci-app-wolplus/releases'
+
+async function openHelpUrl(url: string) {
+  try {
+    await openUrl(url)
+  } catch {
+    window.open(url, '_system')
+  }
+}
+
+const HELP_CFG_WOL = `[[device]]
+name = "My PC"
+mac = "AA:BB:CC:DD:EE:FF"
+ip = "192.168.1.100"
+interface = "br-lan"
+router_ip = "192.168.1.1"
+agent_port = 32249`
+
+const HELP_CFG_NET = `[instance]
+instance_name = "my_home"
+easytier_cmd = "easytier-core"
+
+[network_identity]
+peer_hostname = "phone"
+
+[[peer]]
+uri = "tcp://192.168.1.1:11010"
+
+socks5_proxy = "socks5://0.0.0.0:32259"`
+
+const HELP_CFG_LUCI = `[[router]]
+name = "Home Router"
+ip = "192.168.1.1"
+username = "root"
+password = ""`
+
+const copiedIdx = ref(-1)
+async function copyHelpCfg(text: string, idx: number) {
+  try {
+    await writeText(text)
+    copiedIdx.value = idx
+    setTimeout(() => { copiedIdx.value = -1 }, 2000)
+  } catch {
+    /* ignore */
+  }
+}
+
+// ==================== AMOLED Mode ====================
+const amoledMode = ref(localStorage.getItem('amoledMode') === '1')
+
+watch(amoledMode, (v) => {
+  localStorage.setItem('amoledMode', v ? '1' : '0')
+  syncAmoledClass()
+})
+
+function syncAmoledClass() {
+  const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+  document.documentElement.classList.toggle('amoled', !!(amoledMode.value && isDark))
+}
+onMounted(syncAmoledClass)
+
+// Follow system dark mode changes for AMOLED + Android status bar
+if (typeof window !== 'undefined') {
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+    syncAmoledClass()
+    // Android status bar
+    const w = window as any
+    if (w._easytier_theme) w._easytier_theme.setStatusBarStyle(e.matches)
+  })
+}
+
 // ==================== One-Click Config (Export/Import) ====================
 const showImportDlg = ref(false)
 const showImportConfirm = ref(false)
@@ -668,7 +763,7 @@ async function doExport() {
     net: netTomls,
   }
   const text = JSON.stringify(data, null, 2)
-  ;(window as any)._easytier_paste?.writeClipboard?.(text)
+  try { await writeText(text) } catch { /* ignore */ }
   showSnack(tt('exportedToClipboard'))
 }
 
@@ -677,8 +772,8 @@ function openImportDlg() {
   showImportDlg.value = true
 }
 
-function doImportFromClipboard() {
-  const text = readClipboard()
+async function doImportFromClipboard() {
+  const text = await readClipboard()
   if (!text) { showSnack('Clipboard is empty'); return }
   importText.value = text
 }
@@ -1083,6 +1178,25 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
             <button class="md-settings-btn md-settings-btn-primary" @click.stop="openImportDlg">{{ tt('importLabel') }}</button>
           </div>
         </div>
+        <div class="md-card md-settings-card" @click="showHelpDlg = true">
+          <div class="md-row">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75l-.9.92C13.45 12.9 13 13.5 13 15h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H8c0-2.21 1.79-4 4-4s4 1.79 4 4c0 .88-.36 1.68-.93 2.25z"/></svg>
+            <div class="flex-1">
+              <div class="md-name">{{ tt('help') }}</div>
+              <div class="md-sub">{{ tt('helpDesc') }}</div>
+            </div>
+          </div>
+        </div>
+        <div class="md-card md-settings-card" @click="amoledMode = !amoledMode; localStorage.setItem('amoledMode', amoledMode ? '1' : '0')">
+          <div class="md-row">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-14.5v13c-3.04 0-5.5-2.91-5.5-6.5s2.46-6.5 5.5-6.5z"/></svg>
+            <div class="flex-1">
+              <div class="md-name">{{ tt('amoled') }}</div>
+              <div class="md-sub">{{ tt('amoledDesc') }}</div>
+            </div>
+            <span class="md-toggle" :class="{ 'md-toggle-on': amoledMode }" />
+          </div>
+        </div>
         <div class="md-card md-settings-card">
           <div class="md-row">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
@@ -1190,6 +1304,54 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
       </template>
     </Dialog>
 
+    <!-- Help Dialog -->
+    <Dialog v-model:visible="showHelpDlg" modal :header="tt('help')" :style="{ width: '90vw', maxWidth: '540px' }" class="md-dialog" :pt="{ header: { class: 'md-dialog-hdr' }, content: { class: 'md-dialog-content' }, footer: { class: 'md-dialog-ft' } }">
+      <!-- WOL -->
+      <div class="md-help-section">
+        <div class="md-help-title">{{ tt('helpWolTitle') }}</div>
+        <div class="md-help-desc">{{ tt('helpWolDesc') }}</div>
+        <div class="md-help-dep">{{ tt('helpWolDep') }}</div>
+        <a class="md-help-link" @click.prevent="openHelpUrl(HELP_WOL_URL)">{{ tt('helpWolLink') }}</a>
+        <div class="md-help-cfg-label">{{ tt('helpCfgTitle') }}</div>
+        <div class="md-help-cfg-wrap">
+          <pre class="md-help-code">{{ HELP_CFG_WOL }}</pre>
+          <button class="md-help-copy" @click="copyHelpCfg(HELP_CFG_WOL, 0)">{{ copiedIdx === 0 ? tt('copiedCode') : tt('copyCode') }}</button>
+        </div>
+      </div>
+      <!-- EasyTier -->
+      <div class="md-help-section">
+        <div class="md-help-title">{{ tt('helpNetTitle') }}</div>
+        <div class="md-help-desc">{{ tt('helpNetDesc') }}</div>
+        <div class="md-help-desc" style="white-space:pre-line;margin-bottom:8px">{{ tt('helpNetFeat') }}</div>
+        <div class="md-help-cfg-label">{{ tt('helpCfgTitle') }}</div>
+        <div class="md-help-cfg-wrap">
+          <pre class="md-help-code">{{ HELP_CFG_NET }}</pre>
+          <button class="md-help-copy" @click="copyHelpCfg(HELP_CFG_NET, 1)">{{ copiedIdx === 1 ? tt('copiedCode') : tt('copyCode') }}</button>
+        </div>
+      </div>
+      <!-- LuCI -->
+      <div class="md-help-section">
+        <div class="md-help-title">{{ tt('helpLuciTitle') }}</div>
+        <div class="md-help-desc">{{ tt('helpLuciDesc') }}</div>
+        <div class="md-help-desc" style="white-space:pre-line;margin-bottom:8px">{{ tt('helpLuciFeat') }}</div>
+        <div class="md-help-cfg-label">{{ tt('helpCfgTitle') }}</div>
+        <div class="md-help-cfg-wrap">
+          <pre class="md-help-code">{{ HELP_CFG_LUCI }}</pre>
+          <button class="md-help-copy" @click="copyHelpCfg(HELP_CFG_LUCI, 2)">{{ copiedIdx === 2 ? tt('copiedCode') : tt('copyCode') }}</button>
+        </div>
+      </div>
+      <!-- Import & Export -->
+      <div class="md-help-section">
+        <div class="md-help-title">{{ tt('helpBackupTitle') }}</div>
+        <div class="md-help-desc">{{ tt('helpBackupDesc') }}</div>
+      </div>
+      <template #footer>
+        <div class="md-dlg-ft" style="justify-content:flex-end">
+          <button class="md-dlg-btn" @click="showHelpDlg = false">{{ tt('close') }}</button>
+        </div>
+      </template>
+    </Dialog>
+
     <!-- Snackbar -->
     <div v-if="snackShow" class="md-snackbar">{{ snackMsg }}</div>
   </div>
@@ -1255,6 +1417,7 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
 .md-dlg-btn-del { color:#c62828; }
 @media (prefers-color-scheme: dark) {
   .md-dlg-btn:active { background:rgba(255,255,255,0.08); }
+  .md-dialog :deep(.p-dialog) { border: 1px solid rgba(255,255,255,0.08) !important; }
 }
 </style>
 
@@ -1470,4 +1633,39 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
   .md-settings-btn-primary { background:#1a3050; color:#64b5f6; }
   .md-settings-btn-primary:active { background:#234a7e; }
 }
+
+/* Help dialog */
+.md-help-section { padding: 12px 0; }
+.md-help-section + .md-help-section { border-top: 1px solid var(--md-divider); }
+.md-help-title { font-size: 0.92rem; font-weight: 600; color: var(--md-text); margin-bottom: 4px; }
+.md-help-desc { font-size: 0.82rem; color: var(--md-secondary); line-height: 1.5; margin-bottom: 4px; }
+.md-help-dep { font-size: 0.78rem; color: var(--md-muted); line-height: 1.4; margin-bottom: 8px; }
+.md-help-link { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border: none; border-radius: 20px; font-size: 0.8rem; font-weight: 600; cursor: pointer; background: var(--md-primary); color: #fff; text-decoration: none; margin-bottom: 10px; }
+.md-help-link:active { opacity: 0.85; }
+.md-help-cfg-label { font-size: 0.75rem; font-weight: 600; color: var(--md-muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+.md-help-cfg-wrap { position: relative; }
+.md-help-code { font-size: 0.76rem; line-height: 1.55; padding: 10px 12px; margin: 0 0 4px; border-radius: 8px; background: #f0f0f0; color: var(--md-text); overflow-x: auto; white-space: pre; font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'SF Mono', 'Consolas', monospace; }
+@media (prefers-color-scheme: dark) {
+  .md-help-link { color: #fff; }
+  .md-help-link:active { opacity: 0.85; }
+  .md-help-code { background: #1e1e1e; }
+}
+.md-help-copy { position: absolute; top: 6px; right: 8px; padding: 3px 10px; border: none; border-radius: 4px; font-size: 0.72rem; font-weight: 600; cursor: pointer; background: var(--md-secondary); color: #fff; opacity: 0.7; transition: opacity 0.15s; }
+.md-help-copy:hover { opacity: 1; }
+
+/* AMOLED pure black */
+.amoled {
+  --md-card: #000;
+  --md-border: #1e1e1e;
+  --md-divider: #141414;
+  --md-shadow: none;
+}
+.amoled .md-conn-on { background: #0d0d0d !important; }
+.amoled .md-settings-card { background: #000; }
+.amoled :deep(.p-dialog) { background: #000 !important; }
+.amoled :deep(.p-dialog-header) { background: transparent !important; }
+.amoled :deep(.p-dialog-content) { background: transparent !important; }
+.amoled :deep(.p-dialog-footer) { background: transparent !important; }
+.amoled .md-help-code { background: #0d0d0d; }
+
 </style>

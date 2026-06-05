@@ -24,14 +24,16 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 | `easytier-gui/src/App.vue` | 启动 Splash 遮罩 + 后端就绪检测 + 自动跳转 `/home` | 必要 — 初始化流程 |
 | `easytier-gui/src/composables/backend.ts` | 新增 `httpGet`/`httpPost`/`tcpPing`/`luciProxy*` IPC 封装 | 必要 — 前端 HTTP/代理调用 |
 | `easytier-gui/src-tauri/src/lib.rs` | 新增 `http_get`/`http_post`/`tcp_ping` 命令 + LuCI HTTP 反向代理完整实现（~360行） | 必要 — 后端 HTTP/代理支持 |
-| `easytier-gui/src-tauri/Cargo.toml` | 新增 `reqwest(socks)`/`hyper`/`http-body-util`/`hyper-util`/`bytes` 依赖 | 必要 — Rust 侧 HTTP 客户端 + 代理服务器 |
+| `easytier-gui/src-tauri/Cargo.toml` | 新增 `reqwest(socks)`/`hyper`/`http-body-util`/`hyper-util`/`bytes` + `tauri-plugin-opener`/`tauri-plugin-clipboard-manager` 依赖 | 必要 — Rust 侧 HTTP 客户端 + 代理服务器 + 跨平台剪贴板/浏览器 |
 | `easytier-gui/index.html` | viewport 添加 `maximum-scale=1.0, user-scalable=no` | 必要 — 禁用 Android 双指缩放 |
+| `easytier-gui/src-tauri/tauri.conf.json` | 插件权限配置：`shell.open` scope、clipboard-manager 权限 | 必要 — 跨平台浏览器打开 + 剪贴板 |
+| `easytier-gui/src-tauri/capabilities/migrated.json` | 新增 `shell:allow-open`、`clipboard-manager:allow-read`、`clipboard-manager:allow-write` 权限 | 必要 — 插件能力声明 |
 
 ### Android 原生层（必要）
 
 | 文件 | 变更 | 必要性 |
 |------|------|--------|
-| `MainActivity.kt` | 新增剪贴板 Bridge（`PasteBridge`）+ 禁用双指缩放 | 必要 — Android 剪贴板/缩放 |
+| `MainActivity.kt` | 新增主题 Bridge（`ThemeBridge`，动态切换状态栏颜色）+ 禁用双指缩放 + 移除旧 `PasteBridge`（剪贴板已迁移至 `tauri-plugin-clipboard-manager`） | 必要 — Android 主题/缩放/剪贴板 |
 | `AndroidManifest.xml` | `usesCleartextTraffic="true"` 硬编码 | 必要 — 局域网 HTTP 请求 |
 | `app/build.gradle.kts` | release 构建添加 `manifestPlaceholders["usesCleartextTraffic"]="true"` | 必要 — 配合明文 HTTP |
 | `themes.xml` / `values-night/themes.xml` | 状态栏/导航栏颜色（浅色 `#f5f5f5` / 深色 `#121212`） | 必要 — UI 适配 |
@@ -114,13 +116,16 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 <tr><td>会话过期自动重登（检测 302 重定向到 login），刷新保持当前 URL（<code>last_path</code> 仅追踪 <code>text/html</code> 响应，过滤 CSS/JS/API 资源请求）</td><td>全平台</td></tr>
 <tr><td>多路由器管理 — TOML 配置路由器列表，支持切换/新增/删除；删除当前路由器自动切换至剩余第一个</td><td>全平台</td></tr>
 <tr><td>路径持久化 — 刷新或路径模式切换（ET-LAN ↔ LAN）后，代理重启自动恢复上次浏览位置；v-show 切回 Tab 不重载 iframe</td><td>全平台</td></tr>
-<tr><td rowspan="6"><b>设置</b></td><td>高级设置入口 — 跳转原 <code>index.vue</code>（<code>/</code> 路由）访问 easytier-frontend-lib 自带高级面板</td><td>全平台</td></tr>
+<tr><td rowspan="8"><b>设置</b></td><td>高级设置入口 — 跳转原 <code>index.vue</code>（<code>/</code> 路由）访问 easytier-frontend-lib 自带高级面板</td><td>全平台</td></tr>
 <tr><td>语言切换 — 地球图标 + 当前语言蓝色胶囊标签（中文 / English），点击 <code>toggleLang()</code> 即时切换所有 UI 文字</td><td>全平台</td></tr>
 <tr><td>默认首页 — 原生 <code>&lt;select&gt;</code> 下拉（电脑 / 组网 / LuCI），<code>localStorage['defaultTab']</code> 持久化</td><td>全平台</td></tr>
 <tr><td>Debug 信息 — toggle 开关，开启后在组网页底部显示本机 IP / 端口 / raw TOML 等诊断信息</td><td>全平台</td></tr>
 <tr><td>一键配置导入/导出 — WOL + LuCI + 网络配置打包为 JSON（<code>v:1</code> 结构），Export 写入剪贴板；Import 含 JSON 校验 + 二次确认弹窗防误操作覆盖</td><td>全平台</td></tr>
+<tr><td>AMOLED 纯黑模式 — 开关 toggle（<code>localStorage['amoledMode']</code>），仅在系统暗色模式下生效，设置纯黑背景色（<code>#000</code>）+ 适配 Dialog/卡片/代码块</td><td>全平台</td></tr>
+<tr><td>帮助对话框 — 展示 WOL、EasyTier VPN、LuCI 路由器、配置导入导出四大模块的功能说明和示例配置（含配置代码复制按钮）；WOL 部分提供 <code>luci-app-wolplus</code> 下载链接（通过 <code>tauri-plugin-opener</code> 打开浏览器）</td><td>全平台</td></tr>
 <tr><td>关于 — 显示版本号（来自 <code>package.json</code> 的 <code>pkg.version</code>）</td><td>全平台</td></tr>
-<tr><td rowspan="5"><b>Android<br>平台适配</b></td><td>剪贴板双向桥接 — <code>MainActivity.kt</code> 新增 <code>PasteBridge</code>（<code>@JavascriptInterface</code>），<code>readClipboard()</code> 通过 <code>CountDownLatch</code> + <code>mainHandler.post</code> 在 UI 线程读取；<code>writeClipboard()</code> 写入剪贴板</td><td>Android</td></tr>
+<tr><td rowspan="7"><b>Android<br>平台适配</b></td><td>跨平台剪贴板 — 从 <code>PasteBridge</code>（<code>@JavascriptInterface</code> + <code>CountDownLatch</code>，仅 Android）迁移至 <code>tauri-plugin-clipboard-manager</code>（<code>readText</code>/<code>writeText</code>），全平台可用</td><td>全平台</td></tr>
+<tr><td>动态主题适配 - <code>MainActivity.kt</code> 新增 <code>ThemeBridge</code>（<code>@JavascriptInterface</code>），前端 <code>matchMedia</code> 监听系统主题变化，回调 <code>setStatusBarStyle(dark)</code> 动态切换 Android 状态栏/导航栏颜色（浅色 <code>#f5f5f5</code> / 深色 <code>#121212</code>）</td><td>Android</td></tr>
 <tr><td>VPN 路由配置 — <code>mobile_vpn.ts</code> 设置 <code>disallowedApplications</code> 将 App 自身排除出 VPN 避免路由死循环；配置 <code>routes</code> 将虚拟网段路由至 TUN</td><td>Android</td></tr>
 <tr><td><code>AndroidManifest.xml</code> 添加 <code>usesCleartextTraffic="true"</code> 允许 HTTP 明文请求（访问局域网路由器 CGI 和 PC Agent）</td><td>Android</td></tr>
 <tr><td>文本选择上下文菜单 — 已调查（Chromium WebView 147 边界 bug，<code>SelectionPopupController</code> 不触发 ActionMode），不计划修复，已提供 JS 桥接 + 剪贴板按钮替代方案</td><td>Android</td></tr>
@@ -211,7 +216,7 @@ PC
 | `src-tauri/src/lib.rs` | 修改 | 新增 `http_get`/`http_post` Tauri 命令 |
 | `src-tauri/Cargo.toml` | 修改 | 新增 `reqwest`（含 socks 特性） |
 | `src/composables/mobile_vpn.ts` | 修改 | VPN 路由配置，`disallowedApplications` |
-| `src-tauri/gen/android/.../MainActivity.kt` | 修改 | 剪贴板桥接（`PasteBridge`） |
+| `src-tauri/gen/android/.../MainActivity.kt` | 修改 | 主题桥接（`ThemeBridge`），已移除旧 `PasteBridge` |
 | `src-tauri/gen/android/.../BuildTask.kt` | 修改 | .so 文件复制替代符号链接 |
 | `src-tauri/gen/android/.../AndroidManifest.xml` | 修改 | `usesCleartextTraffic="true"` |
 
@@ -265,7 +270,7 @@ PC
 
 ### 设置页面
 
-提供 6 个菜单项，每项含图标、标题和副标题：
+提供 8 个菜单项，每项含图标、标题和副标题：
 
 **Advanced Settings（高级设置）**
 齿轮图标，副标题 "Mode, logging, config server, language"。点击跳转到原始页面 `/`（easytier-frontend-lib 自带的高级设置面板）。
@@ -281,7 +286,7 @@ PC
 
 **Configuration Info（配置信息）**
 云下载图标，副标题 "全部数据导入与导出" / "Import/Export all data"，右侧两个操作按钮：
-- **Export（导出）**：绿色文字按钮。将 WOL 配置（`wolDevicesToml`）、LuCI 配置（`luciRoutersToml`）、网络配置列表（`networkList` 中各网络的 `rawToml`）打包为 JSON 对象，通过 `PasteBridge.writeClipboard()` 写入剪贴板，底部 snackbar 提示 "配置信息已导出到剪切板"。
+- **Export（导出）**：绿色文字按钮。将 WOL 配置（`wolDevicesToml`）、LuCI 配置（`luciRoutersToml`）、网络配置列表（`networkList` 中各网络的 `rawToml`）打包为 JSON 对象，通过 <code>tauri-plugin-clipboard-manager</code> 的 <code>writeText()</code> 写入剪贴板，底部 snackbar 提示 "配置信息已导出到剪切板"。
 - **Import（导入）**：蓝色主色按钮。打开导入 Dialog（`showImportDlg`）。
 
 导入 Dialog 流程：
@@ -294,6 +299,16 @@ PC
    - 写入 `luciRoutersToml` → `loadLuciConfig()`；如当前在 LuCI Tab，自动连接第一个路由器
    - 删除全部旧网络实例，重新 `generateNetworkConfig()` 生成新网络列表
    - snackbar 提示 "配置已导入"
+
+**Help（帮助）**
+帮助圆环图标，副标题 "模块说明"。点击打开帮助 Dialog，展示四个模块的功能说明、示例配置代码（含一键复制按钮）：
+- **WOL**：luci-app-wolplus + wolplus-agent 安装说明，提供下载链接（通过 `tauri-plugin-opener` 的 `openUrl()` 在浏览器打开）
+- **EasyTier VPN**：P2P 虚拟组网原理和功能特性说明
+- **LuCI 路由器**：OpenWrt 管理面板接入说明（LAN / VPN 双模式）
+- **配置导入导出**：TOML 配置文件结构和导入导出操作说明
+
+**AMOLED Black（AMOLED 纯黑）**
+深色半圆图标，副标题 "AMOLED 屏幕纯黑色模式，仅在深色模式下生效"。右侧开关 toggle（`localStorage['amoledMode']`）。开启后将背景色设为 `#000`，覆盖卡片、Dialog、代码块、分隔线等全部 CSS 变量。通过 `window.matchMedia('prefers-color-scheme: dark')` 监听系统主题变化，切换浅色模式时自动关闭 AMOLED 效果。
 
 **About（关于）**
 信息图标，副标题显示版本号（来自 `package.json` 的 `pkg.version`）。
@@ -436,7 +451,8 @@ Material Design 风格，自定义 CSS 变量体系。
 - 卡片：`border-radius: 12px`，`box-shadow` 阴影
 - 标题栏：`min-height: 56px`
 - CSS 变量须在 `:root` 而非 `.md-app`（PrimeVue Dialog 渲染在 app div 外）
-- 暗色模式：`@media (prefers-color-scheme: dark)`
+- 暗色模式：`@media (prefers-color-scheme: dark)` + Dialog 边框 `rgba(255,255,255,0.08)`（PrimeVue Dialog 暗色模式边框不可见修复）
+- AMOLED 纯黑模式：`.amoled` class 覆盖 `--md-card: #000` 等变量，仅在系统暗色模式 + 用户开启时生效
 
 ### 颜色体系
 
@@ -507,24 +523,21 @@ function tt(key: string): string {
 
 所有 home.vue 用户可见文字均已中英双语化，语言选择存入 `localStorage['easytierLang']`。
 
-### 3. Android 剪贴板读取
+### 3. 跨平台剪贴板（tauri-plugin-clipboard-manager）
 
 **架构**：
 
 ```
-MainActivity.kt:
-  PasteBridge.readClipboard() [@JavascriptInterface, JavaBridge 线程]
-    → CountDownLatch(500ms)
-      → mainHandler.post { ClipboardManager.getPrimaryClip() } [UI 线程]
-    → return text
-
 home.vue:
-  readClipboard(): _easytier_paste.readClipboard?.() || ''
-  importFromClipboard(): wolToml.value = readClipboard()
+  import { readText, writeText } from 'tauri-plugin-clipboard-manager'
+  importFromClipboard(): text = await readText()
+  exportToClipboard(): await writeText(json)
 ```
 
+**迁移原因**：旧的 `PasteBridge`（`@JavascriptInterface` + `CountDownLatch` + `mainHandler.post`）仅在 Android 上可用，且实现复杂的跨线程同步。`tauri-plugin-clipboard-manager` 通过 Tauri 原生插件提供全平台一致的剪贴板 API，桌面端和 Android 共享同一套 TypeScript 调用接口。
+
 **要点**：
-- 剪贴板必须在 Android UI 线程读取（JavaBridge 线程可能失败）
+- `readText()` / `writeText()` 均为 async 函数
 - 每次点击「从剪切板导入」时按需调用，不使用定时轮询
 - v-model 绑定后仅通过 Vue 响应式系统更新值，不动 DOM
 
@@ -670,4 +683,13 @@ password = ""
 
 ## 构建流程
 
-详见 [项目构建方式.md](项目构建方式.md)。
+- **本地 Android 构建** — 详见 [本地Android构建.md](本地Android构建.md)
+- **CI 全平台构建** — 详见 [CI全平台构建.md](CI全平台构建.md)
+
+### 构建关键点
+
+**Tauri 前端嵌入机制**：`tauri_build::build()` 在 Cargo 编译阶段将 `dist/` 目录（Vite 构建产物）以 BROTLI 压缩格式嵌入 `.so`。只改前端必须重新编译 `.so`，仅跑 Vite 不会更新 APK。
+
+**`-x rustBuildArm64Release` 原因**：Gradle 的 `rustBuildArm64Release` 任务内部调用 `pnpm tauri android android-studio-script`，该 Tauri CLI 子命令通过 `%TEMP%\com.kkrainbow.easytier-server-addr` 文件连接到 Tauri 主进程的 TCP 服务端获取 CLI 配置。此服务端仅 Android Studio 调用 Gradle 时启动，纯命令行构建中不存在。**解决**：Step 1 用 `cargo build --lib` 直接编译 `.so`，Step 2 手动复制到 `jniLibs/` 并清理 Gradle 中间产物（`merged_jni_libs` / `merged_native_libs` / `stripped_native_libs`），然后用 `-x rustBuildArm64Release` 跳过 Gradle 的 Rust 任务。
+
+**Vite + Cargo 同一 bash 调用**：MSYS2 跨会话环境漂移会导致 PROTOC/LIBCLANG_PATH 路径值波动，触发依赖 crate 指纹失效 → easytier 全量重编译（~8min）。同一调用内环境快照一致 → 增量编译（~1.5min）。
