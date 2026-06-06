@@ -59,9 +59,9 @@ const T: Record<string, [string, string]> = {
   noPeersConnected: ['No peers connected', '无节点连接'],
   settings: ['Settings', '设置'],
   advancedSettings: ['Advanced Settings', '高级设置'],
-  advancedSettingsDesc: ['Mode, logging, config server, language', '模式、日志、配置服务器、语言'],
+  advancedSettingsDesc: ['EasyTier engine native config panel: network mode, log level, etc.', 'EasyTier 引擎原生配置面板，含网络模式、日志级别等'],
   language: ['Language', '语言'],
-  tapToSwitch: ['Tap to switch language', '点击切换语言'],
+  languageDesc: ['Switch interface language, takes effect instantly', '切换界面显示语言，即时生效'],
   about: ['About', '关于'],
   version: ['Version', '版本'],
   network: ['Network', '组网'],
@@ -80,11 +80,12 @@ const T: Record<string, [string, string]> = {
   delete: ['Delete', '删除'],
   deleteNetworkConfirm: ['Delete this network?', '确定删除此网络？'],
   debug: ['Debug Mode', '调试模式'],
-  debugDesc: ['Show advanced options and diagnostic info', '显示高级选项和调试信息'],
+  debugDesc: ['Show advanced settings entry and diagnostic information', '开启后显示高级设置入口和诊断信息'],
   clear: ['Clear', '清空'],
   paste: ['Paste', '粘贴'],
   importFromClipboard: ['From clipboard', '从剪切板导入'],
   defaultHome: ['Default Home', '默认首页'],
+  defaultHomeDesc: ['Default tab shown on app launch', '启动 App 后默认显示的标签页'],
   wolTab: ['PC', '电脑'],
   netTab: ['Network', '组网'],
   luciTab: ['Router', '路由器'],
@@ -94,7 +95,7 @@ const T: Record<string, [string, string]> = {
   editRoutersToml: ['Edit routers.toml', '编辑 routers.toml'],
   connectingRouter: ['Connecting...', '连接中...'],
   oneClickConfig: ['Configuration Info', '配置信息'],
-  oneClickConfigDesc: ['Import/Export all data', '全部数据导入与导出'],
+  oneClickConfigDesc: ['One-tap export/import PC devices, routers, and network configs', '一键导出/导入电脑、路由器和网络配置'],
   exportLabel: ['Export', '导出'],
   importLabel: ['Import', '导入'],
   exportedToClipboard: ['Config exported to clipboard', '配置信息已导出到剪切板'],
@@ -103,7 +104,7 @@ const T: Record<string, [string, string]> = {
   importSuccess: ['Config imported', '配置已导入'],
   importFailed: ['Invalid config format', '配置格式无效'],
   help: ['Help', '帮助'],
-  helpDesc: ['Usage guide for all modules', '各模块使用说明'],
+  helpDesc: ['View usage guide for all modules and config examples', '查看各模块使用指南与配置示例'],
   helpWolTitle: ['WOL — PC Wake-on-LAN', '电脑 — 网络唤醒'],
   helpWolDesc: ['Remotely wake, monitor, and shut down PCs. Works via router CGI (luci-app-wolplus) for wake-up and PC agent (Go, port 32249) for status/shutdown. Supports both direct LAN and EasyTier tunnel paths.', '远程唤醒、监控和关闭电脑。通过路由器 CGI（luci-app-wolplus）发送魔术包唤醒，通过 PC 端 agent（Go，32249 端口）检测在线状态和执行关机。支持局域网直连和 EasyTier 隧道两种路径。'],
   helpWolDep: ['Dependencies: luci-app-wolplus (install on OpenWrt router) + wol-agent (run on each PC)', '依赖：luci-app-wolplus（安装到 OpenWrt 路由器）+ wol-agent（每台电脑上运行）'],
@@ -111,7 +112,7 @@ const T: Record<string, [string, string]> = {
   helpNetTitle: ['EasyTier — Virtual Networking', '组网 — EasyTier 虚拟组网'],
   helpNetDesc: ['Connect your phone, PC, and router into a virtual LAN — access them as if they\'re on the same local network, no public IP required.', '将手机、电脑、路由器组成虚拟局域网，无论身在何处都能像在同一网络下互相访问。无需公网 IP，无需复杂配置。'],
   helpNetFeat: ['Auto P2P direct connection — low latency, high speed\nAuto relay fallback when P2P is unavailable — always connected\nReal-time latency, packet loss, and bandwidth charts\nMulti-network profile management with one-tap switching\nColor-coded connection quality at a glance', '自动 P2P 直连，延迟低速度快\n无法直连时自动中转，确保稳定连接\n实时显示延迟、丢包率和网速图表\n支持多网络配置，一键切换\n颜色标识连接质量，一目了然'],
-  helpLuciTitle: ['LuCI — Router Management', 'LuCI — 路由器管理'],
+  helpLuciTitle: ['Router — LuCI Router Management', '路由器 — LuCI 路由器管理'],
   helpLuciDesc: ['Manage your OpenWrt router directly in the app — no browser needed. Automatic login with full LuCI admin panel access.', '在 App 内直接管理 OpenWrt 路由器，无需打开浏览器。自动完成登录，提供完整 LuCI 后台面板。'],
   helpLuciFeat: ['Auto login — configure once, no repeated password entry\nMulti-router support — add and switch between routers anytime\nOver EasyTier tunnel — manage home router remotely\nBrowsing position memory — restores last page after refresh', '自动登录，首次配置后无需每次输密码\n支持多台路由器，随时切换管理\n通过 EasyTier 隧道也能远程管理家里路由器\n刷新后自动恢复上次浏览位置'],
   helpBackupTitle: ['Import & Export', '配置导入导出'],
@@ -121,8 +122,17 @@ const T: Record<string, [string, string]> = {
   themeAuto: ['Auto', '自动'],
   themeLight: ['Light', '浅色'],
   themeDark: ['Dark', '深色'],
+  themeDesc: ['Switch between light, dark, or follow system', '切换浅色、深色外观或跟随系统'],
   amoled: ['AMOLED Black', 'AMOLED 纯黑模式'],
-  amoledDesc: ['Pure black background for AMOLED screens. Only active in dark mode.', 'AMOLED 屏幕纯黑色模式，仅在深色模式下生效。'],
+  amoledDesc: ['Pure black background for AMOLED screens, only effective in dark mode, saves power and reduces eye strain', 'AMOLED 屏幕纯黑背景，仅在深色模式下生效，更省电更护眼'],
+  aboutSub: ['Project introduction, acknowledgments, and open source license', '项目简介、致谢与开源许可信息'],
+  aboutDesc: ['EasyTier + WOLPlus is a cross-platform virtual networking and remote device management app built on Tauri v2. It retains all EasyTier networking capabilities while deeply integrating WOL wake-on-LAN, LuCI router reverse proxy management, one-click config import/export, with comprehensive Material Design theming. Supports Windows, macOS, Linux desktop and Android mobile.', 'EasyTier + WOLPlus 是基于 Tauri v2 的跨平台异地组网与远程设备管理一体化应用。在保留 EasyTier 全部组网能力的基础上，深度整合了 WOL 网络唤醒、LuCI 路由器反向代理管理、一键配置导入/导出等功能，并进行了全面的 Material Design 界面美化。支持 Windows、macOS、Linux 桌面端及 Android 移动端。'],
+  aboutThanks: ['Acknowledgments', '致谢'],
+  aboutEasyTierDesc: ['Decentralized virtual networking engine — high-performance Rust implementation, stable NAT traversal, multi-protocol support (TCP/UDP/WSS/WG)', '去中心化异地组网引擎 — 高性能 Rust 实现、稳定的 NAT 穿透能力、丰富的协议支持（TCP/UDP/WSS/WG）'],
+  aboutWolplusDesc: ['OpenWrt WOL device management LuCI plugin + PC Go Agent, unifying etherwake, status query, and remote shutdown behind a clean HTTP API', 'OpenWrt WOL 设备管理 LuCI 插件 + PC 端 Go Agent，将 etherwake 唤醒、Agent 状态查询、远程关机封装为统一的 HTTP 接口'],
+  aboutLinks: ['Project Links', '项目地址'],
+  aboutThisProject: ['EasyTier + WOLPlus (This Project)', 'EasyTier + WOLPlus（本项目）'],
+  aboutWolplusDep: ['luci-app-wolplus (Dependency)', 'luci-app-wolplus（依赖）'],
   close: ['Close', '关闭'],
   copyCode: ['Copy', '复制'],
   copiedCode: ['Copied', '已复制'],
@@ -677,7 +687,12 @@ function onLuciDocClick(e: MouseEvent) {
 
 // ==================== Help Dialog ====================
 const showHelpDlg = ref(false)
+const showAboutDlg = ref(false)
 const HELP_WOL_URL = 'https://github.com/lymwhen/luci-app-wolplus/releases'
+const ABOUT_EASYTIER_URL = 'https://github.com/EasyTier/EasyTier'
+const ABOUT_WOLPLUS_URL = 'https://github.com/animegasan/luci-app-wolplus'
+const ABOUT_THIS_URL = 'https://github.com/lymwhen/EasyTier'
+const ABOUT_WOLPLUS_DEP_URL = 'https://github.com/lymwhen/luci-app-wolplus'
 
 async function openHelpUrl(url: string) {
   try {
@@ -695,17 +710,27 @@ interface = "br-lan"
 router_ip = "192.168.1.1"
 agent_port = 32249`
 
-const HELP_CFG_NET = `[instance]
-instance_name = "my_home"
-easytier_cmd = "easytier-core"
+const HELP_CFG_NET = `instance_name = "easytier"
+dhcp = true
+listeners = [
+    "tcp://0.0.0.0:11010",
+    "udp://0.0.0.0:11010",
+    "wg://0.0.0.0:11011",
+]
+rpc_portal = "0.0.0.0:0"
 
 [network_identity]
-peer_hostname = "phone"
+network_name = "easytier"
+network_secret = ""
 
 [[peer]]
-uri = "tcp://192.168.1.1:11010"
+uri = "tcp://public.easytier.top:11010"
 
-socks5_proxy = "socks5://0.0.0.0:32259"`
+[[proxy_network]]
+cidr = "192.168.1.0/24"
+
+[flags]
+enable_exit_node = true`
 
 const HELP_CFG_LUCI = `[[router]]
 name = "Home Router"
@@ -1148,7 +1173,7 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
             <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>
             <div class="flex-1">
               <div class="md-name">{{ tt('defaultHome') }}</div>
-              <div class="md-sub">{{ tt(defaultTab === 'wol' ? 'wolTab' : defaultTab === 'luci' ? 'luciTab' : 'netTab') }}</div>
+              <div class="md-sub">{{ tt('defaultHomeDesc') }}</div>
             </div>
             <select class="md-select" :value="defaultTab" @change="setDefaultTab(($event.target as HTMLSelectElement).value as Tab)" @click.stop>
               <option value="wol">{{ tt('wolTab') }}</option>
@@ -1162,7 +1187,7 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
             <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M12 7c-2.76 0-5 2.24-5 5s2.24 5 5 5 5-2.24 5-5-2.24-5-5-5zm-1 9.38V7.62c1.86.5 3 2.17 3 4.38s-1.14 3.88-3 4.38zM12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/></svg>
             <div class="flex-1">
               <div class="md-name">{{ tt('theme') }}</div>
-              <div class="md-sub">{{ themeMode === 'auto' ? tt('themeAuto') : themeMode === 'light' ? tt('themeLight') : tt('themeDark') }}</div>
+              <div class="md-sub">{{ tt('themeDesc') }}</div>
             </div>
             <select class="md-select" :value="themeMode" @change="themeMode = ($event.target as HTMLSelectElement).value" @click.stop>
               <option value="auto">{{ tt('themeAuto') }}</option>
@@ -1186,7 +1211,7 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
             <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zm6.93 6h-2.95a15.65 15.65 0 00-1.38-3.56A8.03 8.03 0 0118.92 8zM12 4.04c.83 1.2 1.48 2.53 1.91 3.96h-3.82c.43-1.43 1.08-2.76 1.91-3.96zM4.26 14C4.1 13.36 4 12.69 4 12s.1-1.36.26-2h3.38c-.08.66-.14 1.32-.14 2 0 .68.06 1.34.14 2H4.26zm.82 2h2.95c.32 1.25.78 2.45 1.38 3.56A7.987 7.987 0 015.08 16zm2.95-8H5.08a7.987 7.987 0 014.33-3.56A15.65 15.65 0 008.03 8zM12 19.96c-.83-1.2-1.48-2.53-1.91-3.96h3.82c-.43 1.43-1.08 2.76-1.91 3.96zM14.34 14H9.66c-.09-.66-.16-1.32-.16-2 0-.68.07-1.35.16-2h4.68c.09.65.16 1.32.16 2 0 .68-.07 1.34-.16 2zm.25 5.56c.6-1.11 1.06-2.31 1.38-3.56h2.95a8.03 8.03 0 01-4.33 3.56zM16.36 14c.08-.66.14-1.32.14-2 0-.68-.06-1.34-.14-2h3.38c.16.64.26 1.31.26 2s-.1 1.36-.26 2h-3.38z"/></svg>
             <div class="flex-1">
               <div class="md-name">{{ tt('language') }}</div>
-              <div class="md-sub">{{ locale === 'cn' ? tt('chinese') : tt('english') }} — {{ tt('tapToSwitch') }}</div>
+              <div class="md-sub">{{ tt('languageDesc') }}</div>
             </div>
             <span class="md-lang-badge">{{ locale === 'cn' ? '中文' : 'English' }}</span>
           </div>
@@ -1231,13 +1256,14 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
             </div>
           </div>
         </div>
-        <div class="md-card md-settings-card">
+        <div class="md-card md-settings-card" @click="showAboutDlg = true">
           <div class="md-row">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
             <div class="flex-1">
               <div class="md-name">{{ tt('about') }}</div>
-              <div class="md-sub">{{ tt('version') }} {{ pkg.version }}</div>
+              <div class="md-sub">{{ tt('aboutSub') }}</div>
             </div>
+            <span class="md-ver-badge">v{{ pkg.version }}</span>
           </div>
         </div>
       </div>
@@ -1352,17 +1378,6 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
           <button class="md-help-copy" @click="copyHelpCfg(HELP_CFG_WOL, 0)">{{ copiedIdx === 0 ? tt('copiedCode') : tt('copyCode') }}</button>
         </div>
       </div>
-      <!-- EasyTier -->
-      <div class="md-help-section">
-        <div class="md-help-title">{{ tt('helpNetTitle') }}</div>
-        <div class="md-help-desc">{{ tt('helpNetDesc') }}</div>
-        <div class="md-help-desc" style="white-space:pre-line;margin-bottom:8px">{{ tt('helpNetFeat') }}</div>
-        <div class="md-help-cfg-label">{{ tt('helpCfgTitle') }}</div>
-        <div class="md-help-cfg-wrap">
-          <pre class="md-help-code">{{ HELP_CFG_NET }}</pre>
-          <button class="md-help-copy" @click="copyHelpCfg(HELP_CFG_NET, 1)">{{ copiedIdx === 1 ? tt('copiedCode') : tt('copyCode') }}</button>
-        </div>
-      </div>
       <!-- LuCI -->
       <div class="md-help-section">
         <div class="md-help-title">{{ tt('helpLuciTitle') }}</div>
@@ -1371,7 +1386,18 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
         <div class="md-help-cfg-label">{{ tt('helpCfgTitle') }}</div>
         <div class="md-help-cfg-wrap">
           <pre class="md-help-code">{{ HELP_CFG_LUCI }}</pre>
-          <button class="md-help-copy" @click="copyHelpCfg(HELP_CFG_LUCI, 2)">{{ copiedIdx === 2 ? tt('copiedCode') : tt('copyCode') }}</button>
+          <button class="md-help-copy" @click="copyHelpCfg(HELP_CFG_LUCI, 1)">{{ copiedIdx === 1 ? tt('copiedCode') : tt('copyCode') }}</button>
+        </div>
+      </div>
+      <!-- EasyTier -->
+      <div class="md-help-section">
+        <div class="md-help-title">{{ tt('helpNetTitle') }}</div>
+        <div class="md-help-desc">{{ tt('helpNetDesc') }}</div>
+        <div class="md-help-desc" style="white-space:pre-line;margin-bottom:8px">{{ tt('helpNetFeat') }}</div>
+        <div class="md-help-cfg-label">{{ tt('helpCfgTitle') }}</div>
+        <div class="md-help-cfg-wrap">
+          <pre class="md-help-code">{{ HELP_CFG_NET }}</pre>
+          <button class="md-help-copy" @click="copyHelpCfg(HELP_CFG_NET, 2)">{{ copiedIdx === 2 ? tt('copiedCode') : tt('copyCode') }}</button>
         </div>
       </div>
       <!-- Import & Export -->
@@ -1382,6 +1408,34 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
       <template #footer>
         <div class="md-dlg-ft" style="justify-content:flex-end">
           <button class="md-dlg-btn" @click="showHelpDlg = false">{{ tt('close') }}</button>
+        </div>
+      </template>
+    </Dialog>
+
+    <!-- About Dialog -->
+    <Dialog v-model:visible="showAboutDlg" modal :header="tt('about')" :style="{ width: '90vw', maxWidth: '540px' }" class="md-dialog md-about-dlg" :pt="{ header: { class: 'md-dialog-hdr' }, content: { class: 'md-dialog-content' }, footer: { class: 'md-dialog-ft' } }">
+      <div class="md-help-section">
+        <div class="md-help-title">EasyTier + WOLPlus <span class="md-about-ver">v{{ pkg.version }}</span></div>
+        <div class="md-help-desc">{{ tt('aboutDesc') }}</div>
+      </div>
+      <div class="md-help-section">
+        <div class="md-help-title">{{ tt('aboutLinks') }}</div>
+        <div class="md-help-desc" style="margin-bottom:4px">{{ tt('aboutThisProject') }}</div>
+        <a class="md-help-link" @click.prevent="openHelpUrl(ABOUT_THIS_URL)">github.com/lymwhen/EasyTier</a>
+        <div class="md-help-desc" style="margin-top:10px;margin-bottom:4px">{{ tt('aboutWolplusDep') }}</div>
+        <a class="md-help-link" @click.prevent="openHelpUrl(ABOUT_WOLPLUS_DEP_URL)">github.com/lymwhen/luci-app-wolplus</a>
+      </div>
+      <hr class="md-help-divider">
+      <div class="md-help-section">
+        <div class="md-help-title">{{ tt('aboutThanks') }}</div>
+        <div class="md-help-desc" style="margin-bottom:4px"><b>EasyTier</b> — {{ tt('aboutEasyTierDesc') }}</div>
+        <a class="md-help-link" @click.prevent="openHelpUrl(ABOUT_EASYTIER_URL)">github.com/EasyTier/EasyTier</a>
+        <div class="md-help-desc" style="margin-top:10px;margin-bottom:4px"><b>luci-app-wolplus</b> — {{ tt('aboutWolplusDesc') }}</div>
+        <a class="md-help-link" @click.prevent="openHelpUrl(ABOUT_WOLPLUS_URL)">github.com/animegasan/luci-app-wolplus</a>
+      </div>
+      <template #footer>
+        <div class="md-dlg-ft" style="justify-content:flex-end">
+          <button class="md-dlg-btn" @click="showAboutDlg = false">{{ tt('close') }}</button>
         </div>
       </template>
     </Dialog>
@@ -1575,6 +1629,8 @@ html[data-theme="amoled"] .md-app { background: #000; }
 
 /* Language badge */
 .md-lang-badge { font-size:0.7rem; font-weight:600; padding:2px 8px; border-radius:8px; background:#e3f2fd; color:#1565c0; flex-shrink:0; }
+.md-ver-badge { font-size:0.75rem; font-weight:500; color:var(--md-muted); flex-shrink:0; }
+.md-about-ver { font-size:0.75rem; font-weight:400; color:var(--md-muted); margin-left:8px; }
 
 /* Toggle switch — Material Design 3 style */
 .md-toggle { width:44px; height:24px; border-radius:12px; background:#bdbdbd; flex-shrink:0; position:relative; transition:background 0.2s; }
@@ -1648,6 +1704,8 @@ html[data-theme="amoled"] .md-app { background: #000; }
 .md-settings-btn-primary:active { background:#bbdefb; }
 .md-help-section { padding: 12px 0; }
 .md-help-section + .md-help-section { border-top: 1px solid var(--md-divider); }
+.md-about-dlg .md-help-section + .md-help-section { border-top: none; }
+.md-help-divider { border: none; border-top: 1px solid var(--md-divider); margin: 0; }
 .md-help-title { font-size: 0.92rem; font-weight: 600; color: var(--md-text); margin-bottom: 4px; }
 .md-help-desc { font-size: 0.82rem; color: var(--md-secondary); line-height: 1.5; margin-bottom: 4px; }
 .md-help-dep { font-size: 0.78rem; color: var(--md-muted); line-height: 1.4; margin-bottom: 8px; }

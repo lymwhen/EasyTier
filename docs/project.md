@@ -133,7 +133,7 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 <tr><td rowspan="4"><b>CI / 构建</b></td><td>Tag 推送自动触发全平台构建 + GitHub Release Draft — <code>release-tag.yml</code> (456 行)，矩阵含 Core CLI ×16、GUI 桌面 ×7、Android APK ×4、Magisk 模块</td><td>全平台（CI 产物）</td></tr>
 <tr><td>CI 兼容适配 — <code>prepare-pnpm</code> 添加 <code>--no-frozen-lockfile</code>、<code>docker.yml</code> 仓库名通用化、<code>vue-tsc</code> 类型检查临时跳过、<code>BuildTask.kt</code> 还原上游跨平台版本</td><td>Linux CI Runner</td></tr>
 <tr><td>Rust 代码 CI 合规 — <code>lib.rs</code> 通过 <code>cargo fmt</code> 格式检查 + <code>cargo clippy -D warnings</code>，确保上游 OHOS / Test workflow 通过</td><td>Linux CI Runner</td></tr>
-<tr><td>Cargo 增量编译缓存修复 — CC/AR/BINDGEN/PROTOC/LIBCLANG_PATH 环境变量固化到 <code>.cargo/config.toml [env]</code>，构建加速 4 倍（~10min → ~2m30s）</td><td>本地开发（Windows + MSYS2）</td></tr>
+<tr><td>Cargo 增量编译缓存修复 — CC/AR/BINDGEN/PROTOC/LIBCLANG_PATH/GIT_CEILING_DIRECTORIES 固化到 <code>.cargo/config.toml [env]</code>，构建加速 6 倍（~10min → ~1m45s）</td><td>本地开发（Windows + MSYS2）</td></tr>
 <tr><td rowspan="2"><b>跨平台 GUI</b></td><td>桌面安装包构建 — Linux（deb/rpm/AppImage，x86_64 + aarch64）、macOS（dmg，x86_64 + aarch64）、Windows（nsis installer，x86_64 + i686 + aarch64）</td><td>Windows / macOS / Linux</td></tr>
 <tr><td>Desktop GUI 基于 Tauri v2 — 内嵌 easytier-core，Core 模式直连（无需 easytier-web），TOML 配置文件驱动</td><td>Windows / macOS / Linux</td></tr>
 </table>
@@ -701,10 +701,4 @@ password = ""
 - **本地 Android 构建** — 详见 [本地Android构建.md](本地Android构建.md)
 - **CI 全平台构建** — 详见 [CI全平台构建.md](CI全平台构建.md)
 
-### 构建关键点
-
-**Tauri 前端嵌入机制**：`tauri_build::build()` 在 Cargo 编译阶段将 `dist/` 目录（Vite 构建产物）以 BROTLI 压缩格式嵌入 `.so`。只改前端必须重新编译 `.so`，仅跑 Vite 不会更新 APK。
-
-**`-x rustBuildArm64Release` 原因**：Gradle 的 `rustBuildArm64Release` 任务内部调用 `pnpm tauri android android-studio-script`，该 Tauri CLI 子命令通过 `%TEMP%\com.kkrainbow.easytier-server-addr` 文件连接到 Tauri 主进程的 TCP 服务端获取 CLI 配置。此服务端仅 Android Studio 调用 Gradle 时启动，纯命令行构建中不存在。**解决**：Step 1 用 `cargo build --lib` 直接编译 `.so`，Step 2 手动复制到 `jniLibs/` 并清理 Gradle 中间产物（`merged_jni_libs` / `merged_native_libs` / `stripped_native_libs`），然后用 `-x rustBuildArm64Release` 跳过 Gradle 的 Rust 任务。
-
-**Vite + Cargo 同一 bash 调用**：MSYS2 跨会话环境漂移会导致 PROTOC/LIBCLANG_PATH 路径值波动，触发依赖 crate 指纹失效 → easytier 全量重编译（~8min）。同一调用内环境快照一致 → 增量编译（~1.5min）。
+构建原理、三步流程、指纹稳定性等详见 [本地Android构建.md](本地Android构建.md)。

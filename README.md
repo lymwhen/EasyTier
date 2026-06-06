@@ -310,7 +310,7 @@ CI 全平台构建详见 [docs/CI全平台构建.md](../docs/CI全平台构建.m
 ## 相关项目
 
 - [EasyTier](https://github.com/EasyTier/EasyTier) — 去中心化异地组网工具（本项目上游）
-- [luci-app-wolplus](https://github.com/haiyiya/luci-app-wolplus) — OpenWrt WOL 设备管理 LuCI 插件 + PC 端 Go Agent
+- [luci-app-wolplus](https://github.com/animegasan/luci-app-wolplus) — OpenWrt WOL 设备管理 LuCI 插件 + PC 端 Go Agent
 - [ZeroTier](https://www.zerotier.com/) — 全球虚拟网络设备连接方案
 - [TailScale](https://tailscale.com/) — 简化网络配置的 VPN 解决方案
 
@@ -324,7 +324,7 @@ CI 全平台构建详见 [docs/CI全平台构建.md](../docs/CI全平台构建.m
 
 - 🙏 **[EasyTier](https://github.com/EasyTier/EasyTier)** — 感谢 EasyTier 团队开发的去中心化组网引擎。其高性能 Rust 实现、稳定的 NAT 穿透能力、丰富的协议支持（TCP/UDP/WSS/WG）、以及基于 Tauri v2 的 `easytier-gui` App 框架，为本项目提供了坚实的网络基础和优秀的 UI 起点。
 
-- 🙏 **[luci-app-wolplus](https://github.com/haiyiya/luci-app-wolplus)** — 感谢 WOLPlus 项目提供的路由器端 WOL CGI 中间层和 PC 端 Go Agent。CGI API 将 etherwake 唤醒、Agent 状态查询、远程关机封装为统一的 HTTP 接口，使得跨 EasyTier 隧道的远程设备管理成为可能。
+- 🙏 **[luci-app-wolplus](https://github.com/animegasan/luci-app-wolplus)** — 感谢 WOLPlus 项目提供的路由器端 WOL CGI 中间层和 PC 端 Go Agent。CGI API 将 etherwake 唤醒、Agent 状态查询、远程关机封装为统一的 HTTP 接口，使得跨 EasyTier 隧道的远程设备管理成为可能。
 
 同时感谢所有为 EasyTier 和 WOLPlus 项目贡献代码、反馈问题、提供建议的社区开发者们。
 
