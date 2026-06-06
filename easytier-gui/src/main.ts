@@ -46,7 +46,7 @@ async function main() {
       preset: Aura,
       options: {
         prefix: 'p',
-        darkModeSelector: 'system',
+        darkModeSelector: '.app-dark',
         cssLayer: {
           name: 'primevue',
           order: 'tailwind-base, primevue, tailwind-utilities',

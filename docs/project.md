@@ -89,7 +89,7 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 
 <table>
 <tr><th>模块</th><th>功能项</th><th>平台支持情况</th></tr>
-<tr><td rowspan="8"><b>整体UI</b></td><td>Material Design 风格全面美化 — 自定义 CSS 变量体系（<code>:root</code> 级）、卡片 12px 圆角 + 阴影、暗色模式 <code>@media (prefers-color-scheme: dark)</code> 自动跟随</td><td>全平台</td></tr>
+<tr><td rowspan="8"><b>整体UI</b></td><td>Material Design 风格全面美化 — 自定义 CSS 变量体系（<code>:root</code> 级）、卡片 12px 圆角 + 阴影、三主题系统（浅色/深色/AMOLED 平等独立，<code>html[data-theme]</code> 属性驱动，<code>applyTheme()</code> 统一状态机，移除全部 <code>@media (prefers-color-scheme: dark)</code> 避免 JS 不可控）</td><td>全平台</td></tr>
 <tr><td>底部 Tab 导航栏（电脑 / 组网 / LuCI / 设置），默认首页可配置（localStorage 持久化）</td><td>全平台</td></tr>
 <tr><td>App 图标更换为 EasyTier 网络层叠图标 + Splash 遮罩优化（路由跳转完成后隐藏，最低 500ms）</td><td>全平台</td></tr>
 <tr><td>全部操作图标统一更换 — 标题栏编辑/刷新/切换、底部 Tab、唤醒铃铛面型图标、关机电源面型图标、Connect 链式连接、断开断链 SVG</td><td>全平台</td></tr>
@@ -116,16 +116,16 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 <tr><td>会话过期自动重登（检测 302 重定向到 login），刷新保持当前 URL（<code>last_path</code> 仅追踪 <code>text/html</code> 响应，过滤 CSS/JS/API 资源请求）</td><td>全平台</td></tr>
 <tr><td>多路由器管理 — TOML 配置路由器列表，支持切换/新增/删除；删除当前路由器自动切换至剩余第一个</td><td>全平台</td></tr>
 <tr><td>路径持久化 — 刷新或路径模式切换（ET-LAN ↔ LAN）后，代理重启自动恢复上次浏览位置；v-show 切回 Tab 不重载 iframe</td><td>全平台</td></tr>
-<tr><td rowspan="8"><b>设置</b></td><td>高级设置入口 — 跳转原 <code>index.vue</code>（<code>/</code> 路由）访问 easytier-frontend-lib 自带高级面板</td><td>全平台</td></tr>
+<tr><td rowspan="8"><b>设置</b></td><td>高级设置入口（默认隐藏，开启调试模式后显示）— 跳转原 <code>index.vue</code>（<code>/</code> 路由）访问 easytier-frontend-lib 自带高级面板</td><td>全平台</td></tr>
 <tr><td>语言切换 — 地球图标 + 当前语言蓝色胶囊标签（中文 / English），点击 <code>toggleLang()</code> 即时切换所有 UI 文字</td><td>全平台</td></tr>
 <tr><td>默认首页 — 原生 <code>&lt;select&gt;</code> 下拉（电脑 / 组网 / LuCI），<code>localStorage['defaultTab']</code> 持久化</td><td>全平台</td></tr>
-<tr><td>Debug 信息 — toggle 开关，开启后在组网页底部显示本机 IP / 端口 / raw TOML 等诊断信息</td><td>全平台</td></tr>
+<tr><td>调试模式 — toggle 开关，开启后在组网页底部显示诊断信息 + 解锁高级设置菜单项；副标题"显示高级选项和调试信息"</td><td>全平台</td></tr>
 <tr><td>一键配置导入/导出 — WOL + LuCI + 网络配置打包为 JSON（<code>v:1</code> 结构），Export 写入剪贴板；Import 含 JSON 校验 + 二次确认弹窗防误操作覆盖</td><td>全平台</td></tr>
-<tr><td>AMOLED 纯黑模式 — 开关 toggle（<code>localStorage['amoledMode']</code>），仅在系统暗色模式下生效，设置纯黑背景色（<code>#000</code>）+ 适配 Dialog/卡片/代码块</td><td>全平台</td></tr>
+<tr><td>AMOLED 纯黑模式 — 开关 toggle（<code>localStorage['amoledMode']</code>），作为与浅色/深色平等的第三个独立主题由 <code>applyTheme()</code> 统一管理，纯黑背景色（<code>#000</code>）+ 适配 Dialog/卡片/代码块/标题栏/Tab 栏等全部组件</td><td>全平台</td></tr>
 <tr><td>帮助对话框 — 展示 WOL、EasyTier VPN、LuCI 路由器、配置导入导出四大模块的功能说明和示例配置（含配置代码复制按钮）；WOL 部分提供 <code>luci-app-wolplus</code> 下载链接（通过 <code>tauri-plugin-opener</code> 打开浏览器）</td><td>全平台</td></tr>
 <tr><td>关于 — 显示版本号（来自 <code>package.json</code> 的 <code>pkg.version</code>）</td><td>全平台</td></tr>
-<tr><td rowspan="7"><b>Android<br>平台适配</b></td><td>跨平台剪贴板 — 从 <code>PasteBridge</code>（<code>@JavascriptInterface</code> + <code>CountDownLatch</code>，仅 Android）迁移至 <code>tauri-plugin-clipboard-manager</code>（<code>readText</code>/<code>writeText</code>），全平台可用</td><td>全平台</td></tr>
-<tr><td>动态主题适配 - <code>MainActivity.kt</code> 新增 <code>ThemeBridge</code>（<code>@JavascriptInterface</code>），前端 <code>matchMedia</code> 监听系统主题变化，回调 <code>setStatusBarStyle(dark)</code> 动态切换 Android 状态栏/导航栏颜色（浅色 <code>#f5f5f5</code> / 深色 <code>#121212</code>）</td><td>Android</td></tr>
+<tr><td rowspan="6"><b>Android<br>平台适配</b></td><td>跨平台剪贴板 — 从 <code>PasteBridge</code>（<code>@JavascriptInterface</code> + <code>CountDownLatch</code>，仅 Android）迁移至 <code>tauri-plugin-clipboard-manager</code>（<code>readText</code>/<code>writeText</code>），全平台可用</td><td>全平台</td></tr>
+<tr><td>动态主题适配 — <code>MainActivity.kt</code> 新增 <code>ThemeBridge</code>（<code>@JavascriptInterface</code>），前端 <code>applyTheme()</code> 统一调用 <code>setStatusBarStyle(dark)</code> + <code>setAmoledMode(bool)</code> 动态切换 Android 状态栏/导航栏颜色（浅色 <code>#f5f5f5</code> / 深色 <code>#121212</code> / AMOLED <code>#000</code>）</td><td>Android</td></tr>
 <tr><td>VPN 路由配置 — <code>mobile_vpn.ts</code> 设置 <code>disallowedApplications</code> 将 App 自身排除出 VPN 避免路由死循环；配置 <code>routes</code> 将虚拟网段路由至 TUN</td><td>Android</td></tr>
 <tr><td><code>AndroidManifest.xml</code> 添加 <code>usesCleartextTraffic="true"</code> 允许 HTTP 明文请求（访问局域网路由器 CGI 和 PC Agent）</td><td>Android</td></tr>
 <tr><td>文本选择上下文菜单 — 已调查（Chromium WebView 147 边界 bug，<code>SelectionPopupController</code> 不触发 ActionMode），不计划修复，已提供 JS 桥接 + 剪贴板按钮替代方案</td><td>Android</td></tr>
@@ -273,7 +273,7 @@ PC
 提供 8 个菜单项，每项含图标、标题和副标题：
 
 **Advanced Settings（高级设置）**
-齿轮图标，副标题 "Mode, logging, config server, language"。点击跳转到原始页面 `/`（easytier-frontend-lib 自带的高级设置面板）。
+齿轮图标，副标题 "Mode, logging, config server, language"。**默认隐藏**，仅在开启调试模式后显示。点击跳转到原始页面 `/`（easytier-frontend-lib 自带的高级设置面板），排在调试模式开关下方。
 
 **Language（语言）**
 地球图标，副标题显示当前语言和 "点击切换语言" 提示，右侧蓝色胶囊标签显示 `中文` 或 `English`。点击调用 `toggleLang()`，切换 `locale` ref 并写入 `localStorage['easytierLang']`，UI 所有文本即时更新。
@@ -281,8 +281,8 @@ PC
 **Default Tab（默认首页）**
 九宫格图标，副标题显示当前默认首页名称。右侧原生 `<select>` 下拉，可选电脑 / 路由器 / 组网。选中值存入 `localStorage['defaultTab']`，仅首次加载时影响 `activeTab` 初始值。
 
-**Debug Info（调试信息）**
-齿轮图标，副标题 "显示调试信息"，右侧开关 toggle。开启后在组网页底部显示 Debug 区域：本机 IP、端口、raw TOML 文本等诊断信息。
+**Debug Mode（调试模式）**
+齿轮图标，副标题 "显示高级选项和调试信息"，右侧开关 toggle。开启后生效两处：1) 组网页底部显示 Debug 区域（本机 IP、端口、raw TOML 文本等诊断信息）；2) 解锁高级设置菜单项（显示在调试模式下方）。
 
 **Configuration Info（配置信息）**
 云下载图标，副标题 "全部数据导入与导出" / "Import/Export all data"，右侧两个操作按钮：
@@ -308,7 +308,7 @@ PC
 - **配置导入导出**：TOML 配置文件结构和导入导出操作说明
 
 **AMOLED Black（AMOLED 纯黑）**
-深色半圆图标，副标题 "AMOLED 屏幕纯黑色模式，仅在深色模式下生效"。右侧开关 toggle（`localStorage['amoledMode']`）。开启后将背景色设为 `#000`，覆盖卡片、Dialog、代码块、分隔线等全部 CSS 变量。通过 `window.matchMedia('prefers-color-scheme: dark')` 监听系统主题变化，切换浅色模式时自动关闭 AMOLED 效果。
+深色半圆图标，副标题 "AMOLED 屏幕纯黑色模式"。右侧开关 toggle（`localStorage['amoledMode']`）。开启后 AMOLED 作为与浅色/深色平等的第三个独立主题，由 `applyTheme()` 统一状态机管理。纯黑背景色（`#000`），卡片/标题栏/Tab 栏/代码块/分隔线等全部组件独立适配，不再作为深色的子类。
 
 **About（关于）**
 信息图标，副标题显示版本号（来自 `package.json` 的 `pkg.version`）。
@@ -442,17 +442,32 @@ Material Design 风格，自定义 CSS 变量体系。
 :root {
   font-size: 15px;  /* 影响所有页面，包括原始 app */
   --md-primary: #1976d2;
-  --md-card: #ffffff;
+  --md-card: #fff;
   --md-text: #212121;
-  /* ... etc */
+  /* 浅色主题默认值 */
+}
+html[data-theme="dark"] {
+  --md-primary: #42a5f5;
+  --md-card: #1e1e1e;
+  --md-text: #e0e0e0;
+  /* 深色主题覆写 */
+}
+html[data-theme="amoled"] {
+  --md-primary: #42a5f5;
+  --md-card: #0f0f0f;
+  --md-text: #e0e0e0;
+  --md-shadow: none;
+  background: #000;
+  /* AMOLED 独立主题覆写 */
 }
 ```
 
 - 卡片：`border-radius: 12px`，`box-shadow` 阴影
 - 标题栏：`min-height: 56px`
 - CSS 变量须在 `:root` 而非 `.md-app`（PrimeVue Dialog 渲染在 app div 外）
-- 暗色模式：`@media (prefers-color-scheme: dark)` + Dialog 边框 `rgba(255,255,255,0.08)`（PrimeVue Dialog 暗色模式边框不可见修复）
-- AMOLED 纯黑模式：`.amoled` class 覆盖 `--md-card: #000` 等变量，仅在系统暗色模式 + 用户开启时生效
+- 三主题系统：浅色/深色/AMOLED 为三个平等独立的主题，通过 `html[data-theme="light|dark|amoled"]` 属性驱动，`applyTheme()` 统一状态机管理（综合 `themeMode` + `amoledMode` + 系统 `prefers-color-scheme`），已移除全部 `@media (prefers-color-scheme: dark)` 避免 CSS 优先级冲突；`.app-dark` class 仅保留供 PrimeVue `darkModeSelector` 使用
+- **`:deep()` 在 unscoped `<style>` 中无效**：Vue 3 SFC 编译器仅在 scoped 块中处理 `:deep()`，unscoped 块中直接透传至浏览器。浏览器将 `:deep()` 视为无效 CSS 伪类，静默丢弃整条规则。修复：unscoped 块移除所有 `:deep()`，改用原生后代/复合选择器
+- **PrimeVue Dialog Teleport 导致 `.md-dialog .p-dialog` 无法匹配**：`class="md-dialog"` 与 `.p-dialog` 在 Teleport 渲染的同一根元素上，后代选择器（空格）匹配不到。改用复合选择器 `.md-dialog.p-dialog`（无空格）匹配同一元素上的两个类
 
 ### 颜色体系
 

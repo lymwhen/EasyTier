@@ -79,8 +79,8 @@ const T: Record<string, [string, string]> = {
   chinese: ['中文', '中文'],
   delete: ['Delete', '删除'],
   deleteNetworkConfirm: ['Delete this network?', '确定删除此网络？'],
-  debug: ['Debug Info', '调试信息'],
-  debugDesc: ['Show diagnostic info', '显示调试信息'],
+  debug: ['Debug Mode', '调试模式'],
+  debugDesc: ['Show advanced options and diagnostic info', '显示高级选项和调试信息'],
   clear: ['Clear', '清空'],
   paste: ['Paste', '粘贴'],
   importFromClipboard: ['From clipboard', '从剪切板导入'],
@@ -117,11 +117,17 @@ const T: Record<string, [string, string]> = {
   helpBackupTitle: ['Import & Export', '配置导入导出'],
   helpBackupDesc: ['In Settings > Configuration Info, you can export all WOL devices, network profiles, and router configs to the clipboard with one tap, or import from clipboard to restore. Perfect for switching phones or sharing configs — no need to set up everything again.', '在设置页的「配置信息」中，可将 WOL 设备、网络配置、路由器配置一键导出到剪贴板保存，也可从剪贴板导入恢复。更换手机或分享给他人时无需重新配置。'],
   helpCfgTitle: ['Config Example', '配置示例'],
+  theme: ['Theme', '主题'],
+  themeAuto: ['Auto', '自动'],
+  themeLight: ['Light', '浅色'],
+  themeDark: ['Dark', '深色'],
   amoled: ['AMOLED Black', 'AMOLED 纯黑模式'],
   amoledDesc: ['Pure black background for AMOLED screens. Only active in dark mode.', 'AMOLED 屏幕纯黑色模式，仅在深色模式下生效。'],
   close: ['Close', '关闭'],
   copyCode: ['Copy', '复制'],
   copiedCode: ['Copied', '已复制'],
+  etLan: ['ET-LAN', '异地组网'],
+  lanDirect: ['LAN', '局域网'],
 }
 function tt(key: string): string {
   const entry = T[key]
@@ -718,27 +724,40 @@ async function copyHelpCfg(text: string, idx: number) {
   }
 }
 
-// ==================== AMOLED Mode ====================
+// ==================== Theme State Machine ====================
+type Theme = 'light' | 'dark' | 'amoled'
+const themeMode = ref(localStorage.getItem('themeMode') || 'auto')
 const amoledMode = ref(localStorage.getItem('amoledMode') === '1')
 
-watch(amoledMode, (v) => {
-  localStorage.setItem('amoledMode', v ? '1' : '0')
-  syncAmoledClass()
+function applyTheme() {
+  const sysDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+  const resolvedDark = themeMode.value === 'dark' || (themeMode.value === 'auto' && sysDark)
+  const effective: Theme = (amoledMode.value && resolvedDark) ? 'amoled' : resolvedDark ? 'dark' : 'light'
+
+  document.documentElement.setAttribute('data-theme', effective)
+  document.documentElement.classList.toggle('app-dark', effective !== 'light')
+
+  // Android status bar / navigation bar
+  const w = window as any
+  if (w._easytier_theme) {
+    if (effective === 'amoled' && w._easytier_theme.setAmoledMode) {
+      w._easytier_theme.setAmoledMode(true)
+    } else {
+      w._easytier_theme.setStatusBarStyle(effective !== 'light')
+    }
+  }
+}
+
+watch([themeMode, amoledMode], () => {
+  localStorage.setItem('themeMode', themeMode.value)
+  localStorage.setItem('amoledMode', amoledMode.value ? '1' : '0')
+  applyTheme()
 })
 
-function syncAmoledClass() {
-  const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-  document.documentElement.classList.toggle('amoled', !!(amoledMode.value && isDark))
-}
-onMounted(syncAmoledClass)
-
-// Follow system dark mode changes for AMOLED + Android status bar
+// Follow system dark mode changes
 if (typeof window !== 'undefined') {
-  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
-    syncAmoledClass()
-    // Android status bar
-    const w = window as any
-    if (w._easytier_theme) w._easytier_theme.setStatusBarStyle(e.matches)
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+    if (themeMode.value === 'auto') applyTheme()
   })
 }
 
@@ -834,6 +853,7 @@ function netName(): string { const n = currentNet.value; return n ? (n.config.in
 function onDocClick(e: MouseEvent) { const t = e.target as HTMLElement; if (!t.closest('.md-switch-menu') && !t.closest('.md-switch-btn')) showSwitchMenu.value = false }
 
 onMounted(() => {
+  applyTheme()
   loadWolConfig(); checkAllWolStatus(); wolPeriod = new Utils.PeriodicTask(checkAllWolStatus, 30000); wolPeriod.start()
   loadNetworks(); if (netInstId.value) refreshNet(); netPeriod = new Utils.PeriodicTask(fetchNetInfo, 3000); netPeriod.start()
   loadLuciConfig()
@@ -856,8 +876,8 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
     <template v-if="activeTab === 'wol'">
       <div class="md-hdr">
         <span class="md-hdr-title">{{ tt('wolDevices') }}</span>
-        <span v-if="sortedWol.length && getWolPathType() === 'tunnel'" class="md-path-badge">ET-LAN</span>
-        <span v-else-if="sortedWol.length && getWolPathType() === 'lan'" class="md-path-badge md-path-lan">LAN</span>
+        <span v-if="sortedWol.length && getWolPathType() === 'tunnel'" class="md-path-badge">{{ tt('etLan') }}</span>
+        <span v-else-if="sortedWol.length && getWolPathType() === 'lan'" class="md-path-badge md-path-lan">{{ tt('lanDirect') }}</span>
         <div class="flex-1" />
         <button class="md-hdr-btn" @click="openWolEditorFn" :title="tt('editConfig')">
           <svg width="20" height="20" viewBox="0 0 1024 1024" fill="currentColor"><path d="M714.965 128l-85.333 85.333H213.333v597.334h597.334V394.368L896 309.035v544.298A42.667 42.667 0 0 1 853.333 896H170.667A42.667 42.667 0 0 1 128 853.333V170.667A42.667 42.667 0 0 1 170.667 128h544.298z m159.062-38.4l60.373 60.416-392.192 392.192-60.245 0.128-0.086-60.459L874.027 89.6z"/></svg>
@@ -867,7 +887,7 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
         </button>
       </div>
       <div v-if="showDebug && wolDebug && sortedWol.length" class="px-4 py-1 text-xs opacity-60" style="color:var(--md-secondary);font-family:monospace;word-break:break-all">{{ wolDebug }}</div>
-      <div class="flex-1 overflow-y-auto px-3 py-2">
+      <div class="flex-1 overflow-y-auto px-3 pt-3 pb-2">
         <div v-if="!sortedWol.length" class="flex flex-col items-center justify-center h-full gap-3 opacity-50">
           <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--md-muted)" stroke-width="1.2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
           <div class="text-base" style="color:var(--md-muted)">{{ tt('noWolDevices') }}</div>
@@ -979,7 +999,7 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
           </div>
           <span v-if="natLabel(netSelfNat).text" class="md-chip md-chip-nat" :class="natLabel(netSelfNat).cls">{{ natLabel(netSelfNat).text }}</span>
         </div>
-        <div class="flex-1 overflow-y-auto px-3 py-2">
+        <div class="flex-1 overflow-y-auto px-3 pt-3 pb-2">
           <!-- Traffic Chart -->
           <div v-if="trafficHistory.length > 1" class="md-card md-traffic-card">
             <div class="md-traffic-hdr">
@@ -1073,8 +1093,8 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
     <div v-show="activeTab === 'luci'" class="flex flex-col flex-1 min-h-0">
       <div class="md-hdr">
         <span class="md-hdr-title">{{ currentLuciRouter?.ip || tt('routers') }}</span>
-        <span v-if="currentLuciRouter && getWolPathType() === 'tunnel'" class="md-path-badge">ET-LAN</span>
-        <span v-else-if="currentLuciRouter && getWolPathType() === 'lan'" class="md-path-badge md-path-lan">LAN</span>
+        <span v-if="currentLuciRouter && getWolPathType() === 'tunnel'" class="md-path-badge">{{ tt('etLan') }}</span>
+        <span v-else-if="currentLuciRouter && getWolPathType() === 'lan'" class="md-path-badge md-path-lan">{{ tt('lanDirect') }}</span>
         <div class="flex-1" />
         <button class="md-hdr-btn" @click="openLuciEditorFn" :title="tt('editConfig')">
           <svg width="20" height="20" viewBox="0 0 1024 1024" fill="currentColor"><path d="M714.965 128l-85.333 85.333H213.333v597.334h597.334V394.368L896 309.035v544.298A42.667 42.667 0 0 1 853.333 896H170.667A42.667 42.667 0 0 1 128 853.333V170.667A42.667 42.667 0 0 1 170.667 128h544.298z m159.062-38.4l60.373 60.416-392.192 392.192-60.245 0.128-0.086-60.459L874.027 89.6z"/></svg>
@@ -1122,27 +1142,7 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
         <div class="flex-1" />
         <div style="width:36px" />
       </div>
-      <div class="flex-1 overflow-y-auto">
-        <div class="md-card md-settings-card" @click="router.push('/')">
-          <div class="md-row">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.488.488 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
-            <div class="flex-1">
-              <div class="md-name">{{ tt('advancedSettings') }}</div>
-              <div class="md-sub">{{ tt('advancedSettingsDesc') }}</div>
-            </div>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="var(--md-muted)" opacity="0.5"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6z"/></svg>
-          </div>
-        </div>
-        <div class="md-card md-settings-card" @click="toggleLang">
-          <div class="md-row">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zm6.93 6h-2.95a15.65 15.65 0 00-1.38-3.56A8.03 8.03 0 0118.92 8zM12 4.04c.83 1.2 1.48 2.53 1.91 3.96h-3.82c.43-1.43 1.08-2.76 1.91-3.96zM4.26 14C4.1 13.36 4 12.69 4 12s.1-1.36.26-2h3.38c-.08.66-.14 1.32-.14 2 0 .68.06 1.34.14 2H4.26zm.82 2h2.95c.32 1.25.78 2.45 1.38 3.56A7.987 7.987 0 015.08 16zm2.95-8H5.08a7.987 7.987 0 014.33-3.56A15.65 15.65 0 008.03 8zM12 19.96c-.83-1.2-1.48-2.53-1.91-3.96h3.82c-.43 1.43-1.08 2.76-1.91 3.96zM14.34 14H9.66c-.09-.66-.16-1.32-.16-2 0-.68.07-1.35.16-2h4.68c.09.65.16 1.32.16 2 0 .68-.07 1.34-.16 2zm.25 5.56c.6-1.11 1.06-2.31 1.38-3.56h2.95a8.03 8.03 0 01-4.33 3.56zM16.36 14c.08-.66.14-1.32.14-2 0-.68-.06-1.34-.14-2h3.38c.16.64.26 1.31.26 2s-.1 1.36-.26 2h-3.38z"/></svg>
-            <div class="flex-1">
-              <div class="md-name">{{ tt('language') }}</div>
-              <div class="md-sub">{{ locale === 'cn' ? tt('chinese') : tt('english') }} — {{ tt('tapToSwitch') }}</div>
-            </div>
-            <span class="md-lang-badge">{{ locale === 'cn' ? '中文' : 'English' }}</span>
-          </div>
-        </div>
+      <div class="flex-1 overflow-y-auto py-1">
         <div class="md-card md-settings-card">
           <div class="md-row">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>
@@ -1157,6 +1157,40 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
             </select>
           </div>
         </div>
+        <div class="md-card md-settings-card">
+          <div class="md-row">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M12 7c-2.76 0-5 2.24-5 5s2.24 5 5 5 5-2.24 5-5-2.24-5-5-5zm-1 9.38V7.62c1.86.5 3 2.17 3 4.38s-1.14 3.88-3 4.38zM12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/></svg>
+            <div class="flex-1">
+              <div class="md-name">{{ tt('theme') }}</div>
+              <div class="md-sub">{{ themeMode === 'auto' ? tt('themeAuto') : themeMode === 'light' ? tt('themeLight') : tt('themeDark') }}</div>
+            </div>
+            <select class="md-select" :value="themeMode" @change="themeMode = ($event.target as HTMLSelectElement).value" @click.stop>
+              <option value="auto">{{ tt('themeAuto') }}</option>
+              <option value="light">{{ tt('themeLight') }}</option>
+              <option value="dark">{{ tt('themeDark') }}</option>
+            </select>
+          </div>
+        </div>
+        <div class="md-card md-settings-card" @click="amoledMode = !amoledMode">
+          <div class="md-row">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-14.5v13c-3.04 0-5.5-2.91-5.5-6.5s2.46-6.5 5.5-6.5z"/></svg>
+            <div class="flex-1">
+              <div class="md-name">{{ tt('amoled') }}</div>
+              <div class="md-sub">{{ tt('amoledDesc') }}</div>
+            </div>
+            <span class="md-toggle" :class="{ 'md-toggle-on': amoledMode }" />
+          </div>
+        </div>
+        <div class="md-card md-settings-card" @click="toggleLang">
+          <div class="md-row">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zm6.93 6h-2.95a15.65 15.65 0 00-1.38-3.56A8.03 8.03 0 0118.92 8zM12 4.04c.83 1.2 1.48 2.53 1.91 3.96h-3.82c.43-1.43 1.08-2.76 1.91-3.96zM4.26 14C4.1 13.36 4 12.69 4 12s.1-1.36.26-2h3.38c-.08.66-.14 1.32-.14 2 0 .68.06 1.34.14 2H4.26zm.82 2h2.95c.32 1.25.78 2.45 1.38 3.56A7.987 7.987 0 015.08 16zm2.95-8H5.08a7.987 7.987 0 014.33-3.56A15.65 15.65 0 008.03 8zM12 19.96c-.83-1.2-1.48-2.53-1.91-3.96h3.82c-.43 1.43-1.08 2.76-1.91 3.96zM14.34 14H9.66c-.09-.66-.16-1.32-.16-2 0-.68.07-1.35.16-2h4.68c.09.65.16 1.32.16 2 0 .68-.07 1.34-.16 2zm.25 5.56c.6-1.11 1.06-2.31 1.38-3.56h2.95a8.03 8.03 0 01-4.33 3.56zM16.36 14c.08-.66.14-1.32.14-2 0-.68-.06-1.34-.14-2h3.38c.16.64.26 1.31.26 2s-.1 1.36-.26 2h-3.38z"/></svg>
+            <div class="flex-1">
+              <div class="md-name">{{ tt('language') }}</div>
+              <div class="md-sub">{{ locale === 'cn' ? tt('chinese') : tt('english') }} — {{ tt('tapToSwitch') }}</div>
+            </div>
+            <span class="md-lang-badge">{{ locale === 'cn' ? '中文' : 'English' }}</span>
+          </div>
+        </div>
         <div class="md-card md-settings-card" @click="showDebug = !showDebug">
           <div class="md-row">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.488.488 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
@@ -1165,6 +1199,16 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
               <div class="md-sub">{{ tt('debugDesc') }}</div>
             </div>
             <span class="md-toggle" :class="{ 'md-toggle-on': showDebug }" />
+          </div>
+        </div>
+        <div v-if="showDebug" class="md-card md-settings-card" @click="router.push('/')">
+          <div class="md-row">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.488.488 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+            <div class="flex-1">
+              <div class="md-name">{{ tt('advancedSettings') }}</div>
+              <div class="md-sub">{{ tt('advancedSettingsDesc') }}</div>
+            </div>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="var(--md-muted)" opacity="0.5"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6z"/></svg>
           </div>
         </div>
         <div class="md-card md-settings-card">
@@ -1185,16 +1229,6 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
               <div class="md-name">{{ tt('help') }}</div>
               <div class="md-sub">{{ tt('helpDesc') }}</div>
             </div>
-          </div>
-        </div>
-        <div class="md-card md-settings-card" @click="amoledMode = !amoledMode; localStorage.setItem('amoledMode', amoledMode ? '1' : '0')">
-          <div class="md-row">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-14.5v13c-3.04 0-5.5-2.91-5.5-6.5s2.46-6.5 5.5-6.5z"/></svg>
-            <div class="flex-1">
-              <div class="md-name">{{ tt('amoled') }}</div>
-              <div class="md-sub">{{ tt('amoledDesc') }}</div>
-            </div>
-            <span class="md-toggle" :class="{ 'md-toggle-on': amoledMode }" />
           </div>
         </div>
         <div class="md-card md-settings-card">
@@ -1371,17 +1405,30 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
   --md-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08);
   --md-radius: 12px;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --md-primary: #42a5f5;
-    --md-card: #1e1e1e;
-    --md-text: #e0e0e0;
-    --md-secondary: #9e9e9e;
-    --md-muted: #757575;
-    --md-border: #333;
-    --md-divider: #2a2a2a;
-    --md-shadow: 0 1px 3px rgba(0,0,0,0.4);
-  }
+
+/* ===== Dark Theme ===== */
+html[data-theme="dark"] {
+  --md-primary: #42a5f5;
+  --md-card: #1e1e1e;
+  --md-text: #e0e0e0;
+  --md-secondary: #9e9e9e;
+  --md-muted: #757575;
+  --md-border: #333;
+  --md-divider: #2a2a2a;
+  --md-shadow: 0 1px 3px rgba(0,0,0,0.4);
+}
+
+/* ===== AMOLED Theme ===== */
+html[data-theme="amoled"] {
+  --md-primary: #42a5f5;
+  --md-card: #0f0f0f;
+  --md-text: #e0e0e0;
+  --md-secondary: #9e9e9e;
+  --md-muted: #757575;
+  --md-border: #141414;
+  --md-divider: #111;
+  --md-shadow: none;
+  background: #000;
 }
 
 .md-app {
@@ -1394,10 +1441,10 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
   --p-dialog-background: var(--md-card);
   --p-dialog-color: var(--md-text);
 }
-.md-dialog :deep(.p-dialog) { border-radius:16px; overflow:hidden; background:var(--md-card); }
-.md-dialog :deep(.p-dialog-header) { background:transparent !important; }
-.md-dialog :deep(.p-dialog-content) { background:transparent !important; }
-.md-dialog :deep(.p-dialog-footer) { background:transparent !important; }
+.md-dialog.p-dialog { border-radius:16px; overflow:hidden; background:var(--md-card); }
+.md-dialog .p-dialog-header { background:transparent !important; }
+.md-dialog .p-dialog-content { background:transparent !important; }
+.md-dialog .p-dialog-footer { background:transparent !important; }
 .md-dialog .p-dialog-header-icon:focus,
 .md-dialog .p-dialog-close-button:focus,
 .md-dialog .p-dialog-header-close:focus { outline:none !important; box-shadow:none !important; }
@@ -1405,9 +1452,9 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
 .md-dialog-content { padding:8px 16px 0 !important; background:transparent !important; }
 .md-dialog-ft { padding:0 !important; background:transparent !important; border:none !important; }
 /* Remove PrimeVue Textarea bottom margin inside dialogs */
-.md-dialog :deep(.p-textarea) { margin-bottom:0 !important; }
-.md-dialog :deep(textarea) { border:1px solid var(--md-border) !important; border-radius:10px !important; padding:10px 12px !important; background:var(--md-card) !important; color:var(--md-text) !important; font-size:0.88rem !important; outline:none !important; box-shadow:none !important; resize:vertical; }
-.md-dialog :deep(textarea):focus { border-color:var(--md-primary) !important; }
+.md-dialog .p-textarea { margin-bottom:0 !important; }
+.md-dialog textarea { border:1px solid var(--md-border) !important; border-radius:10px !important; padding:10px 12px !important; background:var(--md-card) !important; color:var(--md-text) !important; font-size:0.88rem !important; outline:none !important; box-shadow:none !important; resize:vertical; }
+.md-dialog textarea:focus { border-color:var(--md-primary) !important; }
 
 /* Dialog custom footer */
 .md-dlg-ft { display:flex; align-items:center; gap:6px; padding:4px 12px 10px; width:100%; }
@@ -1415,10 +1462,16 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
 .md-dlg-btn:active { background:rgba(0,0,0,0.08); }
 .md-dlg-btn-save { color:var(--md-primary); font-weight:600; }
 .md-dlg-btn-del { color:#c62828; }
-@media (prefers-color-scheme: dark) {
-  .md-dlg-btn:active { background:rgba(255,255,255,0.08); }
-  .md-dialog :deep(.p-dialog) { border: 1px solid rgba(255,255,255,0.08) !important; }
-}
+html[data-theme="dark"] .md-dlg-btn:active { background:rgba(255,255,255,0.08); }
+html[data-theme="dark"] .md-dialog.p-dialog { border: 1px solid var(--md-border) !important; }
+html[data-theme="amoled"] .md-dlg-btn:active { background:rgba(255,255,255,0.08); }
+html[data-theme="amoled"] .md-dialog.p-dialog { border: 1px solid var(--md-border) !important; }
+html[data-theme="amoled"] .p-dialog { background: #000 !important; }
+html[data-theme="amoled"] .p-dialog-header,
+html[data-theme="amoled"] .p-dialog-content,
+html[data-theme="amoled"] .p-dialog-footer { background: transparent !important; }
+
+html[data-theme="amoled"] .md-app { background: #000; }
 </style>
 
 <style scoped>
@@ -1426,15 +1479,12 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
 .md-hdr { display:flex; align-items:center; gap:8px; padding:0 16px; min-height:56px; flex-shrink:0; border-bottom:1px solid var(--md-border); }
 .md-hdr-title { font-size:1rem; font-weight:600; }
 .md-connected-text { font-size:0.78rem; color:#2e7d32; font-weight:500; white-space:nowrap; }
-@media (prefers-color-scheme: dark) { .md-connected-text { color:#66bb6a; } }
 .md-hdr-btn { display:flex; align-items:center; border:none; background:none; padding:8px; border-radius:50%; cursor:pointer; color:var(--md-secondary); }
-.md-hdr-btn:active { background:rgba(0,0,0,0.08); }
 .md-hdr-btn-off { color:#c62828; }
 
 /* Connection bar */
 .md-conn { display:flex; align-items:center; gap:10px; padding:8px 16px; font-size:0.78rem; flex-shrink:0; min-height:32px; }
 .md-conn-on { background:#e8f5e9; color:#2e7d32; }
-@media (prefers-color-scheme: dark) { .md-conn-on { background:#1b3a1b; color:#66bb6a; } }
 .md-conn-ips { display:flex; flex-direction:column; justify-content:center; white-space:pre-line; line-height:1.3; }
 .md-conn-ipv6 { font-size:0.7rem; color:var(--md-muted); }
 
@@ -1452,23 +1502,11 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
 
 /* Chips */
 .md-chip { display:inline-flex; padding:1px 7px; border-radius:8px; font-size:0.65rem; font-weight:500; background:#f5f5f5; color:#616161; }
-@media (prefers-color-scheme: dark) {
-  .md-wake-btn { background:#1a3050; color:#64b5f6; }
-  .md-wake-btn:active { background:#234a7e; }
-  .md-shutdown-btn { background:#3e1a1a; color:#ef9a9a; }
-  .md-shutdown-btn:active { background:#5e2828; }
-  .md-chip { background:#333; color:#9e9e9e; }
-}
 
 /* NAT colors */
 .md-nat-g { background:#e8f5e9; color:#2e7d32; }
 .md-nat-b { background:#e3f2fd; color:#1565c0; }
 .md-nat-o { background:#fff3e0; color:#e65100; }
-@media (prefers-color-scheme: dark) {
-  .md-nat-g { background:#1b3a1b; color:#66bb6a; }
-  .md-nat-b { background:#1a3050; color:#64b5f6; }
-  .md-nat-o { background:#3e2723; color:#ff9800; }
-}
 
 /* Quality */
 .md-quality { font-size:0.72rem; font-weight:500; flex-shrink:0; white-space:nowrap; }
@@ -1476,12 +1514,6 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
 .md-q-info { color:#1565c0; }
 .md-q-warn { color:#e65100; }
 .md-q-bad { color:#c62828; }
-@media (prefers-color-scheme: dark) {
-  .md-q-good { color:#66bb6a; }
-  .md-q-info { color:#64b5f6; }
-  .md-q-warn { color:#ff9800; }
-  .md-q-bad { color:#ef9a9a; }
-}
 
 .md-connect-btn {
   display:flex; flex-direction:column; align-items:center; gap:10px;
@@ -1502,7 +1534,6 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
 
 /* Path badge */
 .md-path-badge { font-size:0.65rem; font-weight:600; padding:2px 6px; border-radius:8px; background:#e3f2fd; color:#1565c0; }
-@media (prefers-color-scheme: dark) { .md-path-badge { background:#1a3050; color:#64b5f6; } }
 
 /* Card */
 .md-card { background:var(--md-card); border-radius:var(--md-radius); box-shadow:var(--md-shadow); margin-bottom:8px; cursor:pointer; transition:opacity 0.3s; }
@@ -1513,7 +1544,7 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
 .md-row-top { padding-bottom:1px; align-items:center; }
 .md-row-bot { padding-top:1px; }
 .md-name { font-size:0.9rem; font-weight:500; }
-.md-sub { font-size:0.76rem; color:var(--md-muted); margin-top:1px; }
+.md-sub { font-size:0.76rem; color:var(--md-muted); margin-top:1px; line-height:1.3; }
 .md-extra { margin:0 10px; padding:0 4px 12px 30px; font-size:0.76rem; color:var(--md-secondary); line-height:1.6; border-top:1px solid var(--md-divider); padding-top:7px; }
 
 /* Dot */
@@ -1532,31 +1563,24 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
 .md-rt-l { background:#e8f5e9; color:#2e7d32; }
 .md-rt-p { background:#e8f5e9; color:#2e7d32; }
 .md-rt-r { background:#fff3e0; color:#e65100; }
-@media (prefers-color-scheme: dark) {
-  .md-rt-l { background:#1b3a1b; color:#66bb6a; }
-  .md-rt-p { background:#1b3a1b; color:#66bb6a; }
-  .md-rt-r { background:#3e2723; color:#ff9800; }
-}
 
 /* Switch menu */
 .md-switch-menu { position:absolute; right:0; top:40px; z-index:200; min-width:200px; max-width:260px; padding:4px 0; overflow:hidden; }
 .md-sw-item { display:flex; align-items:center; gap:8px; padding:10px 14px; font-size:0.95rem; cursor:pointer; white-space:nowrap; }
 .md-sw-item:active { background:rgba(0,0,0,0.06); }
+.md-sw-del:active { background:rgba(0,0,0,0.08); color:#c62828; }
 .md-sw-divider { height:1px; background:var(--md-border); margin:4px 0; }
 .md-sw-check { color:var(--md-primary); font-weight:700; width:18px; display:inline-block; }
 .md-sw-del { display:flex; align-items:center; justify-content:center; width:24px; height:24px; border:none; background:none; cursor:pointer; color:var(--md-muted); font-size:1.1rem; border-radius:50%; flex-shrink:0; }
-.md-sw-del:active { background:rgba(0,0,0,0.08); color:#c62828; }
 
 /* Language badge */
 .md-lang-badge { font-size:0.7rem; font-weight:600; padding:2px 8px; border-radius:8px; background:#e3f2fd; color:#1565c0; flex-shrink:0; }
-@media (prefers-color-scheme: dark) { .md-lang-badge { background:#1a3050; color:#64b5f6; } }
 
-/* Toggle switch */
-.md-toggle { width:36px; height:18px; border-radius:9px; background:#bdbdbd; flex-shrink:0; position:relative; transition:background 0.2s; }
-.md-toggle::after { content:''; position:absolute; top:2px; left:2px; width:14px; height:14px; border-radius:50%; background:#fff; transition:transform 0.2s; }
+/* Toggle switch — Material Design 3 style */
+.md-toggle { width:44px; height:24px; border-radius:12px; background:#bdbdbd; flex-shrink:0; position:relative; transition:background 0.2s; }
+.md-toggle::after { content:''; position:absolute; top:3px; left:3px; width:18px; height:18px; border-radius:50%; background:#fff; transition:transform 0.2s; box-shadow:0 1px 3px rgba(0,0,0,0.2); }
 .md-toggle-on { background:var(--md-primary); }
-.md-toggle-on::after { transform:translateX(18px); }
-@media (prefers-color-scheme: dark) { .md-toggle { background:#555; } }
+.md-toggle-on::after { transform:translateX(20px); }
 
 /* Select dropdown */
 .md-select {
@@ -1601,9 +1625,6 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
 .md-chart-x-start { left:20px; bottom:0; }
 .md-chart-x-mid { left:50%; transform:translateX(-50%); bottom:0; }
 .md-chart-x-end { right:2px; bottom:0; }
-@media (prefers-color-scheme: dark) {
-  .md-traffic-total { color:var(--md-secondary); }
-}
 
 /* LuCI iframe */
 .luci-iframe { width:100%; height:100%; border:none; }
@@ -1625,16 +1646,6 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
   background:#e3f2fd; color:#1565c0; font-weight:600;
 }
 .md-settings-btn-primary:active { background:#bbdefb; }
-@media (prefers-color-scheme: dark) {
-  .md-settings-btn { background:#333; color:var(--md-muted); }
-  .md-settings-btn:active { background:#444; }
-  .md-settings-btn-export { background:#1b3a1b; color:#66bb6a; }
-  .md-settings-btn-export:active { background:#2a4a2a; }
-  .md-settings-btn-primary { background:#1a3050; color:#64b5f6; }
-  .md-settings-btn-primary:active { background:#234a7e; }
-}
-
-/* Help dialog */
 .md-help-section { padding: 12px 0; }
 .md-help-section + .md-help-section { border-top: 1px solid var(--md-divider); }
 .md-help-title { font-size: 0.92rem; font-weight: 600; color: var(--md-text); margin-bottom: 4px; }
@@ -1645,27 +1656,77 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
 .md-help-cfg-label { font-size: 0.75rem; font-weight: 600; color: var(--md-muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
 .md-help-cfg-wrap { position: relative; }
 .md-help-code { font-size: 0.76rem; line-height: 1.55; padding: 10px 12px; margin: 0 0 4px; border-radius: 8px; background: #f0f0f0; color: var(--md-text); overflow-x: auto; white-space: pre; font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'SF Mono', 'Consolas', monospace; }
-@media (prefers-color-scheme: dark) {
-  .md-help-link { color: #fff; }
-  .md-help-link:active { opacity: 0.85; }
-  .md-help-code { background: #1e1e1e; }
-}
 .md-help-copy { position: absolute; top: 6px; right: 8px; padding: 3px 10px; border: none; border-radius: 4px; font-size: 0.72rem; font-weight: 600; cursor: pointer; background: var(--md-secondary); color: #fff; opacity: 0.7; transition: opacity 0.15s; }
 .md-help-copy:hover { opacity: 1; }
 
-/* AMOLED pure black */
-.amoled {
-  --md-card: #000;
-  --md-border: #1e1e1e;
-  --md-divider: #141414;
-  --md-shadow: none;
-}
-.amoled .md-conn-on { background: #0d0d0d !important; }
-.amoled .md-settings-card { background: #000; }
-.amoled :deep(.p-dialog) { background: #000 !important; }
-.amoled :deep(.p-dialog-header) { background: transparent !important; }
-.amoled :deep(.p-dialog-content) { background: transparent !important; }
-.amoled :deep(.p-dialog-footer) { background: transparent !important; }
-.amoled .md-help-code { background: #0d0d0d; }
+/* ===== Dark Theme ===== */
+html[data-theme="dark"] .md-connected-text { color:#66bb6a; }
+html[data-theme="dark"] .md-hdr-btn:active { background:rgba(255,255,255,0.08); }
+html[data-theme="dark"] .md-conn-on { background:#1b3a1b; color:#66bb6a; }
+html[data-theme="dark"] .md-wake-btn { background:#1a3050; color:#64b5f6; }
+html[data-theme="dark"] .md-wake-btn:active { background:#234a7e; }
+html[data-theme="dark"] .md-shutdown-btn { background:#3e1a1a; color:#ef9a9a; }
+html[data-theme="dark"] .md-shutdown-btn:active { background:#5e2828; }
+html[data-theme="dark"] .md-chip { background:#333; color:#9e9e9e; }
+html[data-theme="dark"] .md-nat-g { background:#1b3a1b; color:#66bb6a; }
+html[data-theme="dark"] .md-nat-b { background:#1a3050; color:#64b5f6; }
+html[data-theme="dark"] .md-nat-o { background:#3e2723; color:#ff9800; }
+html[data-theme="dark"] .md-q-good { color:#66bb6a; }
+html[data-theme="dark"] .md-q-info { color:#64b5f6; }
+html[data-theme="dark"] .md-q-warn { color:#ff9800; }
+html[data-theme="dark"] .md-q-bad { color:#ef9a9a; }
+html[data-theme="dark"] .md-path-badge { background:#1a3050; color:#64b5f6; }
+html[data-theme="dark"] .md-rt-l { background:#1b3a1b; color:#66bb6a; }
+html[data-theme="dark"] .md-rt-p { background:#1b3a1b; color:#66bb6a; }
+html[data-theme="dark"] .md-rt-r { background:#3e2723; color:#ff9800; }
+html[data-theme="dark"] .md-sw-item:active { background:rgba(255,255,255,0.06); }
+html[data-theme="dark"] .md-sw-del:active { background:rgba(255,255,255,0.08); color:#c62828; }
+html[data-theme="dark"] .md-lang-badge { background:#1a3050; color:#64b5f6; }
+html[data-theme="dark"] .md-toggle { background:#555; }
+html[data-theme="dark"] .md-settings-btn { background:#333; color:var(--md-muted); }
+html[data-theme="dark"] .md-settings-btn:active { background:#444; }
+html[data-theme="dark"] .md-settings-btn-export { background:#1b3a1b; color:#66bb6a; }
+html[data-theme="dark"] .md-settings-btn-export:active { background:#2a4a2a; }
+html[data-theme="dark"] .md-settings-btn-primary { background:#1a3050; color:#64b5f6; }
+html[data-theme="dark"] .md-settings-btn-primary:active { background:#234a7e; }
+html[data-theme="dark"] .md-help-code { background:#1e1e1e; }
+
+/* ===== AMOLED Theme ===== */
+html[data-theme="amoled"] .md-hdr { background:#000; }
+html[data-theme="amoled"] .md-tabs { background:#000; }
+html[data-theme="amoled"] .md-connected-text { color:#66bb6a; }
+html[data-theme="amoled"] .md-hdr-btn:active { background:rgba(255,255,255,0.08); }
+html[data-theme="amoled"] .md-conn-on { background:#0a1a0a !important; color:#66bb6a; }
+html[data-theme="amoled"] .md-wake-btn { background:#0d0d0d; color:#64b5f6; }
+html[data-theme="amoled"] .md-wake-btn:active { background:#1a1a1a; }
+html[data-theme="amoled"] .md-shutdown-btn { background:#0d0d0d; color:#ef9a9a; }
+html[data-theme="amoled"] .md-shutdown-btn:active { background:#1a1a1a; }
+html[data-theme="amoled"] .md-chip { background:#0d0d0d; color:#9e9e9e; }
+html[data-theme="amoled"] .md-nat-g { background:#0a1a0a; color:#66bb6a; }
+html[data-theme="amoled"] .md-nat-b { background:#0a1528; color:#64b5f6; }
+html[data-theme="amoled"] .md-nat-o { background:#1a1010; color:#ff9800; }
+html[data-theme="amoled"] .md-q-good { color:#66bb6a; }
+html[data-theme="amoled"] .md-q-info { color:#64b5f6; }
+html[data-theme="amoled"] .md-q-warn { color:#ff9800; }
+html[data-theme="amoled"] .md-q-bad { color:#ef9a9a; }
+html[data-theme="amoled"] .md-path-badge { background:#0a1528; color:#64b5f6; }
+html[data-theme="amoled"] .md-rt-l { background:#0a1a0a; color:#66bb6a; }
+html[data-theme="amoled"] .md-rt-p { background:#0a1a0a; color:#66bb6a; }
+html[data-theme="amoled"] .md-rt-r { background:#1a1010; color:#ff9800; }
+html[data-theme="amoled"] .md-sw-item:active { background:rgba(255,255,255,0.06); }
+html[data-theme="amoled"] .md-sw-del:active { background:rgba(255,255,255,0.08); color:#c62828; }
+html[data-theme="amoled"] .md-lang-badge { background:#0a1528; color:#64b5f6; }
+html[data-theme="amoled"] .md-toggle { background:#333; }
+html[data-theme="amoled"] .md-toggle-on { background:var(--md-primary); }
+html[data-theme="dark"] .md-toggle-on { background:var(--md-primary); }
+html[data-theme="amoled"] .md-settings-btn { background:#0d0d0d; color:var(--md-muted); }
+html[data-theme="amoled"] .md-settings-btn:active { background:#1a1a1a; }
+html[data-theme="amoled"] .md-settings-btn-export { background:#0a1a0a; color:#66bb6a; }
+html[data-theme="amoled"] .md-settings-btn-export:active { background:#0d240d; }
+html[data-theme="amoled"] .md-settings-btn-primary { background:#0a1528; color:#64b5f6; }
+html[data-theme="amoled"] .md-settings-btn-primary:active { background:#0f1f3a; }
+html[data-theme="amoled"] .md-help-code { background:#0d0d0d; }
+html[data-theme="amoled"] .md-help-copy { background:#333; }
+html[data-theme="amoled"] .md-select { background-color:#0d0d0d; }
 
 </style>

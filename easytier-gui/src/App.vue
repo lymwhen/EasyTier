@@ -64,9 +64,8 @@ onMounted(async () => {
   justify-content: center;
   background: #f5f5f5;
 }
-@media (prefers-color-scheme: dark) {
-  .splash { background: #121212; }
-}
+html[data-theme="dark"] .splash { background: #121212; }
+html[data-theme="amoled"] .splash { background: #000; }
 .splash-inner {
   text-align: center;
 }
@@ -80,9 +79,7 @@ onMounted(async () => {
   margin-bottom: 24px;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
-@media (prefers-color-scheme: dark) {
-  .splash-title { color: #e0e0e0; }
-}
+html[data-theme="dark"] .splash-title { color: #e0e0e0; }
 .splash-spinner {
   width: 28px;
   height: 28px;
