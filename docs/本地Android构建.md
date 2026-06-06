@@ -1,16 +1,14 @@
 # 本地 Android 构建
 
-EasyTier Tauri v2 Android App 本地（Windows）构建完整指南。
+EasyTier Tauri v2 Android App 本地（Windows）构建指南。
 
-> **CI 全平台构建**请参阅 [docs/CI全平台构建.md](CI全平台构建.md)。
+> CI 全平台构建请参阅 [docs/CI全平台构建.md](CI全平台构建.md)。
 
 ---
 
-## 一、日常构建
+## 一、前置：配置文件 `.cargo/config.toml`
 
-### 1.1 关键配置文件
-
-##### `.cargo/config.toml`
+构建依赖以下配置。该文件含本机绝对路径，通过 `skip-worktree` 隔离，不影响远端仓库和 CI：
 
 ```toml
 [env]
@@ -19,33 +17,55 @@ AR_aarch64_linux_android = "D:/tools/Android/Sdk/ndk/27.0.12077973/toolchains/ll
 BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android = "-resource-dir=D:/tools/Android/Sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/18 --sysroot=D:/tools/Android/Sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/windows-x86_64/sysroot -ID:/tools/Android/Sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include"
 PROTOC = "C:/Users/lymly/protoc/bin/protoc.exe"
 LIBCLANG_PATH = "C:/Users/lymly/llvm-dll"
+GIT_CEILING_DIRECTORIES = "D:/projects/projectsAlpha/EasyTier"
 
 [target.aarch64-linux-android]
 linker = "D:/tools/Android/Sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/windows-x86_64/bin/aarch64-linux-android21-clang.cmd"
 ar = "D:/tools/Android/Sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-ar.exe"
 ```
 
-> `.cargo/config.toml` 包含本机路径，使用 `git update-index --skip-worktree .cargo/config.toml` 防止误提交。详见 [1.6 节](#16-与远端仓库的隔离)。
+### 各变量作用
 
-### 1.2 增量构建（推荐，~1m40s）
+| 变量 | 用途 |
+|------|------|
+| `CC_aarch64_linux_android` / `AR_*` / `BINDGEN_EXTRA_CLANG_ARGS_*` | Android NDK 交叉编译（kcp-sys, ring 等 C 依赖） |
+| `PROTOC` | prost-wkt-types build.rs |
+| `LIBCLANG_PATH` | kcp-sys bindgen |
+| `GIT_CEILING_DIRECTORIES` | 阻止 git-version proc-macro 读取 `.git/` 文件（见下文"指纹稳定性"） |
+| `[target.aarch64-linux-android]` | linker、ar 路径 |
 
-**适用条件**：
-
-- `.cargo/config.toml` `[env]` 中已固化所有交叉编译变量（CC/AR/BINDGEN/PROTOC/LIBCLANG_PATH/linker）
-- 仅修改前端代码（Vue/TS/CSS）或 easytier-gui Rust 代码
-- easytier-core 及其依赖未变更
-
-**关键约束**：Vite + Cargo 必须在**同一个 bash 调用**中链式执行。分开调用会导致 MSYS2 跨会话环境漂移，依赖 crate build script 检测到 env var 变化 → easytier 指纹失效 → 全量重编译（~7m47s）。
+### skip-worktree 隔离
 
 ```bash
-# Step 1: Vite + Cargo（bash，必须同一调用）
+git update-index --skip-worktree .cargo/config.toml
+```
+
+效果：`git status`/`git diff` 不显示该文件变动，`git pull`/`git merge` 不覆盖本地版本。
+
+上游更新此文件时（低频，几个月一次）：
+```bash
+git update-index --no-skip-worktree .cargo/config.toml
+git checkout .cargo/config.toml               # 获取上游新版
+# 手动将上述 [env] + [target] 块合并进去
+git update-index --skip-worktree .cargo/config.toml
+```
+
+---
+
+## 二、构建命令
+
+### 三步流程
+
+**Step 1 — Vite + Cargo（bash，必须同一调用）**
+
+```bash
 export PATH="$HOME/.cargo/bin:$HOME/.npm-global:$PATH"
 cd easytier-gui && pnpm vite build && cd src-tauri && cargo build --lib --release --target aarch64-linux-android --features "tauri/custom-protocol"
 ```
 
+**Step 2 — Gradle（必须 PowerShell，不可 bash）**
+
 ```powershell
-# Step 2: Gradle（必须 PowerShell，不可 bash）
-# rustBuildArm64Release 需要 tauri server-addr 文件（仅 Android Studio 流程提供），命令行构建跳过
 $env:ANDROID_HOME = "D:/tools/Android/Sdk"
 $env:JAVA_HOME = "D:/tools/Java/jdk-17.0.12"
 $env:GRADLE_USER_HOME = "D:/tmp/gradle-tmp"
@@ -55,198 +75,83 @@ Remove-Item -Recurse -Force "D:\projects\projectsAlpha\EasyTier\easytier-gui\src
 Remove-Item -Recurse -Force "D:\projects\projectsAlpha\EasyTier\easytier-gui\src-tauri\gen\android\app\build\intermediates\stripped_native_libs" -ErrorAction SilentlyContinue
 Set-Location "D:\projects\projectsAlpha\EasyTier\easytier-gui\src-tauri\gen\android"
 .\gradlew.bat assembleArm64Release --no-daemon -x rustBuildArm64Release
+```
 
-# Step 3: 复制 APK 到测试目录
+**Step 3 — 复制 APK**
+
+```powershell
 Copy-Item -Force "D:\projects\projectsAlpha\EasyTier\easytier-gui\src-tauri\gen\android\app\build\outputs\apk\arm64\release\app-arm64-release.apk" "F:\tmp\app-arm64-release.apk"
 ```
 
-### 1.3 全量构建（~10min）
-
-**触发条件**（满足任一即全量）：
-- `.cargo/config.toml` `[env]` 变量有变更
-- easytier-core 或其依赖（kcp-sys, prost-wkt-types 等）源码有变更
-- 构建缓存（`target/`）被清理
-- 首次在干净仓库构建
-
-**命令同上**。Cargo 自动判断哪些 crate 需要重编译，无需手动清理。
-
-### 1.4 构建耗时速查
+### 构建耗时
 
 | 变更范围 | Vite | Cargo easytier | Cargo easytier-gui | Gradle | 总耗时 |
 |----------|:---:|:---:|:---:|:---:|------|
-| 仅前端（Vue/TS/CSS） | ~53s | 缓存命中 | 重链 ~1m27s | ~11s | **~1m40s** |
-| easytier-gui Rust | ~53s | 缓存命中 | 重编+链 ~2m | ~11s | ~2m15s |
-| easytier-core 依赖 | ~53s | 重编 ~7m | 重编+链 ~1m | ~11s | **~10min** |
-| 无任何变更 | ~53s | 缓存命中 | 缓存命中 ~1.3s | ~11s | ~1m05s |
-
-### 1.5 构建步骤说明
-
-#### 为什么三步缺一不可
-
-Tauri 通过 `tauri_build::build()` 在 Cargo 编译阶段将 `dist/` 目录嵌入到 `.so` 二进制中。**即使只改前端，也必须重新构建 .so**，否则 APK 加载的是旧前端。
-
-#### 为什么 Vite + Cargo 必须同一 bash 调用
-
-MSYS2 bash 每次调用时初始化环境。分开调用 → 两次会话之间存在细微环境差异 → 依赖 crate 的 build.rs（`rerun-if-env-changed` in kcp-sys, prost-wkt-types）检测到 env var 变化 → easytier 指纹失效 → 全量重编译（~7m47s）。同一调用内环境快照一致 → 指纹稳定 → 增量编译（~1m27s）。
-
-#### 为什么 Gradle 必须用 PowerShell
-
-bash (MSYS2) 的文件操作与 Windows NTFS 文件锁不兼容，Gradle transforms 阶段出现 `Could not move temporary workspace` 错误。PowerShell 使用 Windows 原生文件 API，无此冲突。
-
-#### 为什么跳过 Gradle 的 Rust 任务、手动复制 .so
-
-Gradle 的 `rustBuildArm64Release` 任务内部调用 `pnpm tauri android android-studio-script`，该命令需要通过一个 `server-addr` 临时文件（位于 `%TEMP%\com.kkrainbow.easytier-server-addr`）连接到 Tauri CLI 的 TCP 服务端。这个服务端仅 Android Studio 调用 Gradle 时会启动，纯命令行构建中不存在，Tauri CLI 直接 panic。
-
-**解决方案**：Step 1 已经通过 `cargo build --lib` 完成了 Rust 编译并生成了 `.so`，Step 2 只需手动将其复制到 `jniLibs/` 并清理 Gradle 中间产物（`merged_jni_libs` / `merged_native_libs` / `stripped_native_libs`），然后用 `-x rustBuildArm64Release` 跳过该任务。
-
-#### 增量编译的 Cargo 配置
-
-ALL 交叉编译环境变量已固化在 `.cargo/config.toml` 的 `[env]` 块中：
-
-- `CC_aarch64_linux_android`、`AR_aarch64_linux_android`、`BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android` — Android target 专用
-- `PROTOC`、`LIBCLANG_PATH` — 全局，用于 prost-wkt-types / kcp-sys bindgen
-- `[target.aarch64-linux-android]` — linker、ar
-
-**绝对不要在 shell 中再次 export 这些变量** — MSYS2 路径转换会破坏指纹稳定性。
-
-### 1.6 与远端仓库的隔离
-
-`.cargo/config.toml` 包含本机绝对路径，通过 `skip-worktree` 防止误提交：
-
-```
-本地 .cargo/config.toml — 包含 [env] + [target.aarch64-linux-android]
-远端 .cargo/config.toml — 与上游官方仓库一致（不含本地路径）
-
-git update-index --skip-worktree .cargo/config.toml
-```
-
-**效果**：
-- `git status` / `git diff` 不显示该文件改动，不会误提交
-- `git pull` / `git merge` 不覆盖本地版本
-- 比 `--assume-unchanged` 更强力，不会被 update-index 自动重置
-
-**上游更新此文件时**（上游低频变更，几个月一次）：
-```bash
-# 检查上游是否有更新
-git diff .cargo/config.toml      # 有输出 → 上游有变动
-git log -1 -- .cargo/config.toml # 看最新提交时间
-
-# 合并流程
-git update-index --no-skip-worktree .cargo/config.toml
-git checkout .cargo/config.toml          # 获取上游新版本
-# 手动将本地 [env] + [target] 块合并进新版本
-git update-index --skip-worktree .cargo/config.toml
-```
+| 仅前端（Vue/TS/CSS） | ~55s | 缓存命中 | 重链 ~40s | ~12s | **~1m45s** |
+| easytier-gui Rust | ~55s | 缓存命中 | 重编 ~1m | ~12s | ~2m10s |
+| easytier-core 或其依赖 | ~55s | 重编 ~7m | 重编 ~1m | ~12s | **~10min** |
+| 无任何变更 | ~55s | 缓存命中 | 缓存命中 | ~12s | ~1m05s |
 
 ---
 
-## 二、工具链安装（Windows 开发环境）
+## 三、关键原理
 
-本机缺少 Visual Studio Build Tools，使用 GNU/MinGW 工具链替代：
+### 为什么三步缺一不可
 
-| 工具 | 路径/获取方式 | 用途 |
+Tauri 的 `tauri_build::build()` 在 Cargo 编译阶段将 `dist/` 以 BROTLI 压缩嵌入 `.so`。**即使只改前端，也必须重新编译 .so**，否则 APK 加载旧前端。
+
+### 为什么 Vite + Cargo 必须同一 bash 调用
+
+MSYS2 bash 每次调用自动做 Unix/Windows 路径转换。分开调用 → 两次会话的路径转换结果可能不同 → PROTOC/LIBCLANG_PATH 值在 `C:/...` 和 `/c/...` 间波动 → prost-wkt-types、kcp-sys 的 build.rs 通过 `rerun-if-env-changed` 检测到变化 → easytier 依赖链全量重编。
+
+同一 bash 调用内环境快照一致 → Cargo 指纹稳定 → 增量编译。
+
+### 为什么 Gradle 必须用 PowerShell
+
+bash (MSYS2) 文件操作与 Windows NTFS 文件锁冲突，Gradle transforms 阶段报 `Could not move temporary workspace`。PowerShell 使用 Windows 原生 API 无此问题。
+
+### 为什么跳过 Gradle 的 rustBuildArm64Release
+
+`rustBuildArm64Release` 内部调用 `pnpm tauri android android-studio-script`，依赖 `%TEMP%\com.kkrainbow.easytier-server-addr` 临时文件连接 Tauri CLI TCP 服务端。该服务端仅 Android Studio 启动时存在，命令行构建中不存在 → Tauri CLI panic。Step 1 已通过 `cargo build --lib` 生成了 `.so`，Step 2 手动复制并 `-x` 跳过该任务即可。
+
+清理 `merged_jni_libs` / `merged_native_libs` / `stripped_native_libs` 确保 Gradle 不使用缓存的旧 `.so`。
+
+### 指纹稳定性
+
+Cargo 增量编译依赖"指纹"(fingerprint) 稳定。以下措施保证指纹不因无关因素失效：
+
+1. **所有交叉编译 env var 固化在 `[env]`** — 不经过 shell export，Cargo 直接从配置文件读取，值恒定
+2. **Vite + Cargo 同一 bash 调用** — 单次环境快照
+3. **`GIT_CEILING_DIRECTORIES`** — easytier-core 的 `constants.rs` 使用 `git_version::git_version!()` proc-macro，编译时运行 `git describe` 并生成 `include_bytes!(".git/index")`。Cargo 基于 mtime 追踪该文件 → 任何 git 操作（含 IDE 后台刷新）都会更新 `.git/index` mtime → easytier-core 指纹失效。设置此变量后 proc-macro 找不到 git 仓库 → 走 fallback（`CARGO_PKG_VERSION`）→ 不生成 git 文件追踪 → 指纹稳定
+
+开发构建的版本号因此显示纯 `CARGO_PKG_VERSION`（如 `2.6.4`），无 commit hash。CI 不受影响。
+
+---
+
+## 四、工具链
+
+| 工具 | 路径 | 用途 |
 |------|------|------|
-| Rust | `$HOME/.cargo/bin` (`rustup-init.exe -y`) | 编译工具链 |
-| MinGW-w64 | `$HOME/mingw64`（解压 `x86_64-14.2.0-release-posix-seh-ucrt-rt_v12-rev0.7z`） | GCC 链接器 |
-| LLVM/libclang | `$HOME/llvm-dll`（从 `LLVM-22.1.6-win64.exe` 提取 `bin/libclang.dll`） | kcp-sys bindgen |
-| protoc | `$HOME/protoc`（解压 `protoc-29.3-win64.zip`） | prost-wkt-types |
-| pnpm | `$HOME/.npm-global` (`npm install -g pnpm`) | 前端包管理 |
+| Rust | `$HOME/.cargo/bin` | 编译工具链 |
+| MinGW-w64 | `$HOME/mingw64` | GCC 链接器（替代 VS Build Tools） |
+| LLVM/libclang | `$HOME/llvm-dll`（`libclang.dll`） | kcp-sys bindgen |
+| protoc | `$HOME/protoc/bin/protoc.exe` | prost-wkt-types |
+| pnpm | `$HOME/.npm-global` | 前端包管理 |
 | JDK 17 | `D:\tools\Java\jdk-17.0.12` | Android Gradle |
-| Android SDK | `D:\tools\Android\Sdk`（含 NDK 27.0.12077973 + build-tools 34.0.0 + platforms android-34） | Android 编译 |
-| Npcap | `Packet.dll` + `wpcap.dll` | easytier-core Windows 运行时（构建不需要） |
+| Android SDK | `D:\tools\Android\Sdk`（NDK 27.0.12077973 + build-tools 34 + platform 34） | Android 编译 |
 
 ---
 
-## 三、历史构建问题及根因
-
-### 3.1 Cargo 增量编译缓存失效（构建加速 4 倍）
-
-**现象**：每次构建 easytier 都全量重编译（~8min），即使只改前端。
-
-**根因（第一层）**：构建脚本每次动态 `export` 交叉编译 env vars（CC/AR/BINDGEN/PROTOC/LIBCLANG_PATH），这些变量被依赖 crate 的 build.rs 通过 `rerun-if-env-changed` 追踪。Cargo 每次看到不同的 env var 来源/值，指纹失效导致依赖链全量重编译。
-
-**解决**：
-1. CC/AR/BINDGEN/linker 固化到 `.cargo/config.toml` 的 `[env]` 块 — Cargo 将其视为静态配置，指纹稳定
-2. PROTOC、LIBCLANG_PATH 最初保留在 shell export，后来发现仍有问题（见 3.2）
-
-**效果**：
-
-| 场景 | 修复前 | 修复后 |
-|------|--------|--------|
-| 全量构建 | ~8min | ~8min（首次） |
-| 前端变更 | ~8min | ~2min（Vite 53s + Cargo 1m25s） |
-| 无变更 | ~8min | ~55s |
-
-### 3.2 MSYS2 跨会话环境漂移
-
-**现象**：3.1 修复后，同一 bash 会话内两次 Cargo 调用缓存正常（第二次 ~1.37s），但跨会话仍全量重编译（~7m47s）。Vite + Cargo 在同一 bash 调用中执行时正常（~1m27s），分开调用时异常。
-
-**根因**：PROTOC 和 LIBCLANG_PATH 仍在 bash 中通过 `export` 注入。MSYS2 bash 每次调用时自动对路径值做 Unix/Windows 格式转换，导致 Cargo 进程看到的实际值在 `C:/Users/...` 和 `/c/Users/...` 之间波动（取决于 MSYS2 的路径转换启发式策略）。跨会话时这种波动概率更高。`prost-wkt-types` 和 `kcp-sys` 的 build.rs 通过 `rerun-if-env-changed` 追踪这些变量，检测到变化即触发依赖链全量重编。
-
-**受影响的依赖链**：
-```
-LIBCLANG_PATH 不稳定 → kcp-sys (bindgen) 重编译 → easytier 重编译
-PROTOC 不稳定 → prost-wkt-types 重编译 → easytier 重编译
-```
-
-**最终解决**：将 PROTOC 和 LIBCLANG_PATH 也加入 `.cargo/config.toml` 的 `[env]` 块，同时 **Vite + Cargo 在同一 bash 调用中链式执行**。`[env]` 中的值由 Cargo 直接从配置文件读取，不经过 shell 环境变量的 MSYS2 路径转换层。同一次调用保证单一环境快照。
-
-**教训**：
-- 所有 Rust 构建依赖的 env var 都不应通过 MSYS2 bash export 注入
-- MSYS2 路径转换是静默且不可控的，即使每次写完全相同路径也可能出现不同结果
-- 诊断方法：同一 bash 调用内 `cargo build` 两次，第二次 <2s = 缓存正常；跨会话分别调用对比时间
-
-### 3.3 Gradle bash 文件锁冲突
-
-**现象**：Gradle 构建失败 `Could not move temporary workspace`。
-
-**根因**：bash (MSYS2) 文件操作模拟层与 Windows NTFS 原生文件锁冲突，Gradle transforms 阶段移动临时文件时锁冲突。
-
-**解决**：Gradle 必须用 PowerShell 执行，并设置 `$env:GRADLE_USER_HOME` 到临时目录隔离可能被锁的默认缓存路径。
-
-### 3.4 前端改动后 APK 不更新
-
-**现象**：只改前端代码，构建后 APK 里的 WebView 仍加载旧 UI。
-
-**根因**：Tauri build.rs（`tauri_build::build()`）在 Cargo 编译阶段将 `dist/` 嵌入 `.so`。只重编前端不重编 Rust → 旧 `dist/` 仍嵌入在 `.so` 中。
-
-**解决**：任何改动都三步全跑。env var 固化后 Cargo 自动增量编译，纯前端变更仅 easytier-gui 重编（~1m27s）。
-
-### 3.5 `link.exe` 找不到
-
-**根因**：本机无 Visual Studio Build Tools。**解决**：改用 GNU 工具链 + MinGW-w64。
-
-### 3.6 `libclang.dll` / `protoc` 找不到
-
-**根因**：kcp-sys bindgen 需要 libclang，prost-wkt-types build.rs 需要 protoc。**解决**：从 LLVM 安装包提取 `libclang.dll`，下载 protoc 到本地。
-
-### 3.7 `usesCleartextTraffic` 占位符不生效
-
-**根因**：Release 构建默认 `false`。**解决**：AndroidManifest.xml 硬编码 `"true"` + build.gradle.kts 设 `manifestPlaceholders`。
-
-### 3.8 Windows 符号链接失败
-
-**根因**：系统不允许非管理员创建符号链接。**解决**：修改 BuildTask.kt 改为文件复制替代符号链接。
-
-### 3.9 Gradle 缓存损坏反复发生
-
-**根因**：JDK 版本切换或磁盘问题。**解决**：删除整个 `~/.gradle/caches` 重建。
-
----
-
-## 四、踩坑速查表
+## 五、踩坑速查
 
 | 问题 | 原因 | 解决 |
 |------|------|------|
-| Cargo 全量重编译（仅改前端） | 交叉编译 env var 每次动态注入 → 指纹失效 | 固化到 `.cargo/config.toml` `[env]` |
-| Cargo 跨会话全量重编译 | MSYS2 路径转换导致 PROTOC/LIBCLANG_PATH 值波动 | PROTOC/LIBCLANG_PATH 也固入 `[env]` + Vite+Cargo 同调用链式 |
-| `link.exe` 找不到 | 无 VS Build Tools | 改用 GNU 工具链 + MinGW-w64 |
-| `libclang.dll` 找不到 | kcp-sys bindgen 需要 | 从 LLVM 提取到 `$HOME/llvm-dll` |
-| `protoc` 找不到 | prost-wkt-types build.rs 需要 | 下载 protoc 到 `$HOME/protoc` |
-| `packet.dll` 找不到 | easytier-core 运行时依赖 Npcap | 从 Npcap 提取 DLL |
-| Gradle `Could not move temporary workspace` | bash + NTFS 文件锁冲突 | 用 PowerShell + `$env:GRADLE_USER_HOME` 到临时目录 |
+| 仅改前端却全量重编（~9min） | git-version proc-macro 追踪 `.git/index` mtime | `.cargo/config.toml` `[env]` 加 `GIT_CEILING_DIRECTORIES` |
+| 跨会话 Cargo 全量重编 | MSYS2 路径转换导致 env var 值波动 | 全部 env var 固入 `[env]`，Vite+Cargo 同一 bash 调用 |
+| Gradle `Could not move temporary workspace` | bash + NTFS 文件锁冲突 | 用 PowerShell，设 `$env:GRADLE_USER_HOME` |
+| `link.exe` 找不到 | 无 VS Build Tools | 改用 MinGW-w64 |
+| `libclang.dll` / `protoc` 找不到 | kcp-sys / prost-wkt-types 构建需要 | 安装 LLVM / protoc 到 `$HOME` |
 | APK 不更新前端 | Tauri 将 `dist/` 嵌入 `.so` | 前端变更也必须跑 Cargo |
-| `usesCleartextTraffic` 不生效 | Release 构建默认 false | Manifest 硬编码 + build.gradle.kts 设 manifestPlaceholders |
+| `usesCleartextTraffic` 不生效 | Release 默认 false | Manifest 硬编码 + manifestPlaceholders |
 | Windows 符号链接失败 | 非管理员无权限 | BuildTask.kt 改用文件复制 |
-| Gradle 缓存损坏 | JDK 切换或磁盘问题 | 删除 `~/.gradle/caches` |
-| `sortedWol` computed 被误删 | 替换代码时边界未对齐 | 注意不覆盖相邻声明 |
+| Gradle 缓存损坏 | JDK 切换或磁盘问题 | 删 `~/.gradle/caches` |
