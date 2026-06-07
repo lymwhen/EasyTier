@@ -118,6 +118,11 @@ const T: Record<string, [string, string]> = {
   helpBackupTitle: ['Import & Export', '配置导入导出'],
   helpBackupDesc: ['In Settings > Configuration Info, you can export all WOL devices, network profiles, and router configs to the clipboard with one tap, or import from clipboard to restore. Perfect for switching phones or sharing configs — no need to set up everything again.', '在设置页的「配置信息」中，可将 WOL 设备、网络配置、路由器配置一键导出到剪贴板保存，也可从剪贴板导入恢复。更换手机或分享给他人时无需重新配置。'],
   helpCfgTitle: ['Config Example', '配置示例'],
+  helpWolParams: ['name — Device display name, customize freely\nmac — MAC address for sending WOL magic packets\nip — PC LAN IP for status detection and shutdown\ninterface — Router network interface for sending WOL (e.g. br-lan)\nrouter_ip — Router LAN IP for wake requests and path detection\nagent_port — wol-agent listening port (default 32249)', 'name — 设备显示名称，可自由设置\nmac — MAC 地址，用于发送 WOL 魔术包\nip — 电脑局域网 IP，用于状态检测和关机\ninterface — 路由器上发送 WOL 包的网口（如 br-lan）\nrouter_ip — 路由器 IP，唤醒请求目标和路径模式判断\nagent_port — wol-agent 监听端口（默认 32249）'],
+  helpWolSocks5: ['All WOL operations (wake, status check, shutdown) go through the SOCKS5 proxy when connected via EasyTier. Make sure your network config includes: socks5_proxy = "socks5://0.0.0.0:32259". The port can be customized but must match on both sides.', '通过 EasyTier 组网时，所有 WOL 操作（唤醒、状态检测、关机）均经过 SOCKS5 代理。请确保组网配置中包含：socks5_proxy = "socks5://0.0.0.0:32259"。端口可自行指定，但两端需保持一致。'],
+  helpLuciParams: ['name — Router display name, customize freely\nip — Router LAN IP\nusername — OpenWrt login username (usually root)\npassword — OpenWrt login password', 'name — 路由器显示名称，可自由设置\nip — 路由器局域网 IP\nusername — OpenWrt 登录用户名（通常为 root）\npassword — OpenWrt 登录密码'],
+  helpLuciSocks5: ['To access the router LuCI panel via EasyTier tunnel, make sure your network config includes: socks5_proxy = "socks5://0.0.0.0:32259". The port can be customized but must match on both sides.', '要通过 EasyTier 隧道访问路由器 LuCI 面板，请在组网配置中添加：socks5_proxy = "socks5://0.0.0.0:32259"。端口可自行指定，但两端需保持一致。'],
+  helpNetParams: ['instance_name — Unique name for this network instance\nlisteners — Listening addresses and ports for peer connections\nnetwork_name — Shared identifier for all nodes in the same virtual network\nnetwork_secret — Shared secret key for encrypting communication\npeer.uri — Remote node address to connect to\nproxy_network.cidr — LAN subnet to proxy into the virtual network\nflags.enable_exit_node — Allow this node to act as an exit gateway\nsocks5_proxy — SOCKS5 proxy for WOL / LuCI tunnel access; port must match the router configuration', 'instance_name — 网络实例名称，用于区分多个网络\nlisteners — 监听地址和端口，接收其他节点连接\nnetwork_name — 同一虚拟网络所有节点共享的网络标识\nnetwork_secret — 加密通信的共享密钥\npeer.uri — 要连接的远程节点地址\nproxy_network.cidr — 代理到虚拟网络的局域网子网\nflags.enable_exit_node — 允许本节点作为出口网关\nsocks5_proxy — SOCKS5 代理端口，用于 WOL / LuCI 隧道访问；端口需与路由器配置一致'],
   theme: ['Theme', '主题'],
   themeAuto: ['Auto', '自动'],
   themeLight: ['Light', '浅色'],
@@ -126,10 +131,10 @@ const T: Record<string, [string, string]> = {
   amoled: ['AMOLED Black', 'AMOLED 纯黑模式'],
   amoledDesc: ['Pure black background for AMOLED screens, only effective in dark mode, saves power and reduces eye strain', 'AMOLED 屏幕纯黑背景，仅在深色模式下生效，更省电更护眼'],
   aboutSub: ['Project introduction, acknowledgments, and open source license', '项目简介、致谢与开源许可信息'],
-  aboutDesc: ['EasyTier + WOLPlus is a cross-platform virtual networking and remote device management app built on Tauri v2. It retains all EasyTier networking capabilities while deeply integrating WOL wake-on-LAN, LuCI router reverse proxy management, one-click config import/export, with comprehensive Material Design theming. Supports Windows, macOS, Linux desktop and Android mobile.', 'EasyTier + WOLPlus 是基于 Tauri v2 的跨平台异地组网与远程设备管理一体化应用。在保留 EasyTier 全部组网能力的基础上，深度整合了 WOL 网络唤醒、LuCI 路由器反向代理管理、一键配置导入/导出等功能，并进行了全面的 Material Design 界面美化。支持 Windows、macOS、Linux 桌面端及 Android 移动端。'],
+  aboutDesc: ['EasyTier + WOLPlus is a cross-platform virtual networking and remote device management app built on Tauri v2. It retains all EasyTier networking capabilities while deeply integrating WOL wake-on-LAN (via luci-app-wolplus), remote status monitoring and shutdown (via wol-agent), LuCI router reverse proxy management, one-click config import/export, with comprehensive Material Design theming. Supports Windows, macOS, Linux desktop and Android mobile.', 'EasyTier + WOLPlus 是基于 Tauri v2 的跨平台异地组网与远程设备管理一体化应用。在保留 EasyTier 全部组网能力的基础上，深度整合了 WOL 网络唤醒（通过 luci-app-wolplus）、远程状态监控与关机（通过 wol-agent）、LuCI 路由器反向代理管理、一键配置导入/导出等功能，并进行了全面的 Material Design 界面美化。支持 Windows、macOS、Linux 桌面端及 Android 移动端。'],
   aboutThanks: ['Acknowledgments', '致谢'],
   aboutEasyTierDesc: ['Decentralized virtual networking engine — high-performance Rust implementation, stable NAT traversal, multi-protocol support (TCP/UDP/WSS/WG)', '去中心化异地组网引擎 — 高性能 Rust 实现、稳定的 NAT 穿透能力、丰富的协议支持（TCP/UDP/WSS/WG）'],
-  aboutWolplusDesc: ['OpenWrt WOL device management LuCI plugin + PC Go Agent, unifying etherwake, status query, and remote shutdown behind a clean HTTP API', 'OpenWrt WOL 设备管理 LuCI 插件 + PC 端 Go Agent，将 etherwake 唤醒、Agent 状态查询、远程关机封装为统一的 HTTP 接口'],
+  aboutWolplusDesc: ['OpenWrt WOL LuCI plugin — CGI API for sending etherwake magic packets to wake up PCs on LAN', 'OpenWrt WOL LuCI 插件，提供 CGI API 通过 etherwake 发送魔术包唤醒局域网电脑'],
   aboutLinks: ['Project Links', '项目地址'],
   aboutThisProject: ['EasyTier + WOLPlus (This Project)', 'EasyTier + WOLPlus（本项目）'],
   aboutWolplusDep: ['luci-app-wolplus (Dependency)', 'luci-app-wolplus（依赖）'],
@@ -730,7 +735,9 @@ uri = "tcp://public.easytier.top:11010"
 cidr = "192.168.1.0/24"
 
 [flags]
-enable_exit_node = true`
+enable_exit_node = true
+
+socks5_proxy = "socks5://0.0.0.0:32259"`
 
 const HELP_CFG_LUCI = `[[router]]
 name = "Home Router"
@@ -1377,6 +1384,10 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
           <pre class="md-help-code">{{ HELP_CFG_WOL }}</pre>
           <button class="md-help-copy" @click="copyHelpCfg(HELP_CFG_WOL, 0)">{{ copiedIdx === 0 ? tt('copiedCode') : tt('copyCode') }}</button>
         </div>
+        <div v-for="(p, i) in tt('helpWolParams').split('\n')" :key="i" class="md-help-param">
+          <code>{{ p.split(' — ')[0] }}</code> — {{ p.split(' — ').slice(1).join(' — ') }}
+        </div>
+        <div class="md-help-note">{{ tt('helpWolSocks5') }}</div>
       </div>
       <!-- LuCI -->
       <div class="md-help-section">
@@ -1388,6 +1399,10 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
           <pre class="md-help-code">{{ HELP_CFG_LUCI }}</pre>
           <button class="md-help-copy" @click="copyHelpCfg(HELP_CFG_LUCI, 1)">{{ copiedIdx === 1 ? tt('copiedCode') : tt('copyCode') }}</button>
         </div>
+        <div v-for="(p, i) in tt('helpLuciParams').split('\n')" :key="i" class="md-help-param">
+          <code>{{ p.split(' — ')[0] }}</code> — {{ p.split(' — ').slice(1).join(' — ') }}
+        </div>
+        <div class="md-help-note">{{ tt('helpLuciSocks5') }}</div>
       </div>
       <!-- EasyTier -->
       <div class="md-help-section">
@@ -1398,6 +1413,9 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
         <div class="md-help-cfg-wrap">
           <pre class="md-help-code">{{ HELP_CFG_NET }}</pre>
           <button class="md-help-copy" @click="copyHelpCfg(HELP_CFG_NET, 2)">{{ copiedIdx === 2 ? tt('copiedCode') : tt('copyCode') }}</button>
+        </div>
+        <div v-for="(p, i) in tt('helpNetParams').split('\n')" :key="i" class="md-help-param">
+          <code>{{ p.split(' — ')[0] }}</code> — {{ p.split(' — ').slice(1).join(' — ') }}
         </div>
       </div>
       <!-- Import & Export -->
@@ -1716,6 +1734,10 @@ html[data-theme="amoled"] .md-app { background: #000; }
 .md-help-code { font-size: 0.76rem; line-height: 1.55; padding: 10px 12px; margin: 0 0 4px; border-radius: 8px; background: #f0f0f0; color: var(--md-text); overflow-x: auto; white-space: pre; font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'SF Mono', 'Consolas', monospace; }
 .md-help-copy { position: absolute; top: 6px; right: 8px; padding: 3px 10px; border: none; border-radius: 4px; font-size: 0.72rem; font-weight: 600; cursor: pointer; background: var(--md-secondary); color: #fff; opacity: 0.7; transition: opacity 0.15s; }
 .md-help-copy:hover { opacity: 1; }
+.md-help-param { font-size:0.78rem; color:var(--md-secondary); line-height:1.6; margin-bottom:2px; }
+.md-help-param code { font-size:0.75rem; font-weight:600; color:var(--md-text); margin-right:8px; }
+.md-help-note { padding:10px 12px; border-radius:8px; background:var(--md-divider); font-size:0.78rem; color:var(--md-secondary); line-height:1.5; margin-top:8px; }
+.md-help-note code { font-size:0.75rem; color:var(--md-text); }
 
 /* ===== Dark Theme ===== */
 html[data-theme="dark"] .md-connected-text { color:#66bb6a; }
