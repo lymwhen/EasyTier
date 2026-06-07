@@ -448,7 +448,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ github.ref_name }}
-          draft: true
+          draft: false
           files: |
             ./zipped_assets/*
           token: ${{ secrets.GITHUB_TOKEN }}
