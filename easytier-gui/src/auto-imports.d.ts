@@ -10,6 +10,7 @@ declare global {
   const MenuItemExit: typeof import('./composables/tray')['MenuItemExit']
   const MenuItemShow: typeof import('./composables/tray')['MenuItemShow']
   const acceptHMRUpdate: typeof import('pinia')['acceptHMRUpdate']
+  const applyTheme: typeof import('./composables/theme')['applyTheme']
   const collectNetworkInfo: typeof import('./composables/backend')['collectNetworkInfo']
   const computed: typeof import('vue')['computed']
   const createApp: typeof import('vue')['createApp']
@@ -81,6 +82,7 @@ declare global {
   const readonly: typeof import('vue')['readonly']
   const ref: typeof import('vue')['ref']
   const resolveComponent: typeof import('vue')['resolveComponent']
+  const resolveTheme: typeof import('./composables/theme')['resolveTheme']
   const runNetworkInstance: typeof import('./composables/backend')['runNetworkInstance']
   const saveLastNetworkInstanceId: typeof import('./composables/config')['saveLastNetworkInstanceId']
   const saveMode: typeof import('./composables/mode')['saveMode']
@@ -141,6 +143,7 @@ declare module 'vue' {
     readonly MenuItemExit: UnwrapRef<typeof import('./composables/tray')['MenuItemExit']>
     readonly MenuItemShow: UnwrapRef<typeof import('./composables/tray')['MenuItemShow']>
     readonly acceptHMRUpdate: UnwrapRef<typeof import('pinia')['acceptHMRUpdate']>
+    readonly applyTheme: UnwrapRef<typeof import('./composables/theme')['applyTheme']>
     readonly collectNetworkInfo: UnwrapRef<typeof import('./composables/backend')['collectNetworkInfo']>
     readonly computed: UnwrapRef<typeof import('vue')['computed']>
     readonly createApp: UnwrapRef<typeof import('vue')['createApp']>
@@ -212,6 +215,7 @@ declare module 'vue' {
     readonly readonly: UnwrapRef<typeof import('vue')['readonly']>
     readonly ref: UnwrapRef<typeof import('vue')['ref']>
     readonly resolveComponent: UnwrapRef<typeof import('vue')['resolveComponent']>
+    readonly resolveTheme: UnwrapRef<typeof import('./composables/theme')['resolveTheme']>
     readonly runNetworkInstance: UnwrapRef<typeof import('./composables/backend')['runNetworkInstance']>
     readonly saveLastNetworkInstanceId: UnwrapRef<typeof import('./composables/config')['saveLastNetworkInstanceId']>
     readonly saveMode: UnwrapRef<typeof import('./composables/mode')['saveMode']>

@@ -1,7 +1,14 @@
 <script setup lang="ts">
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { isClientRunning } from '~/composables/backend'
+import { resolveTheme, applyTheme } from '~/composables/theme'
 import pkg from '~/../package.json'
+
+// Apply theme before splash renders so dark/amoled background + Android status bar are correct
+applyTheme(resolveTheme(
+  localStorage.getItem('themeMode') || 'auto',
+  localStorage.getItem('amoledMode') === '1'
+))
 
 const router = useRouter()
 const backendReady = ref(false)
@@ -79,7 +86,8 @@ html[data-theme="amoled"] .splash { background: #000; }
   margin-bottom: 24px;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
-html[data-theme="dark"] .splash-title { color: #e0e0e0; }
+html[data-theme="dark"] .splash-title,
+html[data-theme="amoled"] .splash-title { color: #e0e0e0; }
 .splash-spinner {
   width: 28px;
   height: 28px;

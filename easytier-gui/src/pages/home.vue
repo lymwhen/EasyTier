@@ -8,6 +8,7 @@ import Dialog from 'primevue/dialog'
 import Textarea from 'primevue/textarea'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager'
+import { resolveTheme, applyTheme as setTheme } from '~/composables/theme'
 import type { NetworkTypes } from 'easytier-frontend-lib'
 
 const router = useRouter()
@@ -757,27 +758,11 @@ async function copyHelpCfg(text: string, idx: number) {
 }
 
 // ==================== Theme State Machine ====================
-type Theme = 'light' | 'dark' | 'amoled'
 const themeMode = ref(localStorage.getItem('themeMode') || 'auto')
 const amoledMode = ref(localStorage.getItem('amoledMode') === '1')
 
 function applyTheme() {
-  const sysDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-  const resolvedDark = themeMode.value === 'dark' || (themeMode.value === 'auto' && sysDark)
-  const effective: Theme = (amoledMode.value && resolvedDark) ? 'amoled' : resolvedDark ? 'dark' : 'light'
-
-  document.documentElement.setAttribute('data-theme', effective)
-  document.documentElement.classList.toggle('app-dark', effective !== 'light')
-
-  // Android status bar / navigation bar
-  const w = window as any
-  if (w._easytier_theme) {
-    if (effective === 'amoled' && w._easytier_theme.setAmoledMode) {
-      w._easytier_theme.setAmoledMode(true)
-    } else {
-      w._easytier_theme.setStatusBarStyle(effective !== 'light')
-    }
-  }
+  setTheme(resolveTheme(themeMode.value, amoledMode.value))
 }
 
 watch([themeMode, amoledMode], () => {
