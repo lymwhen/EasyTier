@@ -67,6 +67,7 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 |------|------|--------|
 | `CLAUDE.md` | **[新增]** Claude Code 项目指令 | 必要 — 开发规范 |
 | `docs/project.md` | **[新增]** 结构化项目文档 | 必要 — 文档 |
+| `docs/电脑性能检测功能.md` | **[新增]** PC 硬件性能检测功能全文档 | 必要 — 文档 |
 | `docs/CI全平台构建.md` | **[新增]** CI 构建文档 | 必要 — 文档 |
 | `docs/本地Android构建.md` | **[新增]** 本地 Android 构建文档 | 必要 — 文档 |
 | `README.md` | 重写为中文 README + 功能清单表 + 截图 | 必要 — 文档 |
@@ -94,7 +95,7 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 <tr><td>App 图标更换为 EasyTier 网络层叠图标 + Splash 遮罩优化（路由跳转完成后隐藏，最低 500ms）</td><td>全平台</td></tr>
 <tr><td>全部操作图标统一更换 — 标题栏编辑/刷新/切换、底部 Tab、唤醒铃铛面型图标、关机电源面型图标、Connect 链式连接、断开断链 SVG</td><td>全平台</td></tr>
 <tr><td>断开按钮颜色匹配网络质量最差红（<code>#ef5350</code>），编辑器关闭按钮隐藏、Textarea 间距优化</td><td>全平台</td></tr>
-<tr><td>图表 SVG translate + CSS left 固定 20px Y 轴标签区 — 平板/窄屏适配，不再左侧过宽</td><td>全平台</td></tr>
+<tr><td>图表 SVG — 无左侧 Y 轴预留空间，最大值标签叠于图表左上角，y=0 由横轴线隐式表达，横坐标左右贴边（`left:2px` / `right:2px`）</td><td>全平台</td></tr>
 <tr><td>自定义 Material snackbar 底部居中胶囊 Toast（替代 PrimeVue useToast）— 2.5s 滑入动画</td><td>全平台</td></tr>
 <tr><td>中英双语 — 自定义 <code>tt(key)</code> 函数 + 内联 i18n 字典（不依赖 easytier-frontend-lib），用户面文本全部双语化</td><td>全平台</td></tr>
 <tr><td rowspan="7"><b>电脑<br>(WOL)</b></td><td>设备卡片 — 在线状态指示灯（脉冲动画）+ 名称 + IP + 状态文字，点击展开详情（MAC / Router IP / Interface / Agent Port）</td><td>全平台</td></tr>
@@ -107,7 +108,7 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 <tr><td rowspan="7"><b>组网</b></td><td>Peer 卡片展示 — IP + 主机名 + 延迟/丢包率 + 上下行流量 + P2P/Relay 标签 + NAT 类型芯片 + 隧道协议标签；点击展开版本号</td><td>全平台</td></tr>
 <tr><td>网络质量颜色分级 — 绿（正常）/ 蓝（loss>3% 或 lat>50）/ 橙（loss>5% 或 lat>100）/ 红（loss>10% 或 lat>300）；NAT 标签：绿/绿/绿/蓝/橙对应 Open/NAT1/NAT2/NAT3/NAT4</td><td>全平台</td></tr>
 <tr><td>Peer 排序 — 路由器优先（hostname 匹配 <code>/route|wrt|路由|home|家/i</code>），其余按 IP 排序；服务器按 hostname 字母排序</td><td>全平台</td></tr>
-<tr><td>实时速率图表 — SVG 平滑折线图，蓝色上行 / 柔红下行，3 分钟窗口（60 点），HTML 坐标轴标签覆盖 SVG 之上；连接重建时速率防负值 + 清空旧数据</td><td>全平台</td></tr>
+<tr><td>实时速率图表 — SVG 面积渐变折线图（与性能监控同款 area-fill 样式），红色上行 `#e57373` / 蓝色下行 `#1976d2`，3 分钟窗口（60 点），HTML 坐标轴标签覆盖 SVG 之上；连接重建时速率防负值 + 清空旧数据</td><td>全平台</td></tr>
 <tr><td>多网络管理 — 切换/新增/删除网络，当前网络标记 ✓，底部 "Add Network" 入口；网络配置 TOML 编辑器（含剪贴板导入）</td><td>全平台</td></tr>
 <tr><td>连接状态条 — 本机 IP + 设备名 + 版本号 + 红色断开按钮；连接中显示 "Connecting..."；netDiscovering 12 秒内空列表显示 "Waiting for peers..."</td><td>全平台</td></tr>
 <tr><td>3 秒自动刷新 Peer 数据；连接时自动检测全部 WOL 设备状态</td><td>全平台</td></tr>
@@ -258,7 +259,7 @@ PC
 - 连接状态下隐藏编辑和切换网络按钮
 - 断开按钮在标题栏以红色断链图标展示
 
-**速率图表**：实时上下行速率折线图（60 点 / 3 分钟），HTML 坐标轴标签覆盖在 SVG 之上。左侧 20px 固定宽度留给 Y 轴标签，图表线随卡片宽度拉伸。
+**速率图表**：实时上下行速率面积渐变折线图（60 点 / 3 分钟），HTML 坐标轴标签覆盖在 SVG 之上。Y 轴最大值叠于左上角，y=0 不显示标签（横轴线隐式表达），图表线随卡片宽度拉伸。
 
 **网络设备列表**：Peer 卡片，含 IP + 主机名、延迟/丢包率、流量信息、P2P/Relay 标签、NAT 类型芯片。点击展开显示版本号。
 

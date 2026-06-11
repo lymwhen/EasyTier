@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { generateNetworkConfig, sendConfigs, collectNetworkInfo, updateNetworkConfigState, parseNetworkConfig, httpGet, httpPost, tcpPing, deleteNetworkInstance, luciProxyStart, luciProxyStop, luciGetLastPath } from '~/composables/backend'
 import { loadLastNetworkInstanceId, saveLastNetworkInstanceId } from '~/composables/config'
 import { Utils, I18nUtils } from 'easytier-frontend-lib'
@@ -144,6 +144,17 @@ const T: Record<string, [string, string]> = {
   copiedCode: ['Copied', '已复制'],
   etLan: ['ET-LAN', '异地组网'],
   lanDirect: ['LAN', '局域网'],
+  cpuModel: ['CPU', '处理器'],
+  cores: ['cores', '核心'],
+  memoryUsage: ['Memory', '内存'],
+  gpuUsage: ['GPU', '显卡'],
+  noGPU: ['No GPU detected', '未检测到 GPU'],
+  diskIO: ['Disk IO', '磁盘 IO'],
+  disk: ['Disk', '磁盘'],
+  networkIO: ['Network', '网络'],
+  recv: ['Recv', '接收'],
+  sent: ['Sent', '发送'],
+  loadingStats: ['Loading stats...', '加载中...'],
 }
 function tt(key: string): string {
   const entry = T[key]
@@ -159,7 +170,10 @@ const showDebug = ref(false)
 
 function switchTab(tab: Tab) {
   activeTab.value = tab
-  if (tab === 'wol') checkAllWolStatus()
+  if (tab === 'wol') { checkAllWolStatus(); manageStatsPoll() }
+  else {
+    if (statsTimer) { clearInterval(statsTimer); statsTimer = null }
+  }
   if (tab === 'net' && netInstId.value) refreshNet()
   if (tab === 'luci') {
     if (!proxyUrl.value && luciRouters.value.length > 0 && !luciLoading.value) {
@@ -199,8 +213,376 @@ const wolFirstCheck = ref(true)
 const wolDebug = ref('')
 const phaseTimers: Record<string, ReturnType<typeof setTimeout>> = {}
 const checkingWol = ref(false)
-const wolExpanded = reactive<Record<string, boolean>>({})
+const expandedDeviceIdx = ref<number | null>(null)
+const statsHistory = reactive<Record<string, StatsSnapshot[]>>({})
+const statsRaw = reactive<Record<string, StatsRaw | null>>({})
+const statsError = reactive<Record<string, string>>({})
+const statsLoading = reactive<Record<string, boolean>>({})
+let statsTimer: ReturnType<typeof setInterval> | null = null
 let wolPeriod: Utils.PeriodicTask | null = null
+
+// --- Stats types ---
+interface StatsRaw {
+  cpu_pct: number
+  mem_pct: number
+  gpu_pct: number | null
+  gpu_mem_pct: number | null
+  disks: { name: string; read: number; write: number }[]
+  nets: { name: string; recv: number; sent: number }[]
+  _ts: number
+}
+
+interface StatsSnapshot {
+  ts: number
+  cpu: number
+  mem: number
+  gpu: number | null
+  gpuMem: number | null
+  disks: { name: string; readBps: number; writeBps: number }[]
+  nets: { name: string; recvBps: number; sentBps: number }[]
+}
+
+const STATS_MAX_POINTS = 60  // 5 min at 5s interval
+
+function ensureStatsKeys(ip: string) {
+  if (!statsHistory[ip]) statsHistory[ip] = []
+  if (!(ip in statsRaw)) statsRaw[ip] = null
+  if (!(ip in statsLoading)) statsLoading[ip] = false
+  if (!(ip in statsError)) statsError[ip] = ''
+}
+
+function toggleDeviceExpand(idx: number) {
+  if (expandedDeviceIdx.value === idx) {
+    expandedDeviceIdx.value = null
+  } else {
+    expandedDeviceIdx.value = idx
+    const w = sortedWol.value[idx]
+    if (w?.ip) {
+      ensureStatsKeys(w.ip)
+      if (statsHistory[w.ip].length === 0) fetchStats(w.ip, w.agent_port || 32249)
+    }
+  }
+  manageStatsPoll()
+}
+
+async function fetchStats(ip: string, port: number) {
+  ensureStatsKeys(ip)
+  if (statsLoading[ip]) return
+  const proxy = getSocks5Proxy()
+  statsLoading[ip] = true
+  try {
+    const text = await httpGet(`http://${ip}:${port}/api/v1/stats`, proxy, 3)
+    const data = JSON.parse(text)
+    statsInfo[ip] = data
+    const prev = statsRaw[ip]
+    const now = Date.now()
+
+    // CPU / Memory / GPU (instant values)
+    const cpuPct = data.cpu?.usage_percent ?? 0
+    const memPct = data.memory?.usage_percent ?? 0
+    const gpuPct = data.gpu?.usage_percent ?? null
+    const gpuMemPct = data.gpu?.vram_total_gb ? (gpuPct ?? 0) : null
+
+    // Per-disk IO delta
+    const curDisks: { name: string; read: number; write: number }[] = []
+    if (data.disks) {
+      for (const d of data.disks) {
+        curDisks.push({ name: d.name || '', read: d.read_bytes || 0, write: d.write_bytes || 0 })
+      }
+    }
+
+    // Per-NIC delta
+    const curNets: { name: string; recv: number; sent: number }[] = []
+    if (data.network) {
+      for (const n of data.network) {
+        curNets.push({ name: n.name || '', recv: n.recv_bytes || 0, sent: n.sent_bytes || 0 })
+      }
+    }
+
+    // Compute per-disk rates
+    const diskSnaps: StatsSnapshot['disks'] = []
+    for (const cd of curDisks) {
+      let readBps = 0, writeBps = 0
+      if (prev) {
+        const pd = prev.disks.find(d => d.name === cd.name)
+        if (pd) {
+          const elapsed = Math.max(0.1, (now - prev._ts) / 1000)
+          readBps = Math.max(0, (cd.read - pd.read) / elapsed)
+          writeBps = Math.max(0, (cd.write - pd.write) / elapsed)
+        }
+      }
+      diskSnaps.push({ name: cd.name, readBps, writeBps })
+    }
+
+    // Compute per-NIC rates
+    const netSnaps: StatsSnapshot['nets'] = []
+    for (const cn of curNets) {
+      let recvBps = 0, sentBps = 0
+      if (prev) {
+        const pn = prev.nets.find(n => n.name === cn.name)
+        if (pn) {
+          const elapsed = Math.max(0.1, (now - prev._ts) / 1000)
+          recvBps = Math.max(0, (cn.recv - pn.recv) / elapsed)
+          sentBps = Math.max(0, (cn.sent - pn.sent) / elapsed)
+        }
+      }
+      netSnaps.push({ name: cn.name, recvBps, sentBps })
+    }
+
+    statsRaw[ip] = {
+      cpu_pct: cpuPct, mem_pct: memPct, gpu_pct: gpuPct, gpu_mem_pct: gpuMemPct,
+      disks: curDisks, nets: curNets,
+      _ts: now,
+    }
+
+    const snap: StatsSnapshot = {
+      ts: now, cpu: cpuPct, mem: memPct, gpu: gpuPct, gpuMem: gpuMemPct,
+      disks: diskSnaps, nets: netSnaps,
+    }
+    statsHistory[ip].push(snap)
+    while (statsHistory[ip].length > STATS_MAX_POINTS) statsHistory[ip].shift()
+    statsError[ip] = ''
+  } catch (e: any) {
+    statsError[ip] = cleanErr(e)
+  }
+  statsLoading[ip] = false
+}
+
+// Full stats response cache for template display (model names, etc.)
+const statsInfo = reactive<Record<string, any>>({})
+
+function manageStatsPoll() {
+  if (statsTimer) { clearInterval(statsTimer); statsTimer = null }
+  if (activeTab.value === 'wol' && expandedDeviceIdx.value !== null) {
+    const ip = sortedWol.value[expandedDeviceIdx.value]?.ip
+    if (ip) {
+      statsTimer = setInterval(() => {
+        if (activeTab.value === 'wol' && expandedDeviceIdx.value !== null) {
+          const dev = sortedWol.value[expandedDeviceIdx.value!]
+          if (dev?.ip) fetchStats(dev.ip, dev.agent_port || 32249)
+        } else {
+          if (statsTimer) { clearInterval(statsTimer); statsTimer = null }
+        }
+      }, 5000)
+    }
+  }
+}
+
+// Chart helpers — same style as buildSmoothPath / formatSpeedY / formatXLabel
+function buildStatsPath(data: number[], maxVal: number, chartH: number, chartW: number): string {
+  if (data.length < 2) return ''
+  const stepX = chartW / (data.length - 1)
+  const scaleY = (v: number) => chartH - (v / maxVal) * (chartH - 4) - 2
+  let d = `M 0,${scaleY(data[0])}`
+  for (let i = 0; i < data.length - 1; i++) {
+    const x1 = i * stepX; const y1 = scaleY(data[i])
+    const x2 = (i + 1) * stepX; const y2 = scaleY(data[i + 1])
+    const cx1 = x1 + stepX * 0.4; const cx2 = x2 - stepX * 0.4
+    d += ` C ${cx1},${y1} ${cx2},${y2} ${x2},${y2}`
+  }
+  return d
+}
+
+function buildStatsAreaPath(data: number[], maxVal: number, chartH: number, chartW: number): string {
+  const line = buildStatsPath(data, maxVal, chartH, chartW)
+  if (!line) return ''
+  const baseY = chartH
+  return line + ` L ${chartW},${baseY} L 0,${baseY} Z`
+}
+
+function statsXLabel(dataLen: number, idx: number): string {
+  // idx=0 → oldest (left), idx=last → newest "now" (right)
+  const total = dataLen - 1
+  const sec = (total - idx) * 5
+  if (sec === 0) return 'now'
+  if (sec < 60) return '-' + sec + 's'
+  const m = sec / 60
+  const r = Math.round(m * 2) / 2  // round to nearest 0.5, same as traffic chart
+  const t = r.toFixed(1)
+  return '-' + (t.endsWith('0') ? t.slice(0, -2) : t) + 'm'
+}
+
+function formatSpeedYStats(v: number): string {
+  if (v < 1024) return v.toFixed(0) + ' B/s'
+  if (v < 1048576) return (v / 1024).toFixed(0) + ' KB/s'
+  if (v < 1073741824) return (v / 1048576).toFixed(0) + ' MB/s'
+  return (v / 1073741824).toFixed(1) + ' GB/s'
+}
+function formatSpeedBps(v: number): string {
+  const bps = v * 8
+  if (bps < 1000) return bps.toFixed(0) + ' bps'
+  if (bps < 1000000) return (bps / 1000).toFixed(0) + ' Kbps'
+  if (bps < 1000000000) return (bps / 1000000).toFixed(1) + ' Mbps'
+  return (bps / 1000000000).toFixed(1) + ' Gbps'
+}
+
+// Template helpers — read from cached statsInfo
+function cpuModel(ip: string): string {
+  return statsInfo[ip]?.cpu?.model || 'CPU'
+}
+function cpuTitle(ip: string): string {
+  const model = statsInfo[ip]?.cpu?.model
+  const cores = statsInfo[ip]?.cpu?.cores
+  if (!model) return 'CPU'
+  let s = model
+    .replace(/\s*CPU\s*/gi, ' ')
+    .replace(/\(R\)|\(TM\)/gi, '')
+    .replace(/Core\s+i(\d)/gi, 'I$1')
+    .replace(/@\s+([\d.]+)\s*GHz/gi, '@$1Ghz')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (cores) s += ` × ${cores}`
+  return s
+}
+function cpuCores(ip: string): number {
+  return statsInfo[ip]?.cpu?.cores || 0
+}
+function memUsed(ip: string): string {
+  return statsInfo[ip]?.memory?.used_gb?.toFixed(1) || '--'
+}
+function memTotal(ip: string): string {
+  const v = statsInfo[ip]?.memory?.total_gb
+  return v ? Math.round(v).toString() : '--'
+}
+function hasGPU(ip: string): boolean {
+  return !!statsInfo[ip]?.gpu
+}
+function gpuModel(ip: string): string {
+  return statsInfo[ip]?.gpu?.model || tt('gpuUsage')
+}
+function diskList(ip: string): any[] {
+  const info = statsInfo[ip]
+  if (!info?.disks) return []
+  return info.disks.map((d: any) => {
+    const parts = ((d.partitions || []) as any[]).map((p: any) => ({
+      name: p.name,
+      total: gbStr(p.total_gb),
+      used: gbStr(p.used_gb),
+      pct: p.total_gb > 0 ? Math.round(p.used_gb / p.total_gb * 100) : 0,
+    })).sort((a: any, b: any) => a.name.localeCompare(b.name))
+    // Sort key: min partition name (ASCII) → stable ordering
+    const sortKey = parts.length ? parts.reduce((min: string, p: any) => p.name < min ? p.name : min, parts[0].name) : d.name
+    return { name: d.name, model: d.model || '', total: gbStr(d.total_gb), used: gbStr(d.used_gb), parts, sortKey }
+  }).sort((a, b) => a.sortKey.localeCompare(b.sortKey))
+}
+function netList(ip: string): any[] {
+  const info = statsInfo[ip]
+  if (!info?.network) return []
+  return info.network.map((n: any) => ({
+    name: n.name,
+    desc: n.desc || n.name,
+  }))
+}
+function gbStr(v: number | undefined): string {
+  if (v == null) return '--'
+  return v.toFixed(v >= 1000 ? 0 : 1)
+}
+
+// Per-disk / per-NIC chart data helpers
+function diskHistory(ip: string, diskName: string, field: 'readBps' | 'writeBps'): number[] {
+  return statsHistory[ip]?.map(s => {
+    const d = s.disks?.find(d => d.name === diskName)
+    return d ? d[field] : 0
+  }) || []
+}
+function netHistory(ip: string, netName: string, field: 'recvBps' | 'sentBps'): number[] {
+  return statsHistory[ip]?.map(s => {
+    const n = s.nets?.find(n => n.name === netName)
+    return n ? n[field] : 0
+  }) || []
+}
+
+// Dynamic Y-axis max — pure data maximum, recalculates as points fall out of window
+function cpuChartMax(ip: string): number {
+  const arr = statsHistory[ip]
+  if (!arr?.length) return 1
+  return Math.max(1, ...arr.map(s => s.cpu))
+}
+function gpuChartMax(ip: string): number {
+  const arr = statsHistory[ip]
+  if (!arr?.length) return 1
+  return Math.max(1, ...arr.map(s => s.gpu ?? 0))
+}
+function memChartMax(ip: string): number {
+  const arr = statsHistory[ip]
+  if (!arr?.length) return 1
+  const totalGB = statsInfo[ip]?.memory?.total_gb || 1
+  return Math.max(0.1, ...arr.map(s => s.mem / 100 * totalGB))
+}
+function memGBHistory(ip: string): number[] {
+  const totalGB = statsInfo[ip]?.memory?.total_gb || 1
+  return statsHistory[ip]?.map(s => s.mem / 100 * totalGB) || []
+}
+function diskChartMax(ip: string, diskName: string): number {
+  let m = 0
+  for (const s of (statsHistory[ip] || [])) {
+    const d = s.disks?.find(d => d.name === diskName)
+    if (d) {
+      if (d.readBps > m) m = d.readBps
+      if (d.writeBps > m) m = d.writeBps
+    }
+  }
+  return Math.max(m, 1)
+}
+function netChartMax(ip: string, netName: string): number {
+  let m = 0
+  for (const s of (statsHistory[ip] || [])) {
+    const n = s.nets?.find(n => n.name === netName)
+    if (n) {
+      if (n.recvBps > m) m = n.recvBps
+      if (n.sentBps > m) m = n.sentBps
+    }
+  }
+  return Math.max(m, 1)
+}
+
+// Get current speed values for legend display
+function curDiskSpeed(ip: string, diskName: string): { r: number, w: number } {
+  const h = statsHistory[ip]
+  if (!h?.length) return { r: 0, w: 0 }
+  const last = h[h.length - 1]
+  const d = last.disks?.find(d => d.name === diskName)
+  return { r: d?.readBps || 0, w: d?.writeBps || 0 }
+}
+function curNetSpeed(ip: string, netName: string): { r: number, s: number } {
+  const h = statsHistory[ip]
+  if (!h?.length) return { r: 0, s: 0 }
+  const last = h[h.length - 1]
+  const n = last.nets?.find(n => n.name === netName)
+  return { r: n?.recvBps || 0, s: n?.sentBps || 0 }
+}
+function curCpuPct(ip: string): number {
+  const h = statsHistory[ip]
+  if (!h?.length) return 0
+  return h[h.length - 1].cpu
+}
+function dkTotalPct(ip: string, dk: { name: string, used: string, total: string }): number {
+  const info = statsInfo[ip]
+  if (!info?.disks) return 0
+  const raw = info.disks.find((d: any) => d.name === dk.name)
+  if (!raw || !raw.total_gb) return 0
+  return Math.round(raw.used_gb / raw.total_gb * 100)
+}
+function diskFillColor(pct: number): string {
+  if (pct >= 90) return '#ef5350'
+  if (pct >= 80) return '#ff9800'
+  return '#42a5f5'
+}
+function curGpuPct(ip: string): number {
+  const h = statsHistory[ip]
+  if (!h?.length) return 0
+  return h[h.length - 1].gpu ?? 0
+}
+
+function memLabel(ip: string): string {
+  const m = statsInfo[ip]?.memory
+  if (!m) return tt('memory')
+  let label = ''
+  if (m.ddr_type) label += m.ddr_type + ' '
+  label += Math.round(m.total_gb || 0) + 'GB'
+  if (m.speed_mhz) label += ' ' + m.speed_mhz + 'MHz'
+  return label
+}
 
 function getSocks5Proxy(): string | undefined {
   if (!netRunning.value) return undefined
@@ -263,7 +645,7 @@ async function checkAllWolStatus() {
   }
   const proxy = getSocks5Proxy()
   await Promise.all(wolDevices.value.filter(w => w.ip).map(async w => {
-    try { const text = await httpGet(`http://${w.ip}:${w.agent_port || 32249}/api/v1/status`, proxy); const data = JSON.parse(text); wolStatus[w.ip] = { ...wolStatus[w.ip], online: data.online === true }; wolErrors[w.ip] = '' }
+    try { const text = await httpGet(`http://${w.ip}:${w.agent_port || 32249}/api/v1/status`, proxy, 2); const data = JSON.parse(text); wolStatus[w.ip] = { ...wolStatus[w.ip], online: data.online === true }; wolErrors[w.ip] = '' }
     catch (e: any) { wolStatus[w.ip] = { ...wolStatus[w.ip], online: false }; wolErrors[w.ip] = cleanErr(e) }
   })); checkingWol.value = false
 }
@@ -316,14 +698,14 @@ function startPhasePoll(w: WolDevice, phase: 'waking' | 'shutting', count: numbe
   phaseTimers[key] = setTimeout(async () => {
     if (!routerOnline.value) { wolStatus[w.ip] = { ...wolStatus[w.ip], phase: 'idle' }; return }
     const proxy = getSocks5Proxy()
-    try { const text = await httpGet(`http://${w.ip}:${w.agent_port || 32249}/api/v1/status`, proxy); const data = JSON.parse(text); const online = data.online === true; wolErrors[w.ip] = ''; if ((phase === 'waking' && online) || (phase === 'shutting' && !online)) { wolStatus[w.ip] = { online, phase: 'idle' }; showSnack(w.name + ' ' + (phase === 'waking' ? tt('online') : tt('offline'))); return } } catch (e: any) {
+    try { const text = await httpGet(`http://${w.ip}:${w.agent_port || 32249}/api/v1/status`, proxy, 2); const data = JSON.parse(text); const online = data.online === true; wolErrors[w.ip] = ''; if ((phase === 'waking' && online) || (phase === 'shutting' && !online)) { wolStatus[w.ip] = { online, phase: 'idle' }; showSnack(w.name + ' ' + (phase === 'waking' ? tt('online') : tt('offline'))); return } } catch (e: any) {
       // Shutdown: connection refused → agent already down → success
       if (phase === 'shutting') { wolStatus[w.ip] = { online: false, phase: 'idle' }; wolErrors[w.ip] = ''; showSnack(w.name + ' ' + tt('offline')); return }
       wolErrors[w.ip] = cleanErr(e)
     }
     if (routerOnline.value) startPhasePoll(w, phase, count + 1)
     else { wolStatus[w.ip] = { ...wolStatus[w.ip], phase: 'idle' } }
-  }, 5000)
+  }, 3000)
 }
 function getWolPathType(): 'tunnel' | 'lan' { return netRunning.value ? 'tunnel' : 'lan' }
 const sortedWol = computed(() => {
@@ -497,8 +879,8 @@ const netTrafficSpeed = reactive({ up: '', down: '', upBytes: 0, downBytes: 0, u
 const trafficHistory = reactive<{ up: number; down: number }[]>([])
 const TRAFFIC_MAX_POINTS = 60 // ~3 min at 3s interval
 let lastTraffic = { up: 0, down: 0, ts: 0 }
-const TRAFFIC_UP_COLOR = '#1976d2'
-const TRAFFIC_DOWN_COLOR = '#e57373'
+const TRAFFIC_UP_COLOR = '#e57373'
+const TRAFFIC_DOWN_COLOR = '#1976d2'
 
 function updateTrafficSpeed() {
   let up = 0, down = 0
@@ -883,7 +1265,7 @@ onMounted(() => {
   document.addEventListener('click', onDocClick)
   document.addEventListener('click', onLuciDocClick)
 })
-onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for (const k of Object.keys(phaseTimers)) clearTimeout(phaseTimers[k]); if (snackTimer) clearTimeout(snackTimer); document.removeEventListener('click', onDocClick); document.removeEventListener('click', onLuciDocClick) })
+onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); if (statsTimer) clearInterval(statsTimer); stopLuciProxyFn(); for (const k of Object.keys(phaseTimers)) clearTimeout(phaseTimers[k]); if (snackTimer) clearTimeout(snackTimer); document.removeEventListener('click', onDocClick); document.removeEventListener('click', onLuciDocClick) })
 </script>
 
 <template>
@@ -910,8 +1292,8 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
           <div class="text-base" style="color:var(--md-muted)">{{ tt('noWolDevices') }}</div>
           <div class="text-sm text-center px-4" style="color:var(--md-muted)">{{ tt('tapToAdd') }}</div>
         </div>
-        <div v-for="w in sortedWol" :key="w.ip" class="md-card" :class="{ 'md-card-dim': routerOnline === false }" @click="wolExpanded[w.ip]=!wolExpanded[w.ip]">
-          <div class="md-row">
+        <div v-for="(w, i) in sortedWol" :key="w.ip" class="md-card" :class="{ 'md-card-dim': routerOnline === false }">
+          <div class="md-row" @click="toggleDeviceExpand(i)">
             <span class="md-dot" :class="{
               'md-dot-on': w.status.online && w.status.phase==='idle' && routerOnline === true,
               'md-dot-off': (!w.status.online || routerOnline === false) && w.status.phase==='idle',
@@ -926,6 +1308,7 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
                 <template v-else>{{ tt('noIpConfigured') }}</template>
               </div>
             </div>
+            <svg v-if="w.status.online" class="md-chevron" :class="{ 'md-chevron-open': expandedDeviceIdx === i }" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
             <button v-if="w.ip && w.status.phase==='idle' && routerOnline === true && !w.status.online" class="md-wake-btn" @click.stop="doWake(w)">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
               {{ tt('wake') }}
@@ -939,11 +1322,191 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
               {{ tt('wake') }}
             </button>
           </div>
-          <div v-if="wolExpanded[w.ip]" class="md-extra">
-            <div>{{ tt('macLabel') }}: {{ w.mac }}</div>
-            <div>{{ tt('routerLabel') }}: {{ w.router_ip }}</div>
-            <div>{{ tt('interfaceLabel') }}: {{ w.interface || 'br-lan' }}</div>
-            <div>{{ tt('agentPort') }}: {{ w.agent_port || 32249 }}</div>
+          <!-- Expanded Stats -->
+          <div v-if="expandedDeviceIdx === i && w.status.online && routerOnline === true" class="md-stats-area">
+            <!-- Loading -->
+            <div v-if="statsHistory[w.ip].length === 0" class="md-stats-loading">
+              <i class="pi pi-spin pi-spinner" style="font-size:1.2rem;color:var(--md-muted)" />
+              <span>{{ tt('loadingStats') }}</span>
+            </div>
+            <template v-else-if="statsHistory[w.ip].length > 0">
+              <template v-if="statsRaw[w.ip]">
+                <!-- Section 1: CPU -->
+                <div class="md-stats-section">
+                  <div class="md-stats-hdr">
+                    <span class="md-stats-label">{{ cpuTitle(w.ip) }}</span>
+                    <span class="md-stats-legends">
+                      <span class="md-stats-legend" style="color:#1976d2">&#9679; CPU {{ curCpuPct(w.ip).toFixed(0) }}%</span>
+                    </span>
+                  </div>
+                  <div class="md-stats-chart-wrap">
+                    <svg class="md-stats-svg" viewBox="0 0 320 108" preserveAspectRatio="none">
+                      <defs>
+                        <linearGradient :id="'g-cpu-'+w.ip" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stop-color="#1976d2" stop-opacity="0.30"/>
+                          <stop offset="100%" stop-color="#1976d2" stop-opacity="0.02"/>
+                        </linearGradient>
+                      </defs>
+                      <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsAreaPath(statsHistory[w.ip].map(s => s.cpu), cpuChartMax(w.ip), 88, 320)" :fill="'url(#g-cpu-'+w.ip+')'"/>
+                      <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsPath(statsHistory[w.ip].map(s => s.cpu), cpuChartMax(w.ip), 88, 320)" fill="none" stroke="#1976d2" stroke-width="1.5"/>
+                      <line x1="0" y1="88" x2="320" y2="88" stroke="var(--md-border)" stroke-width="0.5"/>
+                    </svg>
+                    <span class="md-chart-label md-chart-y-max">{{ cpuChartMax(w.ip).toFixed(0) }}%</span>
+
+                    <span class="md-chart-label md-chart-x-start">{{ statsXLabel(statsHistory[w.ip].length, 0) }}</span>
+                    <span class="md-chart-label md-chart-x-mid">{{ statsXLabel(statsHistory[w.ip].length, Math.floor((statsHistory[w.ip].length-1)/2)) }}</span>
+                    <span class="md-chart-label md-chart-x-end">{{ statsXLabel(statsHistory[w.ip].length, statsHistory[w.ip].length-1) }}</span>
+                  </div>
+                </div>
+
+                <!-- Section 2: Memory -->
+                <div class="md-stats-section">
+                  <div class="md-stats-hdr">
+                    <span class="md-stats-label">{{ memLabel(w.ip) }}</span>
+                    <span class="md-stats-legends">
+                      <span class="md-stats-legend" style="color:#ff9800">&#9679; {{ memUsed(w.ip) }}G / {{ memTotal(w.ip) }}G</span>
+                    </span>
+                  </div>
+                  <div class="md-stats-chart-wrap">
+                    <svg class="md-stats-svg" viewBox="0 0 320 108" preserveAspectRatio="none">
+                      <defs>
+                        <linearGradient :id="'g-mem-'+w.ip" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stop-color="#ff9800" stop-opacity="0.30"/>
+                          <stop offset="100%" stop-color="#ff9800" stop-opacity="0.02"/>
+                        </linearGradient>
+                      </defs>
+                      <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsAreaPath(memGBHistory(w.ip), memChartMax(w.ip), 88, 320)" :fill="'url(#g-mem-'+w.ip+')'"/>
+                      <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsPath(memGBHistory(w.ip), memChartMax(w.ip), 88, 320)" fill="none" stroke="#ff9800" stroke-width="1.5"/>
+                      <line x1="0" y1="88" x2="320" y2="88" stroke="var(--md-border)" stroke-width="0.5"/>
+                    </svg>
+                    <span class="md-chart-label md-chart-y-max">{{ memChartMax(w.ip).toFixed(1) }}G</span>
+
+                    <span class="md-chart-label md-chart-x-start">{{ statsXLabel(statsHistory[w.ip].length, 0) }}</span>
+                    <span class="md-chart-label md-chart-x-mid">{{ statsXLabel(statsHistory[w.ip].length, Math.floor((statsHistory[w.ip].length-1)/2)) }}</span>
+                    <span class="md-chart-label md-chart-x-end">{{ statsXLabel(statsHistory[w.ip].length, statsHistory[w.ip].length-1) }}</span>
+                  </div>
+                </div>
+
+                <!-- Section 3: GPU -->
+                <div v-if="hasGPU(w.ip)" class="md-stats-section">
+                  <div class="md-stats-hdr">
+                    <span class="md-stats-label">{{ gpuModel(w.ip) }}</span>
+                    <span class="md-stats-legends">
+                      <span class="md-stats-legend" style="color:#7c4dff">&#9679; GPU {{ curGpuPct(w.ip).toFixed(0) }}%</span>
+                    </span>
+                  </div>
+                  <div class="md-stats-chart-wrap">
+                    <svg class="md-stats-svg" viewBox="0 0 320 108" preserveAspectRatio="none">
+                      <defs>
+                        <linearGradient :id="'g-gpu-'+w.ip" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stop-color="#7c4dff" stop-opacity="0.30"/>
+                          <stop offset="100%" stop-color="#7c4dff" stop-opacity="0.02"/>
+                        </linearGradient>
+                      </defs>
+                      <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsAreaPath(statsHistory[w.ip].map(s => s.gpu ?? 0), gpuChartMax(w.ip), 88, 320)" :fill="'url(#g-gpu-'+w.ip+')'"/>
+                      <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsPath(statsHistory[w.ip].map(s => s.gpu ?? 0), gpuChartMax(w.ip), 88, 320)" fill="none" stroke="#7c4dff" stroke-width="1.5"/>
+                      <line x1="0" y1="88" x2="320" y2="88" stroke="var(--md-border)" stroke-width="0.5"/>
+                    </svg>
+                    <span class="md-chart-label md-chart-y-max">{{ gpuChartMax(w.ip).toFixed(0) }}%</span>
+
+                    <span class="md-chart-label md-chart-x-start">{{ statsXLabel(statsHistory[w.ip].length, 0) }}</span>
+                    <span class="md-chart-label md-chart-x-mid">{{ statsXLabel(statsHistory[w.ip].length, Math.floor((statsHistory[w.ip].length-1)/2)) }}</span>
+                    <span class="md-chart-label md-chart-x-end">{{ statsXLabel(statsHistory[w.ip].length, statsHistory[w.ip].length-1) }}</span>
+                  </div>
+                </div>
+
+                <!-- Section 4: Disks -->
+                <template v-if="diskList(w.ip).length">
+                  <div v-for="(dk, di) in diskList(w.ip)" :key="'dk'+di" class="md-stats-section">
+                    <div class="md-stats-hdr">
+                      <span class="md-stats-label"><template v-if="dk.model">{{ dk.model }}</template><template v-else>{{ dk.name }}</template></span>
+                      <span class="md-stats-legends">
+                        <span class="md-stats-legend" style="color:#43a047">&#9679; R {{ formatSpeedYStats(curDiskSpeed(w.ip, dk.name).r) }}</span>
+                        <span class="md-stats-legend" style="color:#e53935">&#9679; W {{ formatSpeedYStats(curDiskSpeed(w.ip, dk.name).w) }}</span>
+                      </span>
+                    </div>
+                    <div class="md-stats-chart-wrap">
+                      <svg class="md-stats-svg" viewBox="0 0 320 108" preserveAspectRatio="none">
+                        <defs>
+                          <linearGradient :id="'g-dr-'+w.ip+'-'+di" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stop-color="#43a047" stop-opacity="0.30"/>
+                            <stop offset="100%" stop-color="#43a047" stop-opacity="0.02"/>
+                          </linearGradient>
+                          <linearGradient :id="'g-dw-'+w.ip+'-'+di" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stop-color="#e53935" stop-opacity="0.30"/>
+                            <stop offset="100%" stop-color="#e53935" stop-opacity="0.02"/>
+                          </linearGradient>
+                        </defs>
+                        <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsAreaPath(diskHistory(w.ip, dk.name, 'readBps'), diskChartMax(w.ip, dk.name), 88, 320)" :fill="'url(#g-dr-'+w.ip+'-'+di+')'"/>
+                        <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsAreaPath(diskHistory(w.ip, dk.name, 'writeBps'), diskChartMax(w.ip, dk.name), 88, 320)" :fill="'url(#g-dw-'+w.ip+'-'+di+')'"/>
+                        <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsPath(diskHistory(w.ip, dk.name, 'readBps'), diskChartMax(w.ip, dk.name), 88, 320)" fill="none" stroke="#43a047" stroke-width="1.5"/>
+                        <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsPath(diskHistory(w.ip, dk.name, 'writeBps'), diskChartMax(w.ip, dk.name), 88, 320)" fill="none" stroke="#e53935" stroke-width="1.5"/>
+                        <line x1="0" y1="88" x2="320" y2="88" stroke="var(--md-border)" stroke-width="0.5"/>
+                        </svg>
+                      <span class="md-chart-label md-chart-y-max">{{ formatSpeedYStats(diskChartMax(w.ip, dk.name)) }}</span>
+  
+                      <span class="md-chart-label md-chart-x-start">{{ statsXLabel(statsHistory[w.ip].length, 0) }}</span>
+                      <span class="md-chart-label md-chart-x-mid">{{ statsXLabel(statsHistory[w.ip].length, Math.floor((statsHistory[w.ip].length-1)/2)) }}</span>
+                      <span class="md-chart-label md-chart-x-end">{{ statsXLabel(statsHistory[w.ip].length, statsHistory[w.ip].length-1) }}</span>
+                    </div>
+                    <!-- Disk total row (only when multiple partitions) -->
+                    <div v-if="dk.parts.length > 1" class="md-disk-total">
+                      <div class="md-part-fill-bg" :style="{ width: dkTotalPct(w.ip, dk) + '%', background: diskFillColor(dkTotalPct(w.ip, dk)) }" />
+                      <span class="md-part-label">{{ tt('disk') }}</span>
+                      <span class="md-disk-total-usage">{{ dk.used }}GB / {{ dk.total }}GB</span>
+                    </div>
+                    <!-- Partition rows with background progress -->
+                    <div v-for="p in dk.parts" :key="p.name" class="md-part-row">
+                      <div class="md-part-fill-bg" :style="{ width: p.pct + '%', background: diskFillColor(p.pct) }" />
+                      <span class="md-part-label">{{ p.name }}</span>
+                      <span class="md-part-usage">{{ p.used }}GB / {{ p.total }}GB</span>
+                    </div>
+                  </div>
+                </template>
+
+                <!-- Section 5: Network -->
+                <template v-if="netList(w.ip).length">
+                  <div v-for="(nc, ni) in netList(w.ip)" :key="'nc'+ni" class="md-stats-section">
+                    <div class="md-stats-hdr">
+                      <span class="md-stats-label">{{ nc.desc }}</span>
+                      <span class="md-stats-legends">
+                        <span class="md-stats-legend" style="color:#1e88e5">&#9679; &#8593; {{ formatSpeedBps(curNetSpeed(w.ip, nc.name).s) }}</span>
+                        <span class="md-stats-legend" style="color:#43a047">&#9679; &#8595; {{ formatSpeedBps(curNetSpeed(w.ip, nc.name).r) }}</span>
+                      </span>
+                    </div>
+                    <div class="md-stats-chart-wrap">
+                      <svg class="md-stats-svg" viewBox="0 0 320 108" preserveAspectRatio="none">
+                        <defs>
+                          <linearGradient :id="'g-nr-'+w.ip+'-'+ni" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stop-color="#43a047" stop-opacity="0.30"/>
+                            <stop offset="100%" stop-color="#43a047" stop-opacity="0.02"/>
+                          </linearGradient>
+                          <linearGradient :id="'g-ns-'+w.ip+'-'+ni" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stop-color="#1e88e5" stop-opacity="0.30"/>
+                            <stop offset="100%" stop-color="#1e88e5" stop-opacity="0.02"/>
+                          </linearGradient>
+                        </defs>
+                        <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsAreaPath(netHistory(w.ip, nc.name, 'recvBps'), netChartMax(w.ip, nc.name), 88, 320)" :fill="'url(#g-nr-'+w.ip+'-'+ni+')'"/>
+                        <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsAreaPath(netHistory(w.ip, nc.name, 'sentBps'), netChartMax(w.ip, nc.name), 88, 320)" :fill="'url(#g-ns-'+w.ip+'-'+ni+')'"/>
+                        <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsPath(netHistory(w.ip, nc.name, 'recvBps'), netChartMax(w.ip, nc.name), 88, 320)" fill="none" stroke="#43a047" stroke-width="1.5"/>
+                        <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsPath(netHistory(w.ip, nc.name, 'sentBps'), netChartMax(w.ip, nc.name), 88, 320)" fill="none" stroke="#1e88e5" stroke-width="1.5"/>
+                        <line x1="0" y1="88" x2="320" y2="88" stroke="var(--md-border)" stroke-width="0.5"/>
+                        </svg>
+                      <span class="md-chart-label md-chart-y-max">{{ formatSpeedBps(netChartMax(w.ip, nc.name)) }}</span>
+  
+                      <span class="md-chart-label md-chart-x-start">{{ statsXLabel(statsHistory[w.ip].length, 0) }}</span>
+                      <span class="md-chart-label md-chart-x-mid">{{ statsXLabel(statsHistory[w.ip].length, Math.floor((statsHistory[w.ip].length-1)/2)) }}</span>
+                      <span class="md-chart-label md-chart-x-end">{{ statsXLabel(statsHistory[w.ip].length, statsHistory[w.ip].length-1) }}</span>
+                    </div>
+                  </div>
+                </template>
+              </template>
+            </template>
+            <!-- Device info row (bottom) -->
+            <div class="md-stats-info">{{ w.mac }} &middot; {{ w.router_ip }} &middot; {{ w.interface || 'br-lan' }} &middot; {{ w.agent_port || 32249 }}</div>
+          </div>
+          <!-- Error message when not expanded -->
+          <div v-if="w.error && expandedDeviceIdx !== i" class="md-extra">
             <div v-if="w.error" class="mt-1" style="color:#ea4335;word-break:break-all">{{ w.error }}</div>
           </div>
         </div>
@@ -1031,15 +1594,27 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); stopLuciProxyFn(); for
             </div>
             <div class="md-traffic-chart-wrap">
               <svg class="md-traffic-svg" viewBox="0 0 320 108" preserveAspectRatio="none">
+                <defs>
+                  <linearGradient id="g-traffic-up" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stop-color="#e57373" stop-opacity="0.30"/>
+                    <stop offset="100%" stop-color="#e57373" stop-opacity="0.02"/>
+                  </linearGradient>
+                  <linearGradient id="g-traffic-down" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stop-color="#1976d2" stop-opacity="0.30"/>
+                    <stop offset="100%" stop-color="#1976d2" stop-opacity="0.02"/>
+                  </linearGradient>
+                </defs>
+                <!-- Up area -->
+                <path v-if="trafficHistory.length > 1" :d="buildStatsAreaPath(trafficHistory.map(p => p.up), Math.max(1, ...trafficHistory.map(p => Math.max(p.up, p.down))), 88, 320)" fill="url(#g-traffic-up)"/>
+                <!-- Down area -->
+                <path v-if="trafficHistory.length > 1" :d="buildStatsAreaPath(trafficHistory.map(p => p.down), Math.max(1, ...trafficHistory.map(p => Math.max(p.up, p.down))), 88, 320)" fill="url(#g-traffic-down)"/>
                 <!-- Up line -->
-                <path v-if="trafficHistory.length > 1" :d="buildSmoothPath(trafficHistory.map(p => p.up), Math.max(1, ...trafficHistory.map(p => Math.max(p.up, p.down))), 80, 316)" fill="none" :stroke="TRAFFIC_UP_COLOR" stroke-width="1.5" transform="translate(2,2)"/>
+                <path v-if="trafficHistory.length > 1" :d="buildStatsPath(trafficHistory.map(p => p.up), Math.max(1, ...trafficHistory.map(p => Math.max(p.up, p.down))), 88, 320)" fill="none" :stroke="TRAFFIC_UP_COLOR" stroke-width="1.5"/>
                 <!-- Down line -->
-                <path v-if="trafficHistory.length > 1" :d="buildSmoothPath(trafficHistory.map(p => p.down), Math.max(1, ...trafficHistory.map(p => Math.max(p.up, p.down))), 80, 316)" fill="none" :stroke="TRAFFIC_DOWN_COLOR" stroke-width="1.5" transform="translate(2,2)"/>
-                <!-- Bottom axis -->
-                <line x1="2" y1="88" x2="318" y2="88" stroke="var(--md-border)" stroke-width="0.5"/>
+                <path v-if="trafficHistory.length > 1" :d="buildStatsPath(trafficHistory.map(p => p.down), Math.max(1, ...trafficHistory.map(p => Math.max(p.up, p.down))), 88, 320)" fill="none" :stroke="TRAFFIC_DOWN_COLOR" stroke-width="1.5"/>
+                <line x1="0" y1="88" x2="320" y2="88" stroke="var(--md-border)" stroke-width="0.5"/>
               </svg>
               <span class="md-chart-label md-chart-y-max">{{ (() => { const m = Math.max(1, ...trafficHistory.map(p => Math.max(p.up, p.down))); return formatSpeedY(m); })() }}</span>
-              <span class="md-chart-label md-chart-y-zero">0</span>
               <span class="md-chart-label md-chart-x-start">{{ formatXLabel(trafficHistory.length, 0) }}</span>
               <span class="md-chart-label md-chart-x-mid">{{ formatXLabel(trafficHistory.length, Math.floor(trafficHistory.length/2)) }}</span>
               <span class="md-chart-label md-chart-x-end">{{ formatXLabel(trafficHistory.length, trafficHistory.length-1) }}</span>
@@ -1602,6 +2177,8 @@ html[data-theme="amoled"] .md-app { background: #000; }
 .md-row-bot { padding-top:1px; }
 .md-name { font-size:0.9rem; font-weight:500; }
 .md-sub { font-size:0.76rem; color:var(--md-muted); margin-top:1px; line-height:1.3; }
+.md-chevron { width:18px; height:18px; opacity:0.4; transition:transform 0.2s; flex-shrink:0; color:var(--md-muted); }
+.md-chevron-open { transform:rotate(180deg); }
 .md-extra { margin:0 10px; padding:0 4px 12px 30px; font-size:0.76rem; color:var(--md-secondary); line-height:1.6; border-top:1px solid var(--md-divider); padding-top:7px; }
 
 /* Dot */
@@ -1672,16 +2249,37 @@ html[data-theme="amoled"] .md-app { background: #000; }
 @keyframes md-snack-in { from{opacity:0;transform:translateX(-50%) translateY(12px)} to{opacity:1;transform:translateX(-50%) translateY(0)} }
 
 /* Traffic speed chart */
-.md-traffic-card { padding:10px 10px 4px; margin-top:6px; margin-bottom:8px; cursor:default; }
+.md-traffic-card { padding:10px 14px 4px; margin-top:6px; margin-bottom:8px; cursor:default; }
 .md-traffic-hdr { display:flex; justify-content:space-between; font-size:0.7rem; font-weight:500; margin-bottom:2px; }
 .md-traffic-label { margin-right:12px; }
-.md-traffic-total { text-align:right; font-size:0.68rem; color:var(--md-muted); }
+.md-traffic-total { text-align:right; font-size:0.68rem; color:var(--md-muted); flex-shrink:0; }
 .md-traffic-svg { width:100%; height:90px; display:block; }
-.md-traffic-chart-wrap { position:relative; padding-left:20px; }
+.md-traffic-chart-wrap { position:relative; }
+
+/* Stats expanded area */
+.md-stats-area { margin:0 10px; padding:0 4px 10px 8px; border-top:1px solid var(--md-divider); padding-top:8px; cursor:default; }
+.md-stats-info { font-size:0.68rem; color:var(--md-muted); opacity:0.75; margin-top:4px; padding-top:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.md-stats-loading { display:flex; align-items:center; justify-content:center; gap:8px; padding:24px 0; color:var(--md-muted); font-size:0.82rem; }
+.md-stats-section { margin-bottom:10px; }
+.md-stats-hdr { display:flex; align-items:baseline; flex-wrap:wrap; gap:4px 8px; margin-bottom:2px; }
+	.md-stats-legends { margin-left:auto; display:flex; flex-wrap:wrap; justify-content:flex-end; gap:2px 10px; }
+.md-stats-label { font-size:0.76rem; font-weight:600; color:var(--md-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.md-stats-label-c { font-size:0.7rem; color:var(--md-muted); }
+.md-stats-val { font-size:0.72rem; color:var(--md-secondary); flex-shrink:0; }
+.md-stats-svg { width:100%; height:90px; display:block; }
+.md-stats-chart-wrap { position:relative; }
+.md-stats-legend { font-size:0.68rem; font-weight:500; flex-shrink:0; }
+	/* Disk rows — identical style for total & partition, no left indent, light gray track */
+	.md-disk-total, .md-part-row { position:relative; height:20px; border-radius:3px; background:rgba(127,127,127,0.06); overflow:hidden; margin:2px 0; display:flex; align-items:center; padding:0 6px; }
+	.md-part-fill-bg { position:absolute; left:0; top:0; height:100%; border-radius:3px; background:#1565c0; transition:width 0.3s; opacity:0.22; }
+.md-disk-total-usage, .md-part-usage { position:relative; z-index:1; font-size:0.64rem; color:var(--md-text); flex-shrink:0; margin-left:auto; opacity:0.7; }
+.md-part-label { position:relative; z-index:1; font-size:0.68rem; color:var(--md-secondary); flex-shrink:0; }
+
+
 .md-chart-label { position:absolute; font-size:0.5rem; color:var(--md-muted); font-family:sans-serif; pointer-events:none; white-space:nowrap; }
 .md-chart-y-max { left:2px; top:1px; }
 .md-chart-y-zero { left:2px; bottom:14px; }
-.md-chart-x-start { left:20px; bottom:0; }
+.md-chart-x-start { left:2px; bottom:0; }
 .md-chart-x-mid { left:50%; transform:translateX(-50%); bottom:0; }
 .md-chart-x-end { right:2px; bottom:0; }
 

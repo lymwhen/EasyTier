@@ -533,8 +533,13 @@ async fn is_web_client_connected() -> Result<bool, String> {
 }
 
 #[tauri::command]
-async fn http_get(url: String, proxy: Option<String>) -> Result<String, String> {
-    let mut builder = reqwest::Client::builder().timeout(std::time::Duration::from_secs(3));
+async fn http_get(
+    url: String,
+    proxy: Option<String>,
+    timeout_secs: Option<u64>,
+) -> Result<String, String> {
+    let mut builder = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(timeout_secs.unwrap_or(3)));
     if let Some(ref p) = proxy {
         builder =
             builder.proxy(reqwest::Proxy::all(p).map_err(|e| format!("Invalid proxy: {}", e))?);
@@ -553,8 +558,13 @@ async fn http_get(url: String, proxy: Option<String>) -> Result<String, String> 
 }
 
 #[tauri::command]
-async fn http_post(url: String, proxy: Option<String>) -> Result<String, String> {
-    let mut builder = reqwest::Client::builder().timeout(std::time::Duration::from_secs(3));
+async fn http_post(
+    url: String,
+    proxy: Option<String>,
+    timeout_secs: Option<u64>,
+) -> Result<String, String> {
+    let mut builder = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(timeout_secs.unwrap_or(3)));
     if let Some(ref p) = proxy {
         builder =
             builder.proxy(reqwest::Proxy::all(p).map_err(|e| format!("Invalid proxy: {}", e))?);

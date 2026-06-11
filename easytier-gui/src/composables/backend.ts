@@ -149,12 +149,12 @@ export async function isWebClientConnected() {
 
 // ── Custom commands for WOL/LuCI (not from upstream) ──
 
-export async function httpGet(url: string, proxy?: string) {
-  return await invoke<string>('http_get', { url, proxy: proxy || null })
+export async function httpGet(url: string, proxy?: string, timeoutSecs?: number) {
+  return await invoke<string>('http_get', { url, proxy: proxy || null, timeoutSecs: timeoutSecs ?? null })
 }
 
-export async function httpPost(url: string, proxy?: string) {
-  return await invoke<string>('http_post', { url, proxy: proxy || null })
+export async function httpPost(url: string, proxy?: string, timeoutSecs?: number) {
+  return await invoke<string>('http_post', { url, proxy: proxy || null, timeoutSecs: timeoutSecs ?? null })
 }
 
 export async function tcpPing(host: string, port: number) {
