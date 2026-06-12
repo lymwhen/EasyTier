@@ -108,7 +108,7 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 <tr><td rowspan="7"><b>组网</b></td><td>Peer 卡片展示 — IP + 主机名 + 延迟/丢包率 + 上下行流量 + P2P/Relay 标签 + NAT 类型芯片 + 隧道协议标签；点击展开版本号</td><td>全平台</td></tr>
 <tr><td>网络质量颜色分级 — 绿（正常）/ 蓝（loss>3% 或 lat>50）/ 橙（loss>5% 或 lat>100）/ 红（loss>10% 或 lat>300）；NAT 标签：绿/绿/绿/蓝/橙对应 Open/NAT1/NAT2/NAT3/NAT4</td><td>全平台</td></tr>
 <tr><td>Peer 排序 — 路由器优先（hostname 匹配 <code>/route|wrt|路由|home|家/i</code>），其余按 IP 排序；服务器按 hostname 字母排序</td><td>全平台</td></tr>
-<tr><td>实时速率图表 — SVG 面积渐变折线图（与性能监控同款 area-fill 样式），红色上行 `#e57373` / 蓝色下行 `#1976d2`，3 分钟窗口（60 点），HTML 坐标轴标签覆盖 SVG 之上；连接重建时速率防负值 + 清空旧数据</td><td>全平台</td></tr>
+<tr><td>实时速率图表 — SVG 面积渐变折线图（与性能监控同款 area-fill 样式），绿色上行 `#43a047` / 蓝色下行 `#1e88e5`，3 分钟窗口（60 点），HTML 坐标轴标签覆盖 SVG 之上；连接重建时速率防负值 + 清空旧数据</td><td>全平台</td></tr>
 <tr><td>多网络管理 — 切换/新增/删除网络，当前网络标记 ✓，底部 "Add Network" 入口；网络配置 TOML 编辑器（含剪贴板导入）</td><td>全平台</td></tr>
 <tr><td>连接状态条 — 本机 IP + 设备名 + 版本号 + 红色断开按钮；连接中显示 "Connecting..."；netDiscovering 12 秒内空列表显示 "Waiting for peers..."</td><td>全平台</td></tr>
 <tr><td>3 秒自动刷新 Peer 数据；连接时自动检测全部 WOL 设备状态</td><td>全平台</td></tr>

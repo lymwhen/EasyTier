@@ -879,8 +879,8 @@ const netTrafficSpeed = reactive({ up: '', down: '', upBytes: 0, downBytes: 0, u
 const trafficHistory = reactive<{ up: number; down: number }[]>([])
 const TRAFFIC_MAX_POINTS = 60 // ~3 min at 3s interval
 let lastTraffic = { up: 0, down: 0, ts: 0 }
-const TRAFFIC_UP_COLOR = '#e57373'
-const TRAFFIC_DOWN_COLOR = '#1976d2'
+const TRAFFIC_UP_COLOR = '#43a047'
+const TRAFFIC_DOWN_COLOR = '#1e88e5'
 
 function updateTrafficSpeed() {
   let up = 0, down = 0
@@ -1364,19 +1364,19 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); if (statsTimer) clearI
                   <div class="md-stats-hdr">
                     <span class="md-stats-label">{{ memLabel(w.ip) }}</span>
                     <span class="md-stats-legends">
-                      <span class="md-stats-legend" style="color:#ff9800">&#9679; {{ memUsed(w.ip) }}G / {{ memTotal(w.ip) }}G</span>
+                      <span class="md-stats-legend" style="color:#e57373">&#9679; MEM {{ memUsed(w.ip) }}G / {{ memTotal(w.ip) }}G</span>
                     </span>
                   </div>
                   <div class="md-stats-chart-wrap">
                     <svg class="md-stats-svg" viewBox="0 0 320 108" preserveAspectRatio="none">
                       <defs>
                         <linearGradient :id="'g-mem-'+w.ip" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stop-color="#ff9800" stop-opacity="0.30"/>
-                          <stop offset="100%" stop-color="#ff9800" stop-opacity="0.02"/>
+                          <stop offset="0%" stop-color="#e57373" stop-opacity="0.30"/>
+                          <stop offset="100%" stop-color="#e57373" stop-opacity="0.02"/>
                         </linearGradient>
                       </defs>
                       <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsAreaPath(memGBHistory(w.ip), memChartMax(w.ip), 88, 320)" :fill="'url(#g-mem-'+w.ip+')'"/>
-                      <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsPath(memGBHistory(w.ip), memChartMax(w.ip), 88, 320)" fill="none" stroke="#ff9800" stroke-width="1.5"/>
+                      <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsPath(memGBHistory(w.ip), memChartMax(w.ip), 88, 320)" fill="none" stroke="#e57373" stroke-width="1.5"/>
                       <line x1="0" y1="88" x2="320" y2="88" stroke="var(--md-border)" stroke-width="0.5"/>
                     </svg>
                     <span class="md-chart-label md-chart-y-max">{{ memChartMax(w.ip).toFixed(1) }}G</span>
@@ -1422,7 +1422,7 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); if (statsTimer) clearI
                       <span class="md-stats-label"><template v-if="dk.model">{{ dk.model }}</template><template v-else>{{ dk.name }}</template></span>
                       <span class="md-stats-legends">
                         <span class="md-stats-legend" style="color:#43a047">&#9679; R {{ formatSpeedYStats(curDiskSpeed(w.ip, dk.name).r) }}</span>
-                        <span class="md-stats-legend" style="color:#e53935">&#9679; W {{ formatSpeedYStats(curDiskSpeed(w.ip, dk.name).w) }}</span>
+                        <span class="md-stats-legend" style="color:#ff9800">&#9679; W {{ formatSpeedYStats(curDiskSpeed(w.ip, dk.name).w) }}</span>
                       </span>
                     </div>
                     <div class="md-stats-chart-wrap">
@@ -1433,14 +1433,14 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); if (statsTimer) clearI
                             <stop offset="100%" stop-color="#43a047" stop-opacity="0.02"/>
                           </linearGradient>
                           <linearGradient :id="'g-dw-'+w.ip+'-'+di" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stop-color="#e53935" stop-opacity="0.30"/>
-                            <stop offset="100%" stop-color="#e53935" stop-opacity="0.02"/>
+                            <stop offset="0%" stop-color="#ff9800" stop-opacity="0.30"/>
+                            <stop offset="100%" stop-color="#ff9800" stop-opacity="0.02"/>
                           </linearGradient>
                         </defs>
                         <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsAreaPath(diskHistory(w.ip, dk.name, 'readBps'), diskChartMax(w.ip, dk.name), 88, 320)" :fill="'url(#g-dr-'+w.ip+'-'+di+')'"/>
                         <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsAreaPath(diskHistory(w.ip, dk.name, 'writeBps'), diskChartMax(w.ip, dk.name), 88, 320)" :fill="'url(#g-dw-'+w.ip+'-'+di+')'"/>
                         <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsPath(diskHistory(w.ip, dk.name, 'readBps'), diskChartMax(w.ip, dk.name), 88, 320)" fill="none" stroke="#43a047" stroke-width="1.5"/>
-                        <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsPath(diskHistory(w.ip, dk.name, 'writeBps'), diskChartMax(w.ip, dk.name), 88, 320)" fill="none" stroke="#e53935" stroke-width="1.5"/>
+                        <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsPath(diskHistory(w.ip, dk.name, 'writeBps'), diskChartMax(w.ip, dk.name), 88, 320)" fill="none" stroke="#ff9800" stroke-width="1.5"/>
                         <line x1="0" y1="88" x2="320" y2="88" stroke="var(--md-border)" stroke-width="0.5"/>
                         </svg>
                       <span class="md-chart-label md-chart-y-max">{{ formatSpeedYStats(diskChartMax(w.ip, dk.name)) }}</span>
@@ -1470,26 +1470,26 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); if (statsTimer) clearI
                     <div class="md-stats-hdr">
                       <span class="md-stats-label">{{ nc.desc }}</span>
                       <span class="md-stats-legends">
-                        <span class="md-stats-legend" style="color:#1e88e5">&#9679; &#8593; {{ formatSpeedBps(curNetSpeed(w.ip, nc.name).s) }}</span>
-                        <span class="md-stats-legend" style="color:#43a047">&#9679; &#8595; {{ formatSpeedBps(curNetSpeed(w.ip, nc.name).r) }}</span>
+                        <span class="md-stats-legend" style="color:#43a047">&#9679; &#8593; {{ formatSpeedBps(curNetSpeed(w.ip, nc.name).s) }}</span>
+                        <span class="md-stats-legend" style="color:#1e88e5">&#9679; &#8595; {{ formatSpeedBps(curNetSpeed(w.ip, nc.name).r) }}</span>
                       </span>
                     </div>
                     <div class="md-stats-chart-wrap">
                       <svg class="md-stats-svg" viewBox="0 0 320 108" preserveAspectRatio="none">
                         <defs>
                           <linearGradient :id="'g-nr-'+w.ip+'-'+ni" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stop-color="#43a047" stop-opacity="0.30"/>
-                            <stop offset="100%" stop-color="#43a047" stop-opacity="0.02"/>
-                          </linearGradient>
-                          <linearGradient :id="'g-ns-'+w.ip+'-'+ni" x1="0" y1="0" x2="0" y2="1">
                             <stop offset="0%" stop-color="#1e88e5" stop-opacity="0.30"/>
                             <stop offset="100%" stop-color="#1e88e5" stop-opacity="0.02"/>
+                          </linearGradient>
+                          <linearGradient :id="'g-ns-'+w.ip+'-'+ni" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stop-color="#43a047" stop-opacity="0.30"/>
+                            <stop offset="100%" stop-color="#43a047" stop-opacity="0.02"/>
                           </linearGradient>
                         </defs>
                         <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsAreaPath(netHistory(w.ip, nc.name, 'recvBps'), netChartMax(w.ip, nc.name), 88, 320)" :fill="'url(#g-nr-'+w.ip+'-'+ni+')'"/>
                         <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsAreaPath(netHistory(w.ip, nc.name, 'sentBps'), netChartMax(w.ip, nc.name), 88, 320)" :fill="'url(#g-ns-'+w.ip+'-'+ni+')'"/>
-                        <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsPath(netHistory(w.ip, nc.name, 'recvBps'), netChartMax(w.ip, nc.name), 88, 320)" fill="none" stroke="#43a047" stroke-width="1.5"/>
-                        <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsPath(netHistory(w.ip, nc.name, 'sentBps'), netChartMax(w.ip, nc.name), 88, 320)" fill="none" stroke="#1e88e5" stroke-width="1.5"/>
+                        <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsPath(netHistory(w.ip, nc.name, 'recvBps'), netChartMax(w.ip, nc.name), 88, 320)" fill="none" stroke="#1e88e5" stroke-width="1.5"/>
+                        <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsPath(netHistory(w.ip, nc.name, 'sentBps'), netChartMax(w.ip, nc.name), 88, 320)" fill="none" stroke="#43a047" stroke-width="1.5"/>
                         <line x1="0" y1="88" x2="320" y2="88" stroke="var(--md-border)" stroke-width="0.5"/>
                         </svg>
                       <span class="md-chart-label md-chart-y-max">{{ formatSpeedBps(netChartMax(w.ip, nc.name)) }}</span>
@@ -1596,12 +1596,12 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); if (statsTimer) clearI
               <svg class="md-traffic-svg" viewBox="0 0 320 108" preserveAspectRatio="none">
                 <defs>
                   <linearGradient id="g-traffic-up" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stop-color="#e57373" stop-opacity="0.30"/>
-                    <stop offset="100%" stop-color="#e57373" stop-opacity="0.02"/>
+                    <stop offset="0%" stop-color="#43a047" stop-opacity="0.30"/>
+                    <stop offset="100%" stop-color="#43a047" stop-opacity="0.02"/>
                   </linearGradient>
                   <linearGradient id="g-traffic-down" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stop-color="#1976d2" stop-opacity="0.30"/>
-                    <stop offset="100%" stop-color="#1976d2" stop-opacity="0.02"/>
+                    <stop offset="0%" stop-color="#1e88e5" stop-opacity="0.30"/>
+                    <stop offset="100%" stop-color="#1e88e5" stop-opacity="0.02"/>
                   </linearGradient>
                 </defs>
                 <!-- Up area -->
@@ -1635,7 +1635,7 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); if (statsTimer) clearI
               <div class="md-row md-row-bot">
                 <div class="md-sub flex-1">
                   <template v-if="buildDetail(p).up || buildDetail(p).down">
-                    {{ buildDetail(p).up }}<template v-if="buildDetail(p).up && buildDetail(p).down"> &middot; </template>{{ buildDetail(p).down }}
+                    <span v-if="buildDetail(p).up" class="md-traffic-up-sub">{{ buildDetail(p).up }}</span><template v-if="buildDetail(p).up && buildDetail(p).down"> &middot; </template><span v-if="buildDetail(p).down" class="md-traffic-down-sub">{{ buildDetail(p).down }}</span>
                   </template>
                 </div>
                 <div class="flex items-center gap-1 flex-shrink-0">
@@ -1660,8 +1660,8 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); if (statsTimer) clearI
               </div>
               <div class="md-row md-row-bot">
                 <div class="md-sub flex-1">
-                  <template v-if="buildDetail(p).up">{{ buildDetail(p).up }}</template>
-                  <template v-if="buildDetail(p).down"> &middot; {{ buildDetail(p).down }}</template>
+                  <template v-if="buildDetail(p).up"><span class="md-traffic-up-sub">{{ buildDetail(p).up }}</span></template>
+                  <template v-if="buildDetail(p).down"> &middot; <span class="md-traffic-down-sub">{{ buildDetail(p).down }}</span></template>
                 </div>
                 <div class="flex items-center gap-1 flex-shrink-0">
                   <span class="md-rt" :class="costCls(p.route?.cost)">{{ costLabel(p.route?.cost) }}</span>
@@ -2177,7 +2177,7 @@ html[data-theme="amoled"] .md-app { background: #000; }
 .md-row-bot { padding-top:1px; }
 .md-name { font-size:0.9rem; font-weight:500; }
 .md-sub { font-size:0.76rem; color:var(--md-muted); margin-top:1px; line-height:1.3; }
-.md-chevron { width:18px; height:18px; opacity:0.4; transition:transform 0.2s; flex-shrink:0; color:var(--md-muted); }
+.md-chevron { width:18px; height:18px; opacity:0.55; transition:transform 0.2s; flex-shrink:0; color:var(--md-muted); }
 .md-chevron-open { transform:rotate(180deg); }
 .md-extra { margin:0 10px; padding:0 4px 12px 30px; font-size:0.76rem; color:var(--md-secondary); line-height:1.6; border-top:1px solid var(--md-divider); padding-top:7px; }
 
@@ -2253,12 +2253,14 @@ html[data-theme="amoled"] .md-app { background: #000; }
 .md-traffic-hdr { display:flex; justify-content:space-between; font-size:0.7rem; font-weight:500; margin-bottom:2px; }
 .md-traffic-label { margin-right:12px; }
 .md-traffic-total { text-align:right; font-size:0.68rem; color:var(--md-muted); flex-shrink:0; }
+.md-traffic-up-sub { color:#66bb6a; font-size:0.7rem; }
+.md-traffic-down-sub { color:#42a5f5; font-size:0.7rem; }
 .md-traffic-svg { width:100%; height:90px; display:block; }
 .md-traffic-chart-wrap { position:relative; }
 
 /* Stats expanded area */
-.md-stats-area { margin:0 10px; padding:0 4px 10px 8px; border-top:1px solid var(--md-divider); padding-top:8px; cursor:default; }
-.md-stats-info { font-size:0.68rem; color:var(--md-muted); opacity:0.75; margin-top:4px; padding-top:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.md-stats-area { margin:0 10px; padding:0 4px 10px 8px; padding-top:8px; cursor:default; }
+.md-stats-info { font-size:0.68rem; color:var(--md-secondary); opacity:0.85; margin-top:2px; padding-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .md-stats-loading { display:flex; align-items:center; justify-content:center; gap:8px; padding:24px 0; color:var(--md-muted); font-size:0.82rem; }
 .md-stats-section { margin-bottom:10px; }
 .md-stats-hdr { display:flex; align-items:baseline; flex-wrap:wrap; gap:4px 8px; margin-bottom:2px; }
