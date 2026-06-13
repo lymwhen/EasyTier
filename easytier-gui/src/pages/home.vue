@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { generateNetworkConfig, sendConfigs, collectNetworkInfo, updateNetworkConfigState, parseNetworkConfig, httpGet, httpPost, tcpPing, deleteNetworkInstance, luciProxyStart, luciProxyStop, luciGetLastPath } from '~/composables/backend'
 import { loadLastNetworkInstanceId, saveLastNetworkInstanceId } from '~/composables/config'
 import { Utils, I18nUtils } from 'easytier-frontend-lib'
@@ -51,6 +51,8 @@ const T: Record<string, [string, string]> = {
   addNetwork: ['Add Network', '添加网络'],
   unnamed: ['Unnamed', '未命名'],
   noNetwork: ['No Network', '无网络'],
+  noNetworks: ['No networks configured', '未配置网络'],
+  tapToSwitch: ['Tap ⚡ to switch and add networks', '点击 ⚡ 切换并添加网络'],
   connect: ['Connect', '连接'],
   disconnect: ['Disconnect', '断开'],
   servers: ['Servers', '服务器'],
@@ -80,6 +82,8 @@ const T: Record<string, [string, string]> = {
   chinese: ['中文', '中文'],
   delete: ['Delete', '删除'],
   deleteNetworkConfirm: ['Delete this network?', '确定删除此网络？'],
+  deleted: ['Deleted', '已删除'],
+  confirm: ['Confirm', '确定'],
   debug: ['Debug Mode', '调试模式'],
   debugDesc: ['Show advanced settings entry and diagnostic information', '开启后显示高级设置入口和诊断信息'],
   clear: ['Clear', '清空'],
@@ -117,7 +121,7 @@ const T: Record<string, [string, string]> = {
   helpLuciDesc: ['Manage your OpenWrt router directly in the app — no browser needed. Automatic login with full LuCI admin panel access.', '在 App 内直接管理 OpenWrt 路由器，无需打开浏览器。自动完成登录，提供完整 LuCI 后台面板。'],
   helpLuciFeat: ['Auto login — configure once, no repeated password entry\nMulti-router support — add and switch between routers anytime\nOver EasyTier tunnel — manage home router remotely\nBrowsing position memory — restores last page after refresh', '自动登录，首次配置后无需每次输密码\n支持多台路由器，随时切换管理\n通过 EasyTier 隧道也能远程管理家里路由器\n刷新后自动恢复上次浏览位置'],
   helpBackupTitle: ['Import & Export', '配置导入导出'],
-  helpBackupDesc: ['In Settings > Configuration Info, you can export all WOL devices, network profiles, and router configs to the clipboard with one tap, or import from clipboard to restore. Perfect for switching phones or sharing configs — no need to set up everything again.', '在设置页的「配置信息」中，可将 WOL 设备、网络配置、路由器配置一键导出到剪贴板保存，也可从剪贴板导入恢复。更换手机或分享给他人时无需重新配置。'],
+  helpBackupDesc: ['In Settings > Configuration Info, you can export all WOL devices, network profiles, and router configs to the clipboard with one tap (compressed ETGC:2:...), or import from clipboard to restore. Perfect for switching phones or sharing configs.', '在设置页的「配置信息」中，可将 WOL 设备、网络配置、路由器配置一键导出到剪贴板（压缩编码 ETGC:2:...），也可从剪贴板导入恢复。更换手机或分享给他人时无需重新配置。'],
   helpCfgTitle: ['Config Example', '配置示例'],
   helpWolParams: ['name — Device display name, customize freely\nmac — MAC address for sending WOL magic packets\nip — PC LAN IP for status detection and shutdown\ninterface — Router network interface for sending WOL (e.g. br-lan)\nrouter_ip — Router LAN IP for wake requests and path detection\nagent_port — wol-agent listening port (default 32249)', 'name — 设备显示名称，可自由设置\nmac — MAC 地址，用于发送 WOL 魔术包\nip — 电脑局域网 IP，用于状态检测和关机\ninterface — 路由器上发送 WOL 包的网口（如 br-lan）\nrouter_ip — 路由器 IP，唤醒请求目标和路径模式判断\nagent_port — wol-agent 监听端口（默认 32249）'],
   helpWolSocks5: ['All WOL operations (wake, status check, shutdown) go through the SOCKS5 proxy when connected via EasyTier. Make sure your network config includes: socks5_proxy = "socks5://0.0.0.0:32259". The port can be customized but must match on both sides.', '通过 EasyTier 组网时，所有 WOL 操作（唤醒、状态检测、关机）均经过 SOCKS5 代理。请确保组网配置中包含：socks5_proxy = "socks5://0.0.0.0:32259"。端口可自行指定，但两端需保持一致。'],
@@ -762,9 +766,10 @@ async function doDisconnect() { try { await updateNetworkConfigState(netInstId.v
 async function openNetEditor() {
   if (currentNet.value?.rawToml) { editingNetToml.value = currentNet.value.rawToml }
   else if (currentNet.value?.config) { try { editingNetToml.value = await parseNetworkConfig(currentNet.value.config) } catch { editingNetToml.value = '' } }
+  else { editingNetToml.value = '' }
   showNetEditor.value = true
 }
-async function saveNetConfig() { if (!editingNetToml.value.trim()) return; savingNet.value = true; try { const config = await generateNetworkConfig(editingNetToml.value); const raw = localStorage.getItem('networkList'); const list: StoredNet[] = JSON.parse(raw || '[]'); const idx = list.findIndex(e => e.config?.instance_id === config.instance_id); if (idx >= 0) list[idx] = { config, source: 'user', rawToml: editingNetToml.value }; else list.push({ config, source: 'user', rawToml: editingNetToml.value }); localStorage.setItem('networkList', JSON.stringify(list)); await sendConfigs(list.map(e => e.config.instance_id)); loadNetworks(); showNetEditor.value = false; showSnack(tt('saved')); await refreshNet() } catch (e: any) { showSnack(String(e)) } finally { savingNet.value = false } }
+async function saveNetConfig() { if (!editingNetToml.value.trim()) return; savingNet.value = true; try { const config = await generateNetworkConfig(editingNetToml.value); const raw = localStorage.getItem('networkList'); const list: StoredNet[] = JSON.parse(raw || '[]'); const idx = list.findIndex(e => e.config?.instance_id === config.instance_id); const isNew = idx < 0; if (idx >= 0) list[idx] = { config, source: 'user', rawToml: editingNetToml.value }; else list.push({ config, source: 'user', rawToml: editingNetToml.value }); localStorage.setItem('networkList', JSON.stringify(list)); loadNetworks(); if (isNew) { const newIdx = networks.value.findIndex(e => e.config.instance_id === config.instance_id); if (newIdx >= 0) switchToNet(newIdx) } showNetEditor.value = false; showSnack(tt('saved')); } catch (e: any) { showSnack(String(e)) } finally { savingNet.value = false } }
 function openAddNet() { editingNetToml.value = ''; showNetEditor.value = true; showSwitchMenu.value = false }
 function switchToNet(idx: number) { netIndex.value = idx; netConnectTime.value = 0; saveLastNetworkInstanceId(networks.value[idx].config.instance_id); showSwitchMenu.value = false; refreshNet() }
 function confirmDeleteNet(idx: number, e: MouseEvent) { e.stopPropagation(); deleteTargetIdx.value = idx; showDeleteConfirm.value = true; showSwitchMenu.value = false }
@@ -777,9 +782,10 @@ async function doDeleteNet() {
   const list: StoredNet[] = JSON.parse(raw || '[]')
   const newList = list.filter(e => e.config?.instance_id !== instId)
   localStorage.setItem('networkList', JSON.stringify(newList))
+  editingNetToml.value = ''
   loadNetworks()
   showDeleteConfirm.value = false
-  showSnack('Deleted')
+  showSnack(tt('deleted'))
 }
 
 // --- Helpers ---
@@ -881,6 +887,16 @@ const TRAFFIC_MAX_POINTS = 60 // ~3 min at 3s interval
 let lastTraffic = { up: 0, down: 0, ts: 0 }
 const TRAFFIC_UP_COLOR = '#43a047'
 const TRAFFIC_DOWN_COLOR = '#1e88e5'
+
+const SETTINGS_COLORS = ['#81c784', '#e57373', '#64b5f6', '#ffcc80', '#b39ddb', '#80cbc4', '#f48fb1']
+const settingsItemColors = computed(() => {
+  const ids = ['defaultHome', 'theme', 'amoled', 'language', 'debug']
+  if (showDebug.value) ids.push('advanced')
+  ids.push('config', 'help', 'about')
+  const map: Record<string, string> = {}
+  ids.forEach((id, i) => { map[id] = SETTINGS_COLORS[i % SETTINGS_COLORS.length] })
+  return map
+})
 
 function updateTrafficSpeed() {
   let up = 0, down = 0
@@ -1167,6 +1183,83 @@ const importText = ref('')
 const importPendingData = ref<any>(null)
 const importTextareaRef = ref<any>(null)
 
+function toBase64Url(bytes: Uint8Array): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
+  let result = ''
+  const len = bytes.length
+  for (let i = 0; i < len; i += 3) {
+    const b0 = bytes[i], b1 = i + 1 < len ? bytes[i + 1] : 0, b2 = i + 2 < len ? bytes[i + 2] : 0
+    result += chars[(b0 >> 2) & 0x3F]
+    result += chars[((b0 & 0x3) << 4) | ((b1 >> 4) & 0xF)]
+    if (i + 1 < len) result += chars[((b1 & 0xF) << 2) | ((b2 >> 6) & 0x3)]
+    if (i + 2 < len) result += chars[b2 & 0x3F]
+  }
+  return result
+}
+
+function fromBase64Url(str: string): Uint8Array {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
+  const lookup = new Uint8Array(128)
+  for (let i = 0; i < 64; i++) lookup[chars.charCodeAt(i)] = i
+  const len = str.length
+  const bytes = new Uint8Array(Math.floor(len * 3 / 4))
+  let j = 0
+  for (let i = 0; i < len; i += 4) {
+    const c0 = lookup[str.charCodeAt(i)], c1 = i + 1 < len ? lookup[str.charCodeAt(i + 1)] : 0
+    const c2 = i + 2 < len ? lookup[str.charCodeAt(i + 2)] : 0, c3 = i + 3 < len ? lookup[str.charCodeAt(i + 3)] : 0
+    bytes[j++] = (c0 << 2) | (c1 >> 4)
+    if (i + 2 < len) bytes[j++] = ((c1 & 0xF) << 4) | (c2 >> 2)
+    if (i + 3 < len) bytes[j++] = ((c2 & 0x3) << 6) | c3
+  }
+  return j < bytes.length ? bytes.slice(0, j) : bytes
+}
+
+async function compressDeflate(text: string): Promise<Uint8Array> {
+  const blob = new Blob([text])
+  const cs = new CompressionStream('deflate')
+  const stream = blob.stream().pipeThrough(cs)
+  const reader = stream.getReader()
+  const chunks: Uint8Array[] = []
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    chunks.push(value)
+  }
+  const total = chunks.reduce((s, c) => s + c.length, 0)
+  const result = new Uint8Array(total)
+  let offset = 0
+  for (const c of chunks) { result.set(c, offset); offset += c.length }
+  return result
+}
+
+async function decompressDeflate(bytes: Uint8Array): Promise<string> {
+  const blob = new Blob([bytes])
+  const ds = new DecompressionStream('deflate')
+  const stream = blob.stream().pipeThrough(ds)
+  const reader = stream.getReader()
+  const chunks: Uint8Array[] = []
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    chunks.push(value)
+  }
+  const total = chunks.reduce((s, c) => s + c.length, 0)
+  const result = new Uint8Array(total)
+  let offset = 0
+  for (const c of chunks) { result.set(c, offset); offset += c.length }
+  return new TextDecoder().decode(result)
+}
+
+async function decodeExportData(raw: string): Promise<any> {
+  const trimmed = raw.trim()
+  if (trimmed.startsWith('ETGC:2:')) {
+    const bytes = fromBase64Url(trimmed.slice(7))
+    const json = await decompressDeflate(bytes)
+    return JSON.parse(json)
+  }
+  throw new Error('Invalid format')
+}
+
 async function doExport() {
   const nets: StoredNet[] = JSON.parse(localStorage.getItem('networkList') || '[]')
   const netTomls: string[] = []
@@ -1180,8 +1273,10 @@ async function doExport() {
     luci: luciToml.value,
     net: netTomls,
   }
-  const text = JSON.stringify(data, null, 2)
-  try { await writeText(text) } catch { /* ignore */ }
+  const json = JSON.stringify(data)
+  const compressed = await compressDeflate(json)
+  const encoded = 'ETGC:2:' + toBase64Url(compressed)
+  try { await writeText(encoded) } catch { /* ignore */ }
   showSnack(tt('exportedToClipboard'))
 }
 
@@ -1196,9 +1291,9 @@ async function doImportFromClipboard() {
   importText.value = text
 }
 
-function confirmImport() {
+async function confirmImport() {
   let data: any
-  try { data = JSON.parse(importText.value) } catch { showSnack(tt('importFailed')); return }
+  try { data = await decodeExportData(importText.value) } catch { showSnack(tt('importFailed')); return }
   if (!data || typeof data.v !== 'number' || typeof data.wol !== 'string' || typeof data.luci !== 'string' || !Array.isArray(data.net) || !data.net.every((s: any) => typeof s === 'string')) {
     showSnack(tt('importFailed')); return
   }
@@ -1288,7 +1383,7 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); if (statsTimer) clearI
       <div v-if="showDebug && wolDebug && sortedWol.length" class="px-4 py-1 text-xs opacity-60" style="color:var(--md-secondary);font-family:monospace;word-break:break-all">{{ wolDebug }}</div>
       <div class="flex-1 overflow-y-auto px-3 pt-3 pb-2">
         <div v-if="!sortedWol.length" class="flex flex-col items-center justify-center h-full gap-3 opacity-50">
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--md-muted)" stroke-width="1.2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+          <svg width="48" height="48" viewBox="0 0 1024 1024" fill="none" stroke="var(--md-muted)" stroke-width="20"><path d="M864 752H624v64h136c12.8 0 24 11.2 24 24s-11.2 24-24 24h-480c-12.8 0-24-11.2-24-24s11.2-24 24-24H400v-64H160c-17.6 0-32-14.4-32-32V192c0-17.6 14.4-32 32-32h704c17.6 0 32 14.4 32 32v528c0 17.6-14.4 32-32 32z m-16-544H176v464h672V208z m-48 416H224V256h576v368z"/></svg>
           <div class="text-base" style="color:var(--md-muted)">{{ tt('noWolDevices') }}</div>
           <div class="text-sm text-center px-4" style="color:var(--md-muted)">{{ tt('tapToAdd') }}</div>
         </div>
@@ -1555,8 +1650,17 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); if (statsTimer) clearI
         </div>
       </div>
 
-      <!-- Disconnected -->
-      <div v-if="!netRunning && !netConnecting" class="flex-1 flex items-center justify-center">
+      <!-- No networks configured -->
+      <div v-if="!networks.length && !netRunning && !netConnecting" class="flex-1 flex items-center justify-center">
+        <div class="flex flex-col items-center gap-3 opacity-50">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--md-muted)" stroke-width="1.2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+          <div class="text-base" style="color:var(--md-muted)">{{ tt('noNetworks') }}</div>
+          <div class="text-sm text-center px-4" style="color:var(--md-muted)">{{ tt('tapToSwitch') }}</div>
+        </div>
+      </div>
+
+      <!-- Disconnected (has networks but not running) -->
+      <div v-if="networks.length && !netRunning && !netConnecting" class="flex-1 flex items-center justify-center">
         <button class="md-connect-btn" @click="doConnect" :disabled="netConnecting">
           <svg width="32" height="32" viewBox="0 0 1024 1024" fill="currentColor"><path d="M594.6 716.6a10.68 10.68 0 0 0-15 0l-154.9 154.9c-71.75 71.67-192.79 79.35-272 0-79.35-79.35-71.67-200.25 0-272l154.9-154.9a10.68 10.68 0 0 0 0-15.07l-53.02-53.1a10.68 10.68 0 0 0-15.07 0L84.62 531.41a288.23 288.23 0 0 0 0 407.96 288.3 288.3 0 0 0 407.96 0l154.9-154.9a10.68 10.68 0 0 0 0-15.07l-52.8-52.8z m344.84-631.97a288.16 288.16 0 0 0-407.96 0l-155.05 154.9a10.68 10.68 0 0 0 0 15.07l52.95 52.95a10.68 10.68 0 0 0 15 0l154.97-154.98c71.67-71.67 192.79-79.28 271.92 0 79.35 79.35 71.75 200.32 0 272.07L716.37 579.46a10.68 10.68 0 0 0 0 15.07l53.1 53.02a10.68 10.68 0 0 0 15.07 0l154.9-154.9a288.67 288.67 0 0 0 0-408.1zM642.8 325.82a10.68 10.68 0 0 0-15.07 0L325.75 627.66a10.68 10.68 0 0 0 0 15.07l52.8 52.8a10.68 10.68 0 0 0 15.07 0l301.84-301.9a10.68 10.68 0 0 0 0-15.07l-52.66-52.73z"/></svg>
           <span>{{ tt('connect') }}</span>
@@ -1715,7 +1819,7 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); if (statsTimer) clearI
       </div>
       <div class="flex-1 overflow-hidden">
         <div v-if="!luciRouters.length" class="flex flex-col items-center justify-center h-full gap-3 opacity-50">
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--md-muted)" stroke-width="1.2"><rect x="2" y="2" width="20" height="20" rx="2"/><circle cx="12" cy="12" r="3"/><line x1="4.93" y1="4.93" x2="9.17" y2="9.17"/><line x1="14.83" y1="14.83" x2="19.07" y2="19.07"/></svg>
+          <svg width="48" height="48" viewBox="0 0 1024 1024" fill="none" stroke="var(--md-muted)" stroke-width="20"><path d="M881.777778 597.333333h-56.888889V199.111111c0-17.066667-11.377778-28.444444-28.444445-28.444444s-28.444444 11.377778-28.444444 28.444444v398.222222h-227.555556V199.111111c0-17.066667-11.377778-28.444444-28.444444-28.444444s-28.444444 11.377778-28.444444 28.444444v398.222222H256V199.111111c0-17.066667-11.377778-28.444444-28.444444-28.444444s-28.444444 11.377778-28.444445 28.444444v398.222222H142.222222c-31.288889 0-56.888889 25.6-56.888889 56.888889v142.222222c0 31.288889 25.6 56.888889 56.888889 56.888889h739.555556c31.288889 0 56.888889-25.6 56.888889-56.888889v-142.222222c0-31.288889-25.6-56.888889-56.888889-56.888889z"/></svg>
           <div class="text-base" style="color:var(--md-muted)">{{ tt('noRouters') }}</div>
           <div class="text-sm text-center px-4" style="color:var(--md-muted)">{{ tt('tapToAdd') }}</div>
         </div>
@@ -1734,10 +1838,10 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); if (statsTimer) clearI
         <div class="flex-1" />
         <div style="width:36px" />
       </div>
-      <div class="flex-1 overflow-y-auto py-1">
+      <div class="flex-1 overflow-y-auto px-3 py-1">
         <div class="md-card md-settings-card">
           <div class="md-row">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>
+            <svg width="22" height="22" viewBox="0 0 24 24" :fill="settingsItemColors.defaultHome"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>
             <div class="flex-1">
               <div class="md-name">{{ tt('defaultHome') }}</div>
               <div class="md-sub">{{ tt('defaultHomeDesc') }}</div>
@@ -1751,7 +1855,7 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); if (statsTimer) clearI
         </div>
         <div class="md-card md-settings-card">
           <div class="md-row">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M12 7c-2.76 0-5 2.24-5 5s2.24 5 5 5 5-2.24 5-5-2.24-5-5-5zm-1 9.38V7.62c1.86.5 3 2.17 3 4.38s-1.14 3.88-3 4.38zM12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/></svg>
+            <svg width="22" height="22" viewBox="0 0 1024 1024" :fill="settingsItemColors.theme"><g transform="translate(100,100) scale(0.8)"><path d="M1012.286427 953.863217l-171.572479-174.157892a41.091581 41.091581 0 0 0-29.209678-12.321974 40.321458 40.321458 0 0 0-28.714599 11.771886 41.036572 41.036572 0 0 0-12.266964 29.209678 41.476643 41.476643 0 0 0 11.771885 29.209678l171.627487 174.157892a41.091581 41.091581 0 0 0 29.209678 12.266965 40.321458 40.321458 0 0 0 28.65959-11.771885 41.091581 41.091581 0 0 0 12.321974-29.209679 42.356784 42.356784 0 0 0-11.826894-29.154669z"/><path d="M935.494128 618.309476a93.019898 93.019898 0 0 0 50.223043-65.570501 90.214448 90.214448 0 0 0-27.174352-75.802141c-48.132709-53.248528-127.015342-136.256822-159.800593-171.077399-6.656066-37.90107-27.504405-157.765267-42.026731-231.532081a90.379475 90.379475 0 0 0-47.637629-65.570502 80.807942 80.807942 0 0 0-37.90107-8.691392 96.650479 96.650479 0 0 0-42.191758 9.681551c-67.605827 31.740083-178.283553 86.033779-213.10413 102.976492-38.946237-4.62074-162.881086-19.473119-237.142979-27.174352a49.507929 49.507929 0 0 0-8.691392-0.495079 85.703726 85.703726 0 0 0-60.949762 25.634105 90.764537 90.764537 0 0 0-26.129185 73.766815c8.691392 74.811982 24.093859 198.746831 28.65959 238.188147-16.887705 35.370665-70.191242 148.523787-101.436245 218.219949a91.864713 91.864713 0 0 0-1.540247 80.91796 83.338347 83.338347 0 0 0 58.914435 43.016889c71.511453 13.807211 197.206584 35.865744 237.14298 43.01689 28.164511 27.174352 117.828871 112.162964 172.617646 162.386007a91.97473 91.97473 0 0 0 62.490008 27.504405 83.723409 83.723409 0 0 0 11.001762-1.045168 86.143796 86.143796 0 0 0 61.994929-48.132708c36.855903-65.570502 97.310585-178.283553 116.288625-213.59921 33.830418-18.978039 140.327474-78.387554 205.897975-116.783703z"/><path d="M331.497394 484.638068a41.091581 41.091581 0 0 0-29.209678-12.321974 42.356784 42.356784 0 0 0-29.209678 11.771886 41.036572 41.036572 0 0 0-12.266965 29.209678 41.476643 41.476643 0 0 0 11.771885 29.209678l25.634106 25.634105a41.091581 41.091581 0 0 0 29.209678 12.321974 42.356784 42.356784 0 0 0 29.209678-11.771885 41.036572 41.036572 0 0 0 12.266965-29.209679 41.476643 41.476643 0 0 0-11.771886-29.209678z"/><path d="M504.11504 362.188457a41.091581 41.091581 0 0 0 29.209678 12.266964 42.411793 42.411793 0 0 0 29.209678-11.771885 41.14659 41.14659 0 0 0 0-57.869268l-25.634106-25.634106a41.036572 41.036572 0 0 0-29.209678-12.321973 42.356784 42.356784 0 0 0-29.209678 11.771885 41.036572 41.036572 0 0 0-12.321973 29.209678 41.476643 41.476643 0 0 0 11.771885 29.209679z"/><path d="M578.927021 547.128075a50.38807 50.38807 0 0 0-8.691392 1.045167 40.596502 40.596502 0 0 0-31.245004 48.682797 52.203361 52.203361 0 0 1-11.001762 42.026731 41.696678 41.696678 0 0 1-31.245004 11.001762 20.628304 20.628304 0 0 1-9.24148-1.045167 56.108986 56.108986 0 0 0-9.24148-1.045168 40.596502 40.596502 0 0 0-39.936396 31.740084 41.036572 41.036572 0 0 0 30.749925 49.177876 106.497056 106.497056 0 0 0 27.174352 3.080493 125.970175 125.970175 0 0 0 90.159439-35.865744 133.726417 133.726417 0 0 0 33.280331-117.278783 42.741845 42.741845 0 0 0-40.486485-31.740083z"/></g></svg>
             <div class="flex-1">
               <div class="md-name">{{ tt('theme') }}</div>
               <div class="md-sub">{{ tt('themeDesc') }}</div>
@@ -1765,7 +1869,7 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); if (statsTimer) clearI
         </div>
         <div class="md-card md-settings-card" @click="amoledMode = !amoledMode">
           <div class="md-row">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-14.5v13c-3.04 0-5.5-2.91-5.5-6.5s2.46-6.5 5.5-6.5z"/></svg>
+            <svg width="22" height="22" viewBox="0 0 24 24" :fill="settingsItemColors.amoled"><path d="M9.37 5.51A7.35 7.35 0 0 0 9.1 7.5c0 4.08 3.32 7.4 7.4 7.4.68 0 1.35-.09 1.99-.27A7.014 7.014 0 0 1 12 19c-3.86 0-7-3.14-7-7 0-2.93 1.81-5.45 4.37-6.49zM12 3a9 9 0 1 0 9 9c0-.46-.04-.92-.1-1.36a5.389 5.389 0 0 1-4.4 2.26 5.403 5.403 0 0 1-3.14-9.8c-.44-.06-.9-.1-1.36-.1z"/></svg>
             <div class="flex-1">
               <div class="md-name">{{ tt('amoled') }}</div>
               <div class="md-sub">{{ tt('amoledDesc') }}</div>
@@ -1775,7 +1879,7 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); if (statsTimer) clearI
         </div>
         <div class="md-card md-settings-card" @click="toggleLang">
           <div class="md-row">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zm6.93 6h-2.95a15.65 15.65 0 00-1.38-3.56A8.03 8.03 0 0118.92 8zM12 4.04c.83 1.2 1.48 2.53 1.91 3.96h-3.82c.43-1.43 1.08-2.76 1.91-3.96zM4.26 14C4.1 13.36 4 12.69 4 12s.1-1.36.26-2h3.38c-.08.66-.14 1.32-.14 2 0 .68.06 1.34.14 2H4.26zm.82 2h2.95c.32 1.25.78 2.45 1.38 3.56A7.987 7.987 0 015.08 16zm2.95-8H5.08a7.987 7.987 0 014.33-3.56A15.65 15.65 0 008.03 8zM12 19.96c-.83-1.2-1.48-2.53-1.91-3.96h3.82c-.43 1.43-1.08 2.76-1.91 3.96zM14.34 14H9.66c-.09-.66-.16-1.32-.16-2 0-.68.07-1.35.16-2h4.68c.09.65.16 1.32.16 2 0 .68-.07 1.34-.16 2zm.25 5.56c.6-1.11 1.06-2.31 1.38-3.56h2.95a8.03 8.03 0 01-4.33 3.56zM16.36 14c.08-.66.14-1.32.14-2 0-.68-.06-1.34-.14-2h3.38c.16.64.26 1.31.26 2s-.1 1.36-.26 2h-3.38z"/></svg>
+            <svg width="22" height="22" viewBox="0 0 1024 1024" :fill="settingsItemColors.language"><g transform="translate(100,100) scale(0.9)"><path d="M873.984 102.912c-26.112 0-47.104 20.992-47.104 47.104 0 5.632 1.024 10.752 2.56 15.872h12.8c8.704 0 15.872 7.168 15.872 15.872v12.8c5.12 1.536 10.24 2.56 15.872 2.56 26.112 0 47.104-20.992 47.104-47.104s-20.992-47.104-47.104-47.104z"/><path d="M889.856 102.912H258.56c-17.408 0-31.744 14.336-31.744 31.744s14.336 31.744 31.744 31.744h599.552v599.552c0 17.408 14.336 31.744 31.744 31.744s31.744-14.336 31.744-31.744V134.656c0-17.408-14.336-31.744-31.744-31.744zM394.752 621.568h107.52L448.512 470.528l-53.76 151.04z"/><path d="M747.52 226.816H152.064a49.152 49.152 0 0 0-49.152 49.152v595.456c0 27.136 22.016 49.152 49.152 49.152H747.52c27.136 0 49.152-22.016 49.152-49.152V276.48a49.152 49.152 0 0 0-49.152-49.152z m-184.832 567.808l-31.744-91.136H366.08l-33.28 91.136H252.928l156.16-441.856h78.336l155.648 441.856H563.2z"/></g></svg>
             <div class="flex-1">
               <div class="md-name">{{ tt('language') }}</div>
               <div class="md-sub">{{ tt('languageDesc') }}</div>
@@ -1785,7 +1889,7 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); if (statsTimer) clearI
         </div>
         <div class="md-card md-settings-card" @click="showDebug = !showDebug">
           <div class="md-row">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.488.488 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+            <svg width="22" height="22" viewBox="0 0 24 24" :fill="settingsItemColors.debug"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.488.488 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
             <div class="flex-1">
               <div class="md-name">{{ tt('debug') }}</div>
               <div class="md-sub">{{ tt('debugDesc') }}</div>
@@ -1795,17 +1899,17 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); if (statsTimer) clearI
         </div>
         <div v-if="showDebug" class="md-card md-settings-card" @click="router.push('/')">
           <div class="md-row">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.488.488 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+            <svg width="22" height="22" viewBox="0 0 24 24" :fill="settingsItemColors.advanced"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.488.488 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
             <div class="flex-1">
               <div class="md-name">{{ tt('advancedSettings') }}</div>
               <div class="md-sub">{{ tt('advancedSettingsDesc') }}</div>
             </div>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="var(--md-muted)" opacity="0.5"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6z"/></svg>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--md-muted)" opacity="0.5"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6z"/></svg>
           </div>
         </div>
         <div class="md-card md-settings-card">
           <div class="md-row">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/></svg>
+            <svg width="22" height="22" viewBox="0 0 24 24" :fill="settingsItemColors.config"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/></svg>
             <div class="flex-1">
               <div class="md-name">{{ tt('oneClickConfig') }}</div>
               <div class="md-sub">{{ tt('oneClickConfigDesc') }}</div>
@@ -1816,7 +1920,7 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); if (statsTimer) clearI
         </div>
         <div class="md-card md-settings-card" @click="showHelpDlg = true">
           <div class="md-row">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75l-.9.92C13.45 12.9 13 13.5 13 15h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H8c0-2.21 1.79-4 4-4s4 1.79 4 4c0 .88-.36 1.68-.93 2.25z"/></svg>
+            <svg width="22" height="22" viewBox="0 0 24 24" :fill="settingsItemColors.help"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75l-.9.92C13.45 12.9 13 13.5 13 15h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H8c0-2.21 1.79-4 4-4s4 1.79 4 4c0 .88-.36 1.68-.93 2.25z"/></svg>
             <div class="flex-1">
               <div class="md-name">{{ tt('help') }}</div>
               <div class="md-sub">{{ tt('helpDesc') }}</div>
@@ -1825,7 +1929,7 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); if (statsTimer) clearI
         </div>
         <div class="md-card md-settings-card" @click="showAboutDlg = true">
           <div class="md-row">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--md-secondary)"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+            <svg width="22" height="22" viewBox="0 0 24 24" :fill="settingsItemColors.about"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
             <div class="flex-1">
               <div class="md-name">{{ tt('about') }}</div>
               <div class="md-sub">{{ tt('aboutSub') }}</div>
@@ -1877,7 +1981,7 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); if (statsTimer) clearI
           <button class="md-dlg-btn" @click="importFromClipboard('net')">{{ tt('importFromClipboard') }}</button>
           <div class="flex-1" />
           <button class="md-dlg-btn" @click="showNetEditor = false">{{ tt('cancel') }}</button>
-          <button class="md-dlg-btn md-dlg-btn-save" @click="saveNetConfig" :disabled="savingNet">{{ savingNet ? '...' : tt('saveAndRun') }}</button>
+          <button class="md-dlg-btn md-dlg-btn-save" @click="saveNetConfig" :disabled="savingNet">{{ savingNet ? '...' : tt('save') }}</button>
         </div>
       </template>
     </Dialog>
@@ -1900,9 +2004,9 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); if (statsTimer) clearI
     <Dialog v-model:visible="showDeleteConfirm" modal :header="tt('delete')" :style="{ width: '85vw', maxWidth: '380px' }" class="md-dialog" :pt="{ header: { class: 'md-dialog-hdr' }, content: { class: 'md-dialog-content' }, footer: { class: 'md-dialog-ft' } }">
       <p class="text-base py-2" style="color:var(--md-text)">{{ tt('deleteNetworkConfirm') }}</p>
       <template #footer>
-        <div class="md-dlg-ft">
+        <div class="md-dlg-ft" style="justify-content:flex-end;gap:8px">
           <button class="md-dlg-btn" @click="showDeleteConfirm = false">{{ tt('cancel') }}</button>
-          <button class="md-dlg-btn md-dlg-btn-del" @click="doDeleteNet">OK</button>
+          <button class="md-dlg-btn md-dlg-btn-del" @click="doDeleteNet">{{ tt('confirm') }}</button>
         </div>
       </template>
     </Dialog>
@@ -1926,7 +2030,7 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); if (statsTimer) clearI
       <template #footer>
         <div class="md-dlg-ft" style="justify-content:flex-end;gap:8px">
           <button class="md-dlg-btn" @click="showImportConfirm = false">{{ tt('cancel') }}</button>
-          <button class="md-dlg-btn md-dlg-btn-save" @click="executeImport">OK</button>
+          <button class="md-dlg-btn md-dlg-btn-save" @click="executeImport">{{ tt('confirm') }}</button>
         </div>
       </template>
     </Dialog>
@@ -2074,6 +2178,8 @@ html[data-theme="amoled"] {
   --p-dialog-color: var(--md-text);
 }
 .md-dialog.p-dialog { border-radius:16px; overflow:hidden; background:var(--md-card); }
+.overflow-y-auto { scrollbar-width:none; -ms-overflow-style:none; }
+.overflow-y-auto::-webkit-scrollbar { display:none; }
 .md-dialog .p-dialog-header { background:transparent !important; }
 .md-dialog .p-dialog-content { background:transparent !important; }
 .md-dialog .p-dialog-footer { background:transparent !important; }
@@ -2171,8 +2277,8 @@ html[data-theme="amoled"] .md-app { background: #000; }
 .md-card { background:var(--md-card); border-radius:var(--md-radius); box-shadow:var(--md-shadow); margin-bottom:8px; cursor:pointer; transition:opacity 0.3s; }
 .md-card-dim { opacity:0.55; }
 .md-card-item { margin-bottom:8px; }
-.md-settings-card { margin:8px 12px; }
-.md-row { display:flex; align-items:center; gap:10px; padding:13px 14px; }
+.md-settings-card { margin:8px 0; }
+.md-row { display:flex; align-items:center; gap:12px; padding:12px 18px; }
 .md-row-top { padding-bottom:1px; align-items:center; }
 .md-row-bot { padding-top:1px; }
 .md-name { font-size:0.9rem; font-weight:500; }
@@ -2253,8 +2359,8 @@ html[data-theme="amoled"] .md-app { background: #000; }
 .md-traffic-hdr { display:flex; justify-content:space-between; font-size:0.7rem; font-weight:500; margin-bottom:2px; }
 .md-traffic-label { margin-right:12px; }
 .md-traffic-total { text-align:right; font-size:0.68rem; color:var(--md-muted); flex-shrink:0; }
-.md-traffic-up-sub { color:#66bb6a; font-size:0.7rem; }
-.md-traffic-down-sub { color:#42a5f5; font-size:0.7rem; }
+.md-traffic-up-sub { color:#43a047; font-size:0.7rem; }
+.md-traffic-down-sub { color:#1e88e5; font-size:0.7rem; }
 .md-traffic-svg { width:100%; height:90px; display:block; }
 .md-traffic-chart-wrap { position:relative; }
 

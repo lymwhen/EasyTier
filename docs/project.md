@@ -98,6 +98,7 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 <tr><td>图表 SVG — 无左侧 Y 轴预留空间，最大值标签叠于图表左上角，y=0 由横轴线隐式表达，横坐标左右贴边（`left:2px` / `right:2px`）</td><td>全平台</td></tr>
 <tr><td>自定义 Material snackbar 底部居中胶囊 Toast（替代 PrimeVue useToast）— 2.5s 滑入动画</td><td>全平台</td></tr>
 <tr><td>中英双语 — 自定义 <code>tt(key)</code> 函数 + 内联 i18n 字典（不依赖 easytier-frontend-lib），用户面文本全部双语化</td><td>全平台</td></tr>
+<tr><td>页面内容区域隐藏滚动条 — MD 风格：<code>.overflow-y-auto</code> 通过 <code>scrollbar-width:none</code> / <code>::-webkit-scrollbar { display:none }</code> 隐藏滚动条，保留滚动功能</td><td>全平台</td></tr>
 <tr><td rowspan="7"><b>电脑<br>(WOL)</b></td><td>设备卡片 — 在线状态指示灯（脉冲动画）+ 名称 + IP + 状态文字，点击展开详情（MAC / Router IP / Interface / Agent Port）</td><td>全平台</td></tr>
 <tr><td>远程唤醒 — App → HTTP GET 路由器 CGI（<code>luci-app-wolplus</code>）→ <code>etherwake</code> 发送魔术包；局域网直连 / EasyTier SOCKS5 隧道双路径</td><td>全平台</td></tr>
 <tr><td>在线状态检测 — App → HTTP GET PC Agent（Go，32249 端口，<code>/api/v1/status</code>）；30 秒自动轮询，路由器离线时中止并置灰卡片</td><td>全平台</td></tr>
@@ -112,19 +113,22 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 <tr><td>多网络管理 — 切换/新增/删除网络，当前网络标记 ✓，底部 "Add Network" 入口；网络配置 TOML 编辑器（含剪贴板导入）</td><td>全平台</td></tr>
 <tr><td>连接状态条 — 本机 IP + 设备名 + 版本号 + 红色断开按钮；连接中显示 "Connecting..."；netDiscovering 12 秒内空列表显示 "Waiting for peers..."</td><td>全平台</td></tr>
 <tr><td>3 秒自动刷新 Peer 数据；连接时自动检测全部 WOL 设备状态</td><td>全平台</td></tr>
+<tr><td>多网络管理 Bug 修复 — 新增配置仅保存不自动连接（用户手动 Connect）；删除网络后编辑器清空旧内容；删除/导入确认按钮文案中文化（<code>tt('confirm')</code>）</td><td>全平台</td></tr>
 <tr><td rowspan="5"><b>LuCI</b></td><td>Hyper 本地 HTTP 反向代理 — 自动向路由器发起 LuCI 登录（POST <code>/cgi-bin/luci/</code>），提取 <code>sysauth</code> / <code>sysauth_http</code> cookie，后续请求自动注入</td><td>全平台</td></tr>
 <tr><td>iframe 嵌入路由器管理页面 — 全屏 100%×100%；SOCKS5 代理支持 EasyTier 隧道访问远程路由器</td><td>全平台</td></tr>
 <tr><td>会话过期自动重登（检测 302 重定向到 login），刷新保持当前 URL（<code>last_path</code> 仅追踪 <code>text/html</code> 响应，过滤 CSS/JS/API 资源请求）</td><td>全平台</td></tr>
 <tr><td>多路由器管理 — TOML 配置路由器列表，支持切换/新增/删除；删除当前路由器自动切换至剩余第一个</td><td>全平台</td></tr>
 <tr><td>路径持久化 — 刷新或路径模式切换（ET-LAN ↔ LAN）后，代理重启自动恢复上次浏览位置；v-show 切回 Tab 不重载 iframe</td><td>全平台</td></tr>
-<tr><td rowspan="8"><b>设置</b></td><td>高级设置入口（默认隐藏，开启调试模式后显示）— 跳转原 <code>index.vue</code>（<code>/</code> 路由）访问 easytier-frontend-lib 自带高级面板</td><td>全平台</td></tr>
+<tr><td rowspan="11"><b>设置</b></td><td>设置菜单图标动态配色 — <code>settingsItemColors</code> computed 属性按可见项顺序分配 7 色循环调色板（绿、红、蓝、橙、紫、青、粉），隐藏项（如调试模式关闭时的高级设置）不占用颜色槽位，避免相邻项颜色重复</td><td>全平台</td></tr>
+<tr><td>高级设置入口（默认隐藏，开启调试模式后显示）— 跳转原 <code>index.vue</code>（<code>/</code> 路由）访问 easytier-frontend-lib 自带高级面板</td><td>全平台</td></tr>
 <tr><td>语言切换 — 地球图标 + 当前语言蓝色胶囊标签（中文 / English），点击 <code>toggleLang()</code> 即时切换所有 UI 文字</td><td>全平台</td></tr>
 <tr><td>默认首页 — 原生 <code>&lt;select&gt;</code> 下拉（电脑 / 组网 / LuCI），<code>localStorage['defaultTab']</code> 持久化</td><td>全平台</td></tr>
 <tr><td>调试模式 — toggle 开关，开启后在组网页底部显示诊断信息 + 解锁高级设置菜单项；副标题"显示高级选项和调试信息"</td><td>全平台</td></tr>
-<tr><td>一键配置导入/导出 — WOL + LuCI + 网络配置打包为 JSON（<code>v:1</code> 结构），Export 写入剪贴板；Import 含 JSON 校验 + 二次确认弹窗防误操作覆盖</td><td>全平台</td></tr>
+<tr><td>一键配置导入/导出 — WOL + LuCI + 网络配置打包为 JSON（<code>v:1</code> 结构），经 deflate 压缩 + Base64URL 编码为 <code>ETGC:2:...</code> 格式写入剪贴板（压缩后约为原始 JSON 的 30-40%）；Import 校验前缀 + 解压 + 解码 + 校验 + 二次确认弹窗防误操作覆盖</td><td>全平台</td></tr>
 <tr><td>AMOLED 纯黑模式 — 开关 toggle（<code>localStorage['amoledMode']</code>），作为与浅色/深色平等的第三个独立主题由 <code>applyTheme()</code> 统一管理，纯黑背景色（<code>#000</code>）+ 适配 Dialog/卡片/代码块/标题栏/Tab 栏等全部组件</td><td>全平台</td></tr>
 <tr><td>帮助对话框 — 展示 WOL、EasyTier VPN、LuCI 路由器、配置导入导出四大模块的功能说明和示例配置（含配置代码复制按钮）；WOL 部分提供 <code>luci-app-wolplus</code> 下载链接（通过 <code>tauri-plugin-opener</code> 打开浏览器）</td><td>全平台</td></tr>
 <tr><td>关于 — 显示版本号（来自 <code>package.json</code> 的 <code>pkg.version</code>）</td><td>全平台</td></tr>
+<tr><td>设置页布局对齐 — 设置卡片 <code>.md-settings-card</code> 水平外边距归零（<code>margin:8px 0</code>），容器添加 <code>px-3</code> 与电脑/路由器页边距一致；确认提示框按钮右对齐（<code>justify-content:flex-end</code>）</td><td>全平台</td></tr>
 <tr><td rowspan="6"><b>Android<br>平台适配</b></td><td>跨平台剪贴板 — 从 <code>PasteBridge</code>（<code>@JavascriptInterface</code> + <code>CountDownLatch</code>，仅 Android）迁移至 <code>tauri-plugin-clipboard-manager</code>（<code>readText</code>/<code>writeText</code>），全平台可用</td><td>全平台</td></tr>
 <tr><td>动态主题适配 — <code>MainActivity.kt</code> 新增 <code>ThemeBridge</code>（<code>@JavascriptInterface</code>），前端 <code>applyTheme()</code> 统一调用 <code>setStatusBarStyle(dark)</code> + <code>setAmoledMode(bool)</code> 动态切换 Android 状态栏/导航栏颜色（浅色 <code>#f5f5f5</code> / 深色 <code>#121212</code> / AMOLED <code>#000</code>）</td><td>Android</td></tr>
 <tr><td>VPN 路由配置 — <code>mobile_vpn.ts</code> 设置 <code>disallowedApplications</code> 将 App 自身排除出 VPN 避免路由死循环；配置 <code>routes</code> 将虚拟网段路由至 TUN</td><td>Android</td></tr>
@@ -250,7 +254,7 @@ PC
 
 ### 组网页面
 
-**未连接态**：中央大 Connect 按钮。
+**未连接态**：中央大 Connect 按钮。无网络配置时显示空状态提示（图标 + "未配置网络" + "点击 ⚡ 切换并添加网络"），不显示 Connect 按钮。
 
 **连接中**：Connect 按钮变灰显示 "Connecting..."。
 
@@ -271,7 +275,7 @@ PC
 
 ### 设置页面
 
-提供 8 个菜单项，每项含图标、标题和副标题：
+提供 8-9 个菜单项（高级设置仅调试模式下显示），每项含图标、标题和副标题。图标颜色由 <code>settingsItemColors</code> computed 属性按可见项顺序动态分配，7 色循环：绿、红、蓝、橙、紫、青、粉。设置卡片左右边距归零（<code>margin:8px 0</code>），由容器 <code>px-3</code> 统一控制，与电脑/路由器页边距一致。
 
 **Advanced Settings（高级设置）**
 齿轮图标，副标题 "Mode, logging, config server, language"。**默认隐藏**，仅在开启调试模式后显示。点击跳转到原始页面 `/`（easytier-frontend-lib 自带的高级设置面板），排在调试模式开关下方。
@@ -663,7 +667,13 @@ password = ""
 
 ### 一键配置导入/导出格式
 
-导出 JSON 结构（写入剪贴板）：
+导出时 JSON 序列化后经 deflate 压缩 + Base64URL 编码，以 `ETGC:2:` 前缀标识（EasyTier-Gui Custom v2，写入剪贴板）：
+
+```
+ETGC:2:<deflate压缩后的Base64URL编码>
+```
+
+内部 JSON 结构：
 
 ```json
 {
@@ -674,7 +684,7 @@ password = ""
 }
 ```
 
-导入时校验规则：`v` 为数字 1，`wol`/`luci` 为字符串，`net` 为字符串数组。
+导入时校验 `ETGC:2:` 前缀 → Base64URL 解码 → deflate 解压 → JSON 解析。校验规则：`v` 为数字 1，`wol`/`luci` 为字符串，`net` 为字符串数组。
 
 ## 开发环境
 
