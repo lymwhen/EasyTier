@@ -41,6 +41,12 @@ easytier-gui/src-tauri/*.dll
 easytier-gui/src-tauri/*.sys
 /easytier-contrib/easytier-ohrs/dist/
 
+# Tauri Android build artifacts
+easytier-gui/src-tauri/gen/android/app/src/main/assets/
+
 .direnv
 .flake-profile
 .claude/
+
+# MiMoCode
+.mimocode/
