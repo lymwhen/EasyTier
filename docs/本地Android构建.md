@@ -79,8 +79,11 @@ Set-Location "D:\projects\projectsAlpha\EasyTier\easytier-gui\src-tauri\gen\andr
 
 **Step 3 — 复制 APK**
 
+APK 文件名添加年月日时分后缀（`yyyyMMddHHmm`），便于区分多次构建产物：
+
 ```powershell
-Copy-Item -Force "D:\projects\projectsAlpha\EasyTier\easytier-gui\src-tauri\gen\android\app\build\outputs\apk\arm64\release\app-arm64-release.apk" "F:\tmp\app-arm64-release.apk"
+$ts = Get-Date -Format 'yyyyMMddHHmm'
+Copy-Item -Force "D:\projects\projectsAlpha\EasyTier\easytier-gui\src-tauri\gen\android\app\build\outputs\apk\arm64\release\app-arm64-release.apk" "F:\tmp\app-arm64-release-$ts.apk"
 ```
 
 ### 构建耗时

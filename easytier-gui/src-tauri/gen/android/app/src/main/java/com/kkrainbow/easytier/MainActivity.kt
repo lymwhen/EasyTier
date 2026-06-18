@@ -32,12 +32,12 @@ class MainActivity : TauriActivity() {
             mainHandler.post {
                 val window = window ?: return@post
                 if (dark) {
-                    window.statusBarColor = 0xFF121212.toInt()
-                    window.navigationBarColor = 0xFF121212.toInt()
+                    window.statusBarColor = 0xFF1F1F1F.toInt()
+                    window.navigationBarColor = 0xFF1F1F1F.toInt()
                     window.decorView.systemUiVisibility = 0
                 } else {
-                    window.statusBarColor = 0xFFF5F5F5.toInt()
-                    window.navigationBarColor = 0xFFF5F5F5.toInt()
+                    window.statusBarColor = 0xFFFCFCFC.toInt()
+                    window.navigationBarColor = 0xFFFCFCFC.toInt()
                     window.decorView.systemUiVisibility = android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
                 }
             }

@@ -48,7 +48,7 @@ onMounted(async () => {
   <!-- Splash overlay (covers RouterView during init) -->
   <div v-if="splashShow" class="splash">
     <div class="splash-inner">
-      <svg class="splash-icon" width="64" height="64" viewBox="0 0 24 24" fill="#1976d2">
+      <svg class="splash-icon" width="64" height="64" viewBox="0 0 24 24" fill="var(--accent, #0a84ff)">
         <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
       </svg>
       <div class="splash-title">EasyTier</div>
@@ -69,30 +69,31 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #f5f5f5;
+  background: #FCFCFC;
 }
-html[data-theme="dark"] .splash { background: #121212; }
+html[data-theme="dark"] .splash { background: #1F1F1F; }
 html[data-theme="amoled"] .splash { background: #000; }
 .splash-inner {
   text-align: center;
 }
 .splash-icon {
-  margin-bottom: 16px;
+  display: block;
+  margin: 0 auto 16px;
 }
 .splash-title {
   font-size: 1.5rem;
-  font-weight: 600;
-  color: #212121;
+  font-weight: 820;
+  color: var(--ink, #0d1117);
   margin-bottom: 24px;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
 }
 html[data-theme="dark"] .splash-title,
-html[data-theme="amoled"] .splash-title { color: #e0e0e0; }
+html[data-theme="amoled"] .splash-title { color: var(--ink, #f2f2f2); }
 .splash-spinner {
   width: 28px;
   height: 28px;
-  border: 3px solid #e0e0e0;
-  border-top-color: #1976d2;
+  border: 3px solid rgba(127,127,127,0.2);
+  border-top-color: var(--accent, #0a84ff);
   border-radius: 50%;
   animation: splash-spin 0.8s linear infinite;
   margin: 0 auto;

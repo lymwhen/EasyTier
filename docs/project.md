@@ -8,7 +8,7 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 2. **easytier-gui 最小改动**：仅新增页面，保留原 `index.vue` 不变（路径 `/`），方便合并上游。
 3. **luci-app-wolplus 可改**：作为 WOL 中间层，CGI API 部署在路由器 `/cgi-bin/wolplus-api`。
 4. **配置驱动**：WOL 设备通过 TOML 配置文件管理（独立于网络 TOML），不提供图形化添加。
-5. **Material Design 风格**：参考 WOLPlus 的卡片设计。
+5. **Glassmorphism + Material You 风格**：毛玻璃标题栏/Tab 栏、Tonal 按钮、卡片入场动画。
 
 ## 相对上游变更清单
 
@@ -36,7 +36,7 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 | `MainActivity.kt` | 新增主题 Bridge（`ThemeBridge`，动态切换状态栏颜色）+ 禁用双指缩放 + 移除旧 `PasteBridge`（剪贴板已迁移至 `tauri-plugin-clipboard-manager`） | 必要 — Android 主题/缩放/剪贴板 |
 | `AndroidManifest.xml` | `usesCleartextTraffic="true"` 硬编码 | 必要 — 局域网 HTTP 请求 |
 | `app/build.gradle.kts` | release 构建添加 `manifestPlaceholders["usesCleartextTraffic"]="true"` | 必要 — 配合明文 HTTP |
-| `themes.xml` / `values-night/themes.xml` | 状态栏/导航栏颜色（浅色 `#f5f5f5` / 深色 `#121212`） | 必要 — UI 适配 |
+| `themes.xml` / `values-night/themes.xml` | 状态栏/导航栏颜色（浅色 `#FCFCFC` / 深色 `#1F1F1F`） | 必要 — UI 适配 |
 | 所有 `mipmap-*` 图标 | 替换为 EasyTier 品牌图标 | 必要 — 品牌 |
 | `ic_launcher_foreground.xml` | 矢量图标改为 EasyTier 三层 V 形 | 必要 — 品牌 |
 | `ic_launcher_background.xml` | 背景色改为白色，移除网格线 | 必要 — 品牌 |
@@ -90,23 +90,25 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 
 <table>
 <tr><th>模块</th><th>功能项</th><th>平台支持情况</th></tr>
-<tr><td rowspan="8"><b>整体UI</b></td><td>Material Design 风格全面美化 — 自定义 CSS 变量体系（<code>:root</code> 级）、卡片 12px 圆角 + 阴影、三主题系统（浅色/深色/AMOLED 平等独立，<code>html[data-theme]</code> 属性驱动，<code>applyTheme()</code> 统一状态机，移除全部 <code>@media (prefers-color-scheme: dark)</code> 避免 JS 不可控）</td><td>全平台</td></tr>
+<tr><td rowspan="10"><b>整体UI</b></td><td>Glassmorphism + Material You 混合风格 — 毛玻璃标题栏/Tab 栏（`backdrop-filter: blur` + 渐变叠加）、Tonal 按钮（`color-mix(accent, panel-strong)` 无内边框）、卡片圆角 20px + 阴影、三主题系统（浅色/深色/AMOLED 平等独立，`html[data-theme]` 属性驱动，`applyTheme()` 统一状态机，移除全部 `@media (prefers-color-scheme: dark)` 避免 JS 不可控）</td><td>全平台</td></tr>
 <tr><td>底部 Tab 导航栏（电脑 / 组网 / LuCI / 设置），默认首页可配置（localStorage 持久化）</td><td>全平台</td></tr>
 <tr><td>App 图标更换为 EasyTier 网络层叠图标 + Splash 遮罩优化（路由跳转完成后隐藏，最低 500ms）</td><td>全平台</td></tr>
 <tr><td>全部操作图标统一更换 — 标题栏编辑/刷新/切换、底部 Tab、唤醒铃铛面型图标、关机电源面型图标、Connect 链式连接、断开断链 SVG</td><td>全平台</td></tr>
-<tr><td>断开按钮颜色匹配网络质量最差红（<code>#ef5350</code>），编辑器关闭按钮隐藏、Textarea 间距优化</td><td>全平台</td></tr>
+<tr><td>卡片入场顺次动画 — CSS `@keyframes` 从下方滑入 + 淡入，每组内顺次错开 100ms；`@animationend` 移除动画类防 `display:none` 重播；新设备出现时动画正常触发</td><td>全平台</td></tr>
 <tr><td>图表 SVG — 无左侧 Y 轴预留空间，最大值标签叠于图表左上角，y=0 由横轴线隐式表达，横坐标左右贴边（`left:2px` / `right:2px`）</td><td>全平台</td></tr>
 <tr><td>自定义 Material snackbar 底部居中胶囊 Toast（替代 PrimeVue useToast）— 2.5s 滑入动画</td><td>全平台</td></tr>
-<tr><td>中英双语 — 自定义 <code>tt(key)</code> 函数 + 内联 i18n 字典（不依赖 easytier-frontend-lib），用户面文本全部双语化</td><td>全平台</td></tr>
-<tr><td>页面内容区域隐藏滚动条 — MD 风格：<code>.overflow-y-auto</code> 通过 <code>scrollbar-width:none</code> / <code>::-webkit-scrollbar { display:none }</code> 隐藏滚动条，保留滚动功能</td><td>全平台</td></tr>
-<tr><td rowspan="7"><b>电脑<br>(WOL)</b></td><td>设备卡片 — 在线状态指示灯（脉冲动画）+ 名称 + IP + 状态文字，点击展开详情（MAC / Router IP / Interface / Agent Port）</td><td>全平台</td></tr>
+<tr><td>中英双语 — 自定义 `tt(key)` 函数 + 内联 i18n 字典（不依赖 easytier-frontend-lib），用户面文本全部双语化</td><td>全平台</td></tr>
+<tr><td>页面内容区域隐藏滚动条 — MD 风格：`.overflow-y-auto` 通过 `scrollbar-width:none` / `::-webkit-scrollbar { display:none }` 隐藏滚动条，保留滚动功能</td><td>全平台</td></tr>
+<tr><td>Tonal 按钮统一风格 — 唤醒/关机/保存等操作按钮使用 `color-mix(in srgb, accent 15%, panel-strong)` 背景，无内边框，active 态 `scale(0.96)`；参考设计来源 patch-3</td><td>全平台</td></tr>
+<tr><td rowspan="7"><b>电脑<br>(WOL)</b></td><td>设备卡片 — 粉红渐变总览卡片（节点数/路由器/路径三统计）+ 设备卡片（在线状态指示灯脉冲动画 + 名称 + IP + 状态文字），点击展开详情（MAC / Router IP / Interface / Agent Port）</td><td>全平台</td></tr>
 <tr><td>远程唤醒 — App → HTTP GET 路由器 CGI（<code>luci-app-wolplus</code>）→ <code>etherwake</code> 发送魔术包；局域网直连 / EasyTier SOCKS5 隧道双路径</td><td>全平台</td></tr>
 <tr><td>在线状态检测 — App → HTTP GET PC Agent（Go，32249 端口，<code>/api/v1/status</code>）；30 秒自动轮询，路由器离线时中止并置灰卡片</td><td>全平台</td></tr>
 <tr><td>远程关机 — App → HTTP POST PC Agent（<code>/api/v1/shutdown</code>），Agent 执行 <code>shutdown /s /t 5</code>；含关机失败回退 online 机制（12 次 / 60s 检测）</td><td>全平台</td></tr>
 <tr><td>唤醒/关机状态机 — idle → waking（橙色脉冲 5s）→ online / offline；online → shutting（红色脉冲）→ offline / 回退 online</td><td>全平台</td></tr>
 <tr><td>设备配置 TOML 文本编辑器（等宽字体 Dialog）— 支持从剪贴板导入；路由器离线时卡片半透明（opacity 0.55）、操作按钮隐藏</td><td>全平台</td></tr>
 <tr><td>路径标签（ET-LAN / LAN 蓝色胶囊）— 根据 <code>netRunning</code> 与 <code>router_ip</code> 自动判断路径模式</td><td>全平台</td></tr>
-<tr><td rowspan="7"><b>组网</b></td><td>Peer 卡片展示 — IP + 主机名 + 延迟/丢包率 + 上下行流量 + P2P/Relay 标签 + NAT 类型芯片 + 隧道协议标签；点击展开版本号</td><td>全平台</td></tr>
+<tr><td rowspan="9"><b>组网</b></td><td>总览信息卡片 — 毛玻璃标题 + 虚拟IP副标题 + 接口IPv4/IPv6（每地址一行，v4在前v6在后，ASCII升序）+ NAT标签 + 三统计（节点/服务器/累计流量）；标题与标签垂直居中，标题过长自动换行</td><td>全平台</td></tr>
+<tr><td>Peer 卡片展示 — 上半部分：IP + 主机名 + 延迟/丢包率；下半部分两行布局：第一行流量 + P2P/TCP/NAT标签（正常大小），第二行版本号（`v2.6.4` 格式）；左右垂直居中对齐</td><td>全平台</td></tr>
 <tr><td>网络质量颜色分级 — 绿（正常）/ 蓝（loss>3% 或 lat>50）/ 橙（loss>5% 或 lat>100）/ 红（loss>10% 或 lat>300）；NAT 标签：绿/绿/绿/蓝/橙对应 Open/NAT1/NAT2/NAT3/NAT4</td><td>全平台</td></tr>
 <tr><td>Peer 排序 — 路由器优先（hostname 匹配 <code>/route|wrt|路由|home|家/i</code>），其余按 IP 排序；服务器按 hostname 字母排序</td><td>全平台</td></tr>
 <tr><td>实时速率图表 — SVG 面积渐变折线图（与性能监控同款 area-fill 样式），绿色上行 `#43a047` / 蓝色下行 `#1e88e5`，3 分钟窗口（60 点），HTML 坐标轴标签覆盖 SVG 之上；连接重建时速率防负值 + 清空旧数据</td><td>全平台</td></tr>
@@ -130,7 +132,7 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 <tr><td>关于 — 显示版本号（来自 <code>package.json</code> 的 <code>pkg.version</code>）</td><td>全平台</td></tr>
 <tr><td>设置页布局对齐 — 设置卡片 <code>.md-settings-card</code> 水平外边距归零（<code>margin:8px 0</code>），容器添加 <code>px-3</code> 与电脑/路由器页边距一致；确认提示框按钮右对齐（<code>justify-content:flex-end</code>）</td><td>全平台</td></tr>
 <tr><td rowspan="6"><b>Android<br>平台适配</b></td><td>跨平台剪贴板 — 从 <code>PasteBridge</code>（<code>@JavascriptInterface</code> + <code>CountDownLatch</code>，仅 Android）迁移至 <code>tauri-plugin-clipboard-manager</code>（<code>readText</code>/<code>writeText</code>），全平台可用</td><td>全平台</td></tr>
-<tr><td>动态主题适配 — <code>MainActivity.kt</code> 新增 <code>ThemeBridge</code>（<code>@JavascriptInterface</code>），前端 <code>applyTheme()</code> 统一调用 <code>setStatusBarStyle(dark)</code> + <code>setAmoledMode(bool)</code> 动态切换 Android 状态栏/导航栏颜色（浅色 <code>#f5f5f5</code> / 深色 <code>#121212</code> / AMOLED <code>#000</code>）</td><td>Android</td></tr>
+<tr><td>动态主题适配 — <code>MainActivity.kt</code> 新增 <code>ThemeBridge</code>（<code>@JavascriptInterface</code>），前端 <code>applyTheme()</code> 统一调用 <code>setStatusBarStyle(dark)</code> + <code>setAmoledMode(bool)</code> 动态切换 Android 状态栏/导航栏颜色（浅色 <code>#FCFCFC</code> / 深色 <code>#1F1F1F</code> / AMOLED <code>#000</code>）</td><td>Android</td></tr>
 <tr><td>VPN 路由配置 — <code>mobile_vpn.ts</code> 设置 <code>disallowedApplications</code> 将 App 自身排除出 VPN 避免路由死循环；配置 <code>routes</code> 将虚拟网段路由至 TUN</td><td>Android</td></tr>
 <tr><td><code>AndroidManifest.xml</code> 添加 <code>usesCleartextTraffic="true"</code> 允许 HTTP 明文请求（访问局域网路由器 CGI 和 PC Agent）</td><td>Android</td></tr>
 <tr><td>文本选择上下文菜单 — 已调查（Chromium WebView 147 边界 bug，<code>SelectionPopupController</code> 不触发 ActionMode），不计划修复，已提供 JS 桥接 + 剪贴板按钮替代方案</td><td>Android</td></tr>
@@ -244,11 +246,14 @@ PC
 
 **标题栏**：设备数量标签 + 路径标签（ET-LAN / LAN，蓝色胶囊）+ 刷新按钮 + 编辑按钮。
 
+**总览信息卡片**（粉红渐变背景）：节点数 / 路由器状态 / 路径模式 三统计项。
+
 **设备卡片**：
 - 状态指示灯（脉冲动画）+ 名称 + IP + 状态文字
 - 唤醒按钮（铃铛图标）、关机按钮（电源图标）
 - 点击展开详情：MAC、Router IP、Interface、Agent Port
 - 路由器离线时卡片半透明（`opacity: 0.55`），所有操作按钮隐藏
+- 卡片入场顺次动画（每组内从 0ms 开始错开）
 
 **自动刷新**：30 秒轮询设备在线状态。
 
@@ -259,13 +264,16 @@ PC
 **连接中**：Connect 按钮变灰显示 "Connecting..."。
 
 **已连接态**：
-- 顶部连接状态条：本机 IP、设备名、版本号、断开按钮（红色）
+- 总览信息卡片：毛玻璃背景 + 网络名称 + 虚拟IP副标题 + 接口IPv4/IPv6地址（每地址一行，无前缀标签）+ NAT标签 + 已连接状态 + 三统计项（节点数/服务器数/累计流量）
+- 速率图表：实时上下行速率面积渐变折线图（60 点 / 3 分钟），HTML 坐标轴标签覆盖在 SVG 之上
+- 网络设备列表：上半部分 IP+主机名+延迟/丢包率，下半部分两行（流量+标签 / 版本号），卡片入场顺次动画
+- 服务器列表：同设备卡片布局，按主机名字母排序
 - 连接状态下隐藏编辑和切换网络按钮
 - 断开按钮在标题栏以红色断链图标展示
 
 **速率图表**：实时上下行速率面积渐变折线图（60 点 / 3 分钟），HTML 坐标轴标签覆盖在 SVG 之上。Y 轴最大值叠于左上角，y=0 不显示标签（横轴线隐式表达），图表线随卡片宽度拉伸。
 
-**网络设备列表**：Peer 卡片，含 IP + 主机名、延迟/丢包率、流量信息、P2P/Relay 标签、NAT 类型芯片。点击展开显示版本号。
+**网络设备列表**：Peer 卡片，上半部分 IP+主机名+延迟/丢包率，下半部分两行布局：第一行流量+P2P/TCP/NAT标签（正常大小），第二行版本号（`v2.6.4`）。左右两侧垂直居中对齐。
 
 **服务器列表**：同设备卡片布局，按主机名字母排序。
 
@@ -276,6 +284,10 @@ PC
 ### 设置页面
 
 提供 8-9 个菜单项（高级设置仅调试模式下显示），每项含图标、标题和副标题。图标颜色由 <code>settingsItemColors</code> computed 属性按可见项顺序动态分配，7 色循环：绿、红、蓝、橙、紫、青、粉。设置卡片左右边距归零（<code>margin:8px 0</code>），由容器 <code>px-3</code> 统一控制，与电脑/路由器页边距一致。
+
+**设置页总览信息卡片**：
+
+蓝色渐变背景，标题 "EasyTier + WOLPlus" + 副标题 "异地组网和远程设备管理" + 右侧 About 按钮（Tonal 按钮样式）。下方三个统计指标：电脑数 / 路由器数 / 网络数。
 
 **Advanced Settings（高级设置）**
 齿轮图标，副标题 "Mode, logging, config server, language"。**默认隐藏**，仅在开启调试模式后显示。点击跳转到原始页面 `/`（easytier-frontend-lib 自带的高级设置面板），排在调试模式开关下方。
@@ -441,61 +453,118 @@ Loading 状态:
 
 ### 设计语言
 
-Material Design 风格，自定义 CSS 变量体系。
+Glassmorphism + Material You 混合风格，自定义 CSS 变量体系。
+
+**毛玻璃系统**：标题栏和 Tab 栏使用 `backdrop-filter: blur(22px)` + `::before` 伪元素渐变叠加，形成半透明毛玻璃效果。面板背景色 `--panel` 和 `--panel-strong` 分别用于弱/强不透明度场景。
+
+**Tonal 按钮**：按钮背景使用 `color-mix(in srgb, var(--accent) 15%, var(--panel-strong))`，将 accent 色叠加在面板背景色之上，与面板产生层次关联。无内边框阴影，active 态仅 `scale(0.96)`。
 
 ```css
 :root {
-  font-size: 15px;  /* 影响所有页面，包括原始 app */
-  --md-primary: #1976d2;
-  --md-card: #fff;
-  --md-text: #212121;
-  /* 浅色主题默认值 */
-}
-html[data-theme="dark"] {
-  --md-primary: #42a5f5;
-  --md-card: #1e1e1e;
-  --md-text: #e0e0e0;
-  /* 深色主题覆写 */
-}
-html[data-theme="amoled"] {
-  --md-primary: #42a5f5;
-  --md-card: #0f0f0f;
-  --md-text: #e0e0e0;
-  --md-shadow: none;
-  background: #000;
-  /* AMOLED 独立主题覆写 */
+  font-size: 15px;
+  --accent: #0a84ff;
+  --panel: rgba(252, 252, 250, 0.2);
+  --panel-strong: rgba(255, 255, 255, 0.82);
+  --green: #30d158;
+  --shadow: 0 12px 34px rgba(45, 57, 76, 0.08);
 }
 ```
 
-- 卡片：`border-radius: 12px`，`box-shadow` 阴影
-- 标题栏：`min-height: 56px`
+- 卡片：`border-radius: 20px`（大卡片）/ `12px`（列表项），`box-shadow` 阴影 + `inset 0 0 0 1px` 内边框
+- 标题栏：毛玻璃背景 + `backdrop-filter: saturate(260%) contrast(1.12) blur(22px)`
 - CSS 变量须在 `:root` 而非 `.md-app`（PrimeVue Dialog 渲染在 app div 外）
 - 三主题系统：浅色/深色/AMOLED 为三个平等独立的主题，通过 `html[data-theme="light|dark|amoled"]` 属性驱动，`applyTheme()` 统一状态机管理（综合 `themeMode` + `amoledMode` + 系统 `prefers-color-scheme`），已移除全部 `@media (prefers-color-scheme: dark)` 避免 CSS 优先级冲突；`.app-dark` class 仅保留供 PrimeVue `darkModeSelector` 使用
 - **`:deep()` 在 unscoped `<style>` 中无效**：Vue 3 SFC 编译器仅在 scoped 块中处理 `:deep()`，unscoped 块中直接透传至浏览器。浏览器将 `:deep()` 视为无效 CSS 伪类，静默丢弃整条规则。修复：unscoped 块移除所有 `:deep()`，改用原生后代/复合选择器
 - **PrimeVue Dialog Teleport 导致 `.md-dialog .p-dialog` 无法匹配**：`class="md-dialog"` 与 `.p-dialog` 在 Teleport 渲染的同一根元素上，后代选择器（空格）匹配不到。改用复合选择器 `.md-dialog.p-dialog`（无空格）匹配同一元素上的两个类
+- **状态栏/导航栏颜色与渐变层同步**：标题栏和 Tab 栏使用 `::before` 伪元素做毛玻璃渐变过渡，渐变起止色必须与 Android 系统栏颜色一致（见下表）。这些颜色**不是** `--bg`，因为毛玻璃叠加背景后视觉色值会偏移。四处必须同步修改：`MainActivity.kt`（动态切换）、`themes.xml` / `values-night/themes.xml`（启动初始值）、`home.vue` CSS `::before` 渐变色、`App.vue` 启动页背景。启动页背景必须与状态栏颜色一致，避免页面切换时颜色跳变。AMOLED 模式下 `--bg` 已是 `#000`，无需额外处理
+
+| 主题 | Android 状态栏/导航栏 | 启动页背景 | 标题栏 `::before` 渐变起点 | Tab 栏 `::before` 渐变终点 | `--bg`（不同！） |
+|------|----------------------|-----------|--------------------------|--------------------------|-----------------|
+| 浅色 | `#FCFCFC` | `#FCFCFC` | `#FCFCFC` → transparent | transparent → `#FCFCFC` | `#F1F1F0` |
+| 深色 | `#1F1F1F` | `#1F1F1F` | `#1F1F1F` → transparent | transparent → `#1F1F1F` | `#181818` |
+| AMOLED | `#000000` | `#000` | `var(--bg)` → transparent | transparent → `var(--bg)` | `#000` |
+
+### 卡片入场动画
+
+卡片使用 CSS `@keyframes stats-slide-in` 入场动画（从下方滑入 + 淡入），配合 `animation-delay` 实现顺次出现效果。
+
+**分组独立延迟**：每个卡片组（Hero、流量图、设备列表、服务器列表）内部从 `--i:0` 开始计数，组内顺次错开 100ms。新卡片组出现时不受已存在卡片影响，立即从 0ms 开始动画。
+
+**防重播机制**：动画播放一次后通过 `@animationend` 事件移除动画标记类（`md-card-enter` / `md-animated`），避免 `display:none` 切换（`v-show` Tab 切换）时浏览器重启动画。新设备出现时创建新 DOM 元素，动画正常触发。
+
+```css
+.md-animated { animation: stats-slide-in 0.35s ease-out both; animation-delay: calc(var(--i, 0) * 0.1s); }
+@keyframes stats-slide-in { from { opacity:0; transform:translateY(16px); } to { opacity:1; transform:translateY(0); } }
+```
 
 ### 颜色体系
 
 | 场景 | 颜色 | 条件 |
 |------|------|------|
-| NAT 类型 | 绿 / 绿 / 绿 / 蓝 / 橙 | NAT1 / NAT2 / Open / NAT3 / NAT4 |
+| NAT 类型 | 绿 / 绿 / 绿 / 蓝 / 橙 | Open(NAT1) / NAT2 / NAT3 / NAT4 |
 | 网络质量 | 绿 / 蓝 / 橙 / 红 | 正常 / loss>3% 或 lat>50 / loss>5% 或 lat>100 / loss>10% 或 lat>300 |
 | 隧道类型 | 绿 / 蓝 / 橙 | Local / P2P / Relay |
 | 路径标签 | 蓝 `#e3f2fd` / `#1565c0` | ET-LAN / LAN |
 | 断开按钮 | `#ef5350` | 标准红 |
 | 状态指示灯 | 绿 / 灰 / 橙（脉冲）/ 红（脉冲） | 在线 / 离线 / 唤醒中 / 关机中 |
+| Tonal 按钮 | `color-mix(accent 15%, panel-strong)` | 唤醒/关机/保存等操作按钮 |
+| 电脑页 Hero | 粉红渐变 `rgba(251,146,180)` | 总览卡片背景 |
 
 ### 卡片布局
 
-```
-网络设备: [IP] [hostname]                [质量块]
-          [↑↓流量]            [P2P] [tcp] [NAT]
+**总览信息卡片（Hero Card）左右列布局**：
 
-服务器:   [hostname]                     [质量块]
-          [↑↓流量]            [P2P] [tcp] [NAT]
+三个 Tab（电脑/组网/设置）的总览信息卡片均使用统一的 `md-hero-head` 布局模式：
+
+```
+┌─────────────────────────────────────────┐
+│ [左列 flex-1 min-w-0]    [右列 shrink-0] │
+│  标题                           按钮/标签 │
+│  副标题                                  │
+├─────────────────────────────────────────┤
+│           统计指标区域（metrics）          │
+└─────────────────────────────────────────┘
 ```
 
-P2P/RELAY 标签位于右下角（tcp/nat 芯片之前）。网络质量块在右上角。
+- 左列：`flex-1 min-w-0`，标题和副标题垂直排列，标题过长时自动换行
+- 右列：`flex-shrink:0`，优先保证宽度不被压缩，不换行（`white-space:nowrap`）
+- 右列内容根据场景不同：电脑页无右列、组网页为 NAT 标签 + 已连接状态、设置页为 About 按钮
+- `.md-hero-head` 不使用 `flex-wrap:wrap`，确保右列始终在同行显示
+
+**按钮与标签的样式区分**：
+
+| 样式 | CSS 类 | 特征 | 用途 |
+|------|--------|------|------|
+| **Tonal 按钮** | `md-settings-btn` | `color-mix(accent 15%, panel-strong)` 背景，**无内边框**，`min-height:34px`，SVG 图标 18×18 | 操作触发（导入/导出/关于） |
+| **标签/胶囊** | `md-chip` / `md-hero-about-btn`（已废弃） | `rgba(accent, 0.15)` 背景 + `box-shadow: inset 0 0 0 1px` **内边框** | 信息展示（NAT/路径/状态） |
+
+区分要点：**按钮无内边框**（纯色背景 + `scale(0.96)` active 态），**标签有内边框**（`inset box-shadow` 模拟描边）。设置页的"关于"应使用按钮样式（`md-settings-btn`），不应使用标签样式。
+
+**网络设备/服务器卡片**（下半部分两行布局）：
+
+```
+第一行: [↑↓流量]                    [P2P] [TCP] [NAT]
+第二行: [v版本号]
+```
+
+- 左侧：流量和版本号分为两行，底部对齐（`flex flex-col justify-end`）
+- 右侧：P2P/Relay、TCP/UDP、NAT 标签垂直居中于左侧整体高度（`align-items:center`）
+- 版本号格式：`v2.6.4`（小写 v 前缀）
+- TCP/UDP 显示为大写（`.toUpperCase()`）
+
+**总览信息卡片**（组网页）：
+
+```
+标题行: [网络名称]                    [NAT标签] [已连接]
+副标题: [虚拟IP v4]
+接口IP: [接口IPv4地址]                ← 有数据时显示
+        [接口IPv6地址]
+统计行: [节点数] [服务器数] [累计流量]
+```
+
+- 标题和副标题在左侧列，标签在右侧，标题过长时自动换行
+- 接口 IP 区域：每个地址独立一行，无前缀标签，无分割线，v4 在前 v6 在后，各自 ASCII 升序排列
+- 第三个统计项为「流量」，显示本机累计上传+下载总字节数（非瞬时速率）
 
 ### 图标
 
