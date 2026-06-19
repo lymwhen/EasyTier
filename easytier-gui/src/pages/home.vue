@@ -102,8 +102,8 @@ const T: Record<string, [string, string]> = {
   addRouter: ['Add Router', '添加路由器'],
   editRoutersToml: ['Edit routers.toml', '编辑 routers.toml'],
   connectingRouter: ['Connecting...', '连接中...'],
-  oneClickConfig: ['Configuration Info', '配置信息'],
-  oneClickConfigDesc: ['One-tap export/import PC devices, routers, and network configs', '一键导出/导入电脑、路由器和网络配置'],
+  oneClickConfig: ['Configuration', '配置信息'],
+  oneClickConfigDesc: ['Export/import all configs', '一键导出/导入电脑、路由器和网络配置'],
   exportLabel: ['Export', '导出'],
   importLabel: ['Import', '导入'],
   exportedToClipboard: ['Config exported to clipboard', '配置信息已导出到剪切板'],
@@ -1412,7 +1412,7 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); if (statsTimer) clearI
         </div>
         <div v-for="(w, i) in sortedWol" :key="w.ip" class="md-device-group" :class="{ 'md-device-group-open': expandedDeviceIdx === i && w.status.online && routerOnline === true }">
         <div class="md-card" :class="{ 'md-card-dim': routerOnline === false }">
-          <div class="md-row" @click="toggleDeviceExpand(i)">
+          <div class="md-row" @click="w.status.online ? toggleDeviceExpand(i) : null">
             <span class="md-dot" :class="{
               'md-dot-on': w.status.online && w.status.phase==='idle' && routerOnline === true,
               'md-dot-off': (!w.status.online || routerOnline === false) && w.status.phase==='idle',
@@ -1440,10 +1440,6 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); if (statsTimer) clearI
               <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
               {{ tt('wake') }}
             </button>
-          </div>
-          <!-- Error message when not expanded -->
-          <div v-if="w.error && expandedDeviceIdx !== i" class="md-extra">
-            <div v-if="w.error" class="mt-1" style="color:#ef5350;word-break:break-all">{{ w.error }}</div>
           </div>
         </div>
           <!-- Expanded Stats — sibling cards (no indent), linked via accent bar -->
@@ -1996,7 +1992,7 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); if (statsTimer) clearI
         <div v-if="showDebug" class="md-card md-settings-card" @click="router.push('/')">
           <div class="md-row">
             <div class="md-symbol" style="--tint:rgba(239,83,80,0.14);--tone:#ef5350">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
             </div>
             <div class="flex-1">
               <div class="md-name">{{ tt('advancedSettings') }}</div>
@@ -2044,11 +2040,11 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); if (statsTimer) clearI
         <span class="md-tab-label">{{ tt('routers') }}</span>
       </button>
       <button class="md-tab" :class="{ 'md-tab-active': activeTab === 'net' }" @click="switchTab('net')" :aria-current="activeTab === 'net' ? 'page' : 'false'">
-        <svg class="md-tab-ic-heavy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+        <svg viewBox="-4 -4 32 32" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/></svg>
         <span class="md-tab-label">{{ tt('network') }}</span>
       </button>
       <button class="md-tab" :class="{ 'md-tab-active': activeTab === 'settings' }" @click="switchTab('settings')" :aria-current="activeTab === 'settings' ? 'page' : 'false'">
-        <svg class="md-tab-ic-heavy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <svg viewBox="-4 -4 32 32" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         <span class="md-tab-label">{{ tt('settings') }}</span>
       </button>
     </nav>
@@ -2678,7 +2674,6 @@ html[data-theme="dark"] .md-tab, html[data-theme="amoled"] .md-tab { color:#93a2
 .md-tab-active { color:var(--accent); background:rgba(10,132,255,0.055); box-shadow:inset 0 0 0 1px rgba(10,132,255,0.08); }
 html[data-theme="dark"] .md-tab-active, html[data-theme="amoled"] .md-tab-active { background:rgba(100,181,255,0.095); box-shadow:inset 0 0 0 1px rgba(100,181,255,0.1); }
 .md-tab svg { width:21px; height:21px; }
-.md-tab svg.md-tab-ic-heavy { width:19px; height:19px; }
 .md-tab-label { font-size:10px; line-height:1; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%; }
 
 @keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
