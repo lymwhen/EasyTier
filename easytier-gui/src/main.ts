@@ -21,6 +21,13 @@ if (import.meta.env.PROD) {
       event.preventDefault()
     }
   })
+
+  document.addEventListener('contextmenu', (event) => {
+    const tag = (event.target as HTMLElement)?.tagName
+    if (tag !== 'INPUT' && tag !== 'TEXTAREA') {
+      event.preventDefault()
+    }
+  })
 }
 
 async function main() {
