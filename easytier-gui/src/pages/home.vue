@@ -1405,10 +1405,12 @@ onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); if (statsTimer) clearI
           </div>
         </div>
 
-        <div v-if="!sortedWol.length" class="flex flex-col items-center justify-center h-full gap-3 opacity-50">
-          <svg width="48" height="48" viewBox="0 0 1024 1024" fill="none" stroke="var(--md-muted)" stroke-width="20"><path d="M864 752H624v64h136c12.8 0 24 11.2 24 24s-11.2 24-24 24h-480c-12.8 0-24-11.2-24-24s11.2-24 24-24H400v-64H160c-17.6 0-32-14.4-32-32V192c0-17.6 14.4-32 32-32h704c17.6 0 32 14.4 32 32v528c0 17.6-14.4 32-32 32z m-16-544H176v464h672V208z m-48 416H224V256h576v368z"/></svg>
-          <div class="text-base md-text-muted">{{ tt('noWolDevices') }}</div>
-          <div class="text-sm text-center px-4 md-text-muted">{{ tt('tapToAdd') }}</div>
+        <div v-if="!sortedWol.length" class="md-scroll-view" style="display:flex;align-items:center;justify-content:center">
+          <div class="flex flex-col items-center gap-3 opacity-50">
+            <svg width="48" height="48" viewBox="0 0 1024 1024" fill="none" stroke="var(--md-muted)" stroke-width="20"><path d="M864 752H624v64h136c12.8 0 24 11.2 24 24s-11.2 24-24 24h-480c-12.8 0-24-11.2-24-24s11.2-24 24-24H400v-64H160c-17.6 0-32-14.4-32-32V192c0-17.6 14.4-32 32-32h704c17.6 0 32 14.4 32 32v528c0 17.6-14.4 32-32 32z m-16-544H176v464h672V208z m-48 416H224V256h576v368z"/></svg>
+            <div class="text-base md-text-muted">{{ tt('noWolDevices') }}</div>
+            <div class="text-sm text-center px-4 md-text-muted">{{ tt('tapToAdd') }}</div>
+          </div>
         </div>
         <div v-for="(w, i) in sortedWol" :key="w.ip" class="md-device-group" :class="{ 'md-device-group-open': expandedDeviceIdx === i && w.status.online && routerOnline === true }">
         <div class="md-card" :class="{ 'md-card-dim': routerOnline === false }">
