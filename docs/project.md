@@ -138,7 +138,7 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 <tr><td>动态主题适配 — <code>MainActivity.kt</code> 新增 <code>ThemeBridge</code>（<code>@JavascriptInterface</code>），前端 <code>applyTheme()</code> 统一调用 <code>setStatusBarStyle(dark)</code> + <code>setAmoledMode(bool)</code> 动态切换 Android 状态栏/导航栏颜色（浅色 <code>#FCFCFC</code> / 深色 <code>#1F1F1F</code> / AMOLED <code>#000</code>）</td><td>Android</td></tr>
 <tr><td>VPN 路由配置 — <code>mobile_vpn.ts</code> 设置 <code>disallowedApplications</code> 将 App 自身排除出 VPN 避免路由死循环；配置 <code>routes</code> 将虚拟网段路由至 TUN</td><td>Android</td></tr>
 <tr><td><code>AndroidManifest.xml</code> 添加 <code>usesCleartextTraffic="true"</code> 允许 HTTP 明文请求（访问局域网路由器 CGI 和 PC Agent）</td><td>Android</td></tr>
-<tr><td>文本选择上下文菜单 — 已调查（Chromium WebView 147 边界 bug，<code>SelectionPopupController</code> 不触发 ActionMode），不计划修复，已提供 JS 桥接 + 剪贴板按钮替代方案</td><td>Android</td></tr>
+<tr><td>文本选择上下文菜单 — 原上游 <code>main.ts</code> 中 <code>contextmenu</code> 事件 <code>preventDefault()</code> 拦截了 Android 长按文本的复制/粘贴菜单；已移除该监听器（桌面端右键菜单本身无害），LuCI iframe 不受影响（独立浏览上下文）</td><td>Android</td></tr>
 <tr><td>APK 四架构构建 — aarch64 / armv7 / i686 / x86_64</td><td>Android</td></tr>
 <tr><td rowspan="4"><b>CI / 构建</b></td><td>Tag 推送自动触发全平台构建 + GitHub Release Draft — <code>release-tag.yml</code> (456 行)，矩阵含 Core CLI ×16、GUI 桌面 ×7、Android APK ×4、Magisk 模块</td><td>全平台（CI 产物）</td></tr>
 <tr><td>CI 兼容适配 — <code>prepare-pnpm</code> 添加 <code>--no-frozen-lockfile</code>、<code>docker.yml</code> 仓库名通用化、<code>vue-tsc</code> 类型检查临时跳过、<code>BuildTask.kt</code> 还原上游跨平台版本</td><td>Linux CI Runner</td></tr>
@@ -654,15 +654,15 @@ home.vue:
 - 每次点击「从剪切板导入」时按需调用，不使用定时轮询
 - v-model 绑定后仅通过 Vue 响应式系统更新值，不动 DOM
 
-### 4. 文本选择上下文菜单（已知限制）
+### 4. 文本选择上下文菜单（已修复）
 
 **现象**：Dialog 中 Textarea 可选择文字，但 Android 原生复制/粘贴工具栏不弹出。
 
-**根因**：Chromium WebView 147 内部 `SelectionPopupController` 在此配置下不触发 ActionMode（Chromium 边缘 bug，非本项目代码问题）。
+**根因**：上游 `easytier-frontend-lib` 的 `main.ts` 中 `document.addEventListener('contextmenu', event => event.preventDefault())` 拦截了所有 contextmenu 事件。Android 长按文本触发 contextmenu 事件，被 preventDefault 后系统菜单不弹出。LuCI iframe 正常是因为独立浏览上下文不受父文档事件监听器影响。
 
-**排查结论**：CSS/JS 无拦截、wry 无 ActionMode 覆盖、AppCompat 正确透传、手动 `startActionMode` 可弹出。反射调用 `setCustomSelectionActionModeCallback` 在 SDK 34 stubs 中隐藏无效。
+**修复**：移除 `main.ts` 中的 `contextmenu` 事件监听器。桌面端右键菜单本身无害，移除后不影响功能。
 
-**状态**：不计划修复。JS 桥接 + 反射方案可弹出菜单和复制，但粘贴被安全策略禁用。
+**状态**：已修复。
 
 ### 5. LuCI 刷新后 iframe 白屏（last_path 资源污染）
 
