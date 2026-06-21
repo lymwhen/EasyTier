@@ -5,7 +5,7 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 ## 基本原则
 
 1. **不改 easytier-core**：路由器使用官方二进制，跟随上游更新。
-2. **easytier-gui 最小改动**：仅新增页面，保留原 `index.vue` 不变（路径 `/`），方便合并上游。
+2. **easytier-gui 最小改动**：仅新增页面，原 `index.vue` 通过路由 redirect 跳转至 `/home`，方便合并上游。
 3. **luci-app-wolplus 可改**：作为 WOL 中间层，CGI API 部署在路由器 `/cgi-bin/wolplus-api`。
 4. **配置驱动**：WOL 设备通过 TOML 配置文件管理（独立于网络 TOML），不提供图形化添加。
 5. **Glassmorphism + Material You 风格**：毛玻璃标题栏/Tab 栏、Tonal 按钮、卡片入场动画。
@@ -20,8 +20,8 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 
 | 文件 | 变更 | 必要性 |
 |------|------|--------|
-| `easytier-gui/src/pages/home.vue` | **[新增]** WOL/网络/路由器/设置四个 Tab 主界面（~1500行） | 必要 — 项目核心 |
-| `easytier-gui/src/App.vue` | 启动 Splash 遮罩 + 后端就绪检测 + 自动跳转 `/home` | 必要 — 初始化流程 |
+| `easytier-gui/src/pages/home.vue` | **[新增]** WOL/网络/路由器/设置四个 Tab 主界面（~2900行） | 必要 — 项目核心 |
+| `easytier-gui/src/App.vue` | 主题初始化 + 窗口标题 + Toast + RouterView（Splash 已移除） | 必要 — 初始化流程 |
 | `easytier-gui/src/composables/backend.ts` | 新增 `httpGet`/`httpPost`/`tcpPing`/`luciProxy*` IPC 封装 | 必要 — 前端 HTTP/代理调用 |
 | `easytier-gui/src-tauri/src/lib.rs` | 新增 `http_get`/`http_post`/`tcp_ping` 命令 + LuCI HTTP 反向代理完整实现（~360行） | 必要 — 后端 HTTP/代理支持 |
 | `easytier-gui/src-tauri/Cargo.toml` | 新增 `reqwest(socks)`/`hyper`/`http-body-util`/`hyper-util`/`bytes` + `tauri-plugin-opener`/`tauri-plugin-clipboard-manager` 依赖 | 必要 — Rust 侧 HTTP 客户端 + 代理服务器 + 跨平台剪贴板/浏览器 |
@@ -90,9 +90,9 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 
 <table>
 <tr><th>模块</th><th>功能项</th><th>平台支持情况</th></tr>
-<tr><td rowspan="10"><b>整体UI</b></td><td>Glassmorphism + Material You 混合风格 — 毛玻璃标题栏/Tab 栏（`backdrop-filter: blur` + 双层渐变过渡）、Tonal 按钮（`color-mix(accent, panel-strong)` 无内边框，变体：white/green/red/primary/export）、磨砂玻璃标题栏按钮（`md-hdr-btn-glass`）、卡片圆角 20px + 阴影、三主题系统（浅色/深色/AMOLED 平等独立，`html[data-theme]` 属性驱动）</td><td>全平台</td></tr>
+<tr><td rowspan="12"><b>整体UI</b></td><td>Glassmorphism + Material You 混合风格 — 毛玻璃标题栏/Tab 栏（`backdrop-filter: blur` + 双层渐变过渡）、Tonal 按钮（`color-mix(accent, panel-strong)` 无内边框，变体：white/green/red/primary/export）、磨砂玻璃标题栏按钮（`md-hdr-btn-glass`）、卡片圆角 20px + 阴影、三主题系统（浅色/深色/AMOLED 平等独立，`html[data-theme]` 属性驱动）</td><td>全平台</td></tr>
 <tr><td>底部 Tab 导航栏（电脑 / 路由器 / 组网 / 设置），默认首页可配置（localStorage 持久化）</td><td>全平台</td></tr>
-<tr><td>App 图标更换为 EasyTier 网络层叠图标 + Splash 遮罩优化（路由跳转完成后隐藏，最低 500ms）</td><td>全平台</td></tr>
+<tr><td>App 图标更换为圆润 Lucide layers 风格网络层叠图标，PNG 按 Android 官方 108dp 画布尺寸降采样（14.7MB → 1.2MB）；Splash 页面已移除，路由 redirect 直接跳转 `/home`</td><td>全平台</td></tr>
 <tr><td>全部操作图标统一更换 — 标题栏编辑/刷新/切换、底部 Tab、唤醒铃铛面型图标、关机电源面型图标、Connect 链式连接、断开断链 SVG</td><td>全平台</td></tr>
 <tr><td>卡片入场顺次动画 — CSS `@keyframes` 从下方滑入 + 淡入，每组内顺次错开 100ms；`@animationend` 移除动画类防 `display:none` 重播；新设备出现时动画正常触发</td><td>全平台</td></tr>
 <tr><td>图表 SVG — 无左侧 Y 轴预留空间，最大值标签叠于图表左上角，y=0 由横轴线隐式表达，横坐标左右贴边（`left:2px` / `right:2px`）</td><td>全平台</td></tr>
@@ -102,12 +102,14 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 <tr><td>Tonal 按钮统一风格 — 唤醒/关机/保存等操作按钮使用 `color-mix(in srgb, accent 15%, panel-strong)` 背景，无内边框，active 态 `scale(0.96)`；变体：white/green/red/primary/export；参考设计来源 patch-3</td><td>全平台</td></tr>
 <tr><td>连接按钮水波涟漪动画 — 双层 `::before`/`::after` 伪元素扩散淡出（`scale(1→1.25)` + `opacity(0.45→0)`），accent 色半透明背景；点击弹跳反馈（`connect-bounce` scale 1→0.88→1）；状态过渡动画（`background`/`color`/`box-shadow` 0.4s 平滑切换）</td><td>全平台</td></tr>
 <tr><td>图表颜色 CSS 变量化 — `--chart-cpu`/`--chart-mem`/`--chart-gpu`/`--chart-disk-r`/`--chart-disk-w`/`--chart-net-up`/`--chart-net-down`，模板 SVG 统一引用变量</td><td>全平台</td></tr>
-<tr><td rowspan="6"><b>电脑<br>(WOL)</b></td><td>设备卡片 — 粉红渐变总览卡片（节点数/路由器/路径三统计）+ 设备卡片（在线状态指示灯脉冲动画 + 名称 + IP + 状态文字），点击展开详情（MAC / Router IP / Interface / Agent Port）</td><td>全平台</td></tr>
+<tr><td rowspan="10"><b>电脑<br>(WOL)</b></td><td>设备卡片 — 粉红渐变总览卡片（电脑在线数/路由器/通道三统计）+ 设备卡片（在线状态指示灯脉冲动画 + 名称 + IP + 状态文字），点击展开详情查看 PC 性能监控图表</td><td>全平台</td></tr>
 <tr><td>远程唤醒 — App → HTTP GET 路由器 CGI（<code>luci-app-wolplus</code>）→ <code>etherwake</code> 发送魔术包；局域网直连 / EasyTier SOCKS5 隧道双路径</td><td>全平台</td></tr>
 <tr><td>在线状态检测 — App → HTTP GET PC Agent（Go，32249 端口，<code>/api/v1/status</code>）；30 秒自动轮询，路由器离线时中止并置灰卡片</td><td>全平台</td></tr>
 <tr><td>远程关机 — App → HTTP POST PC Agent（<code>/api/v1/shutdown</code>），Agent 执行 <code>shutdown /s /t 5</code>；含关机失败回退 online 机制（12 次 / 60s 检测）</td><td>全平台</td></tr>
 <tr><td>唤醒/关机状态机 — idle → waking（橙色脉冲 5s）→ online / offline；online → shutting（红色脉冲）→ offline / 回退 online</td><td>全平台</td></tr>
 <tr><td>设备配置 TOML 文本编辑器（等宽字体 Dialog）— 支持从剪贴板导入；路由器离线时卡片半透明（opacity 0.55）、操作按钮隐藏</td><td>全平台</td></tr>
+<tr><td>展开底部收起按钮 — 设备展开后底部显示向上箭头 + "收起/Collapse" 文字，点击即可折叠，无需滚动回父卡片</td><td>全平台</td></tr>
+<tr><td>设备信息卡片仅调试模式显示 — 底部 MAC · 路由器 IP · 接口 · 端口摘要行仅在调试模式开启时展示，非调试模式不显示</td><td>全平台</td></tr>
 <tr><td>PC 性能监控 — 实时采集 CPU/内存/GPU 使用率、磁盘 IO 读写速度、网络上下行流量，SVG 面积渐变折线图展示（60 点 / 3 分钟窗口）；硬件信息（CPU 型号、内存 DDR 类型与频率、GPU 型号）；10 秒自动刷新；颜色标识健康状态</td><td>全平台</td></tr>
 <tr><td>路径标签（ET-LAN / LAN 蓝色胶囊）— 根据 <code>netRunning</code> 与 <code>router_ip</code> 自动判断路径模式</td><td>全平台</td></tr>
 <tr><td rowspan="9"><b>组网</b></td><td>总览信息卡片 — 毛玻璃标题 + 虚拟IP副标题 + 接口IPv4/IPv6（每地址一行，v4在前v6在后，ASCII升序）+ NAT标签 + 三统计（节点/服务器/累计流量）；标题与标签垂直居中，标题过长自动换行</td><td>全平台</td></tr>
@@ -124,10 +126,11 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 <tr><td>会话过期自动重登（检测 302 重定向到 login），刷新保持当前 URL（<code>last_path</code> 仅追踪 <code>text/html</code> 响应，过滤 CSS/JS/API 资源请求）</td><td>全平台</td></tr>
 <tr><td>多路由器管理 — TOML 配置路由器列表，支持切换/新增/删除；删除当前路由器自动切换至剩余第一个</td><td>全平台</td></tr>
 <tr><td>路径持久化 — 刷新或路径模式切换（ET-LAN ↔ LAN）后，代理重启自动恢复上次浏览位置；v-show 切回 Tab 不重载 iframe</td><td>全平台</td></tr>
-<tr><td rowspan="10"><b>设置</b></td><td>设置菜单图标彩色方案 — 7 色循环调色板（very soft pastel），通过 `settingsIconColor(i)` 函数手动索引赋值，三主题通用</td><td>全平台</td></tr>
+<tr><td rowspan="11"><b>设置</b></td><td>设置菜单图标彩色方案 — SETTINGS_PALETTE 9 色调色板，通过 settingsIconStyle(key) 函数按可见项索引动态分配，隐藏项（高级设置）不占用颜色槽位，三主题通用</td><td>全平台</td></tr>
 <tr><td>高级设置入口（默认隐藏，开启调试模式后显示）— 跳转原 <code>index.vue</code>（<code>/</code> 路由）访问 easytier-frontend-lib 自带高级面板</td><td>全平台</td></tr>
 <tr><td>语言切换 — 地球图标 + 当前语言蓝色胶囊标签（中文 / English），点击 <code>toggleLang()</code> 即时切换所有 UI 文字</td><td>全平台</td></tr>
 <tr><td>默认首页 — 原生 <code>&lt;select&gt;</code> 下拉（电脑 / 路由器 / 组网），<code>localStorage['defaultTab']</code> 持久化</td><td>全平台</td></tr>
+<tr><td>主题切换（Theme）— 浅色/深色两种模式切换，右侧显示当前模式蓝色胶囊标签，支持自动跟随系统主题（<code>prefers-color-scheme</code>），<code>localStorage['themeMode']</code> 持久化，<code>applyTheme()</code> 统一状态机管理</td><td>全平台</td></tr>
 <tr><td>调试模式 — toggle 开关，开启后在组网页底部显示诊断信息 + 解锁高级设置菜单项；副标题"显示高级选项和调试信息"</td><td>全平台</td></tr>
 <tr><td>一键配置导入/导出 — WOL + LuCI + 网络配置打包为 JSON（<code>v:1</code> 结构），经 deflate 压缩 + Base64URL 编码为 <code>ETGC:2:...</code> 格式写入剪贴板（压缩后约为原始 JSON 的 30-40%）；Import 校验前缀 + 解压 + 解码 + 校验 + 二次确认弹窗防误操作覆盖</td><td>全平台</td></tr>
 <tr><td>AMOLED 纯黑模式 — 开关 toggle（<code>localStorage['amoledMode']</code>），作为与浅色/深色平等的第三个独立主题由 <code>applyTheme()</code> 统一管理，纯黑背景色（<code>#000</code>）+ 适配 Dialog/卡片/代码块/标题栏/Tab 栏等全部组件</td><td>全平台</td></tr>
@@ -140,7 +143,7 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 <tr><td><code>AndroidManifest.xml</code> 添加 <code>usesCleartextTraffic="true"</code> 允许 HTTP 明文请求（访问局域网路由器 CGI 和 PC Agent）</td><td>Android</td></tr>
 <tr><td>文本选择上下文菜单 — 上游 <code>main.ts</code> 中 <code>contextmenu</code> 事件 <code>preventDefault()</code> 拦截了所有长按/右键菜单；修改为仅对非 INPUT/TEXTAREA 元素拦截，输入框保留系统菜单，桌面端普通页面右键仍被阻止</td><td>Android</td></tr>
 <tr><td>APK 四架构构建 — aarch64 / armv7 / i686 / x86_64</td><td>Android</td></tr>
-<tr><td rowspan="4"><b>CI / 构建</b></td><td>Tag 推送自动触发全平台构建 + GitHub Release Draft — <code>release-tag.yml</code> (456 行)，矩阵含 Core CLI ×16、GUI 桌面 ×7、Android APK ×4、Magisk 模块</td><td>全平台（CI 产物）</td></tr>
+<tr><td rowspan="4"><b>CI / 构建</b></td><td>Tag 推送自动触发全平台构建 + GitHub Release Draft — <code>release-tag.yml</code> (455 行)，矩阵含 Core CLI ×16、GUI 桌面 ×7、Android APK ×4、Magisk 模块</td><td>全平台（CI 产物）</td></tr>
 <tr><td>CI 兼容适配 — <code>prepare-pnpm</code> 添加 <code>--no-frozen-lockfile</code>、<code>docker.yml</code> 仓库名通用化、<code>vue-tsc</code> 类型检查临时跳过、<code>BuildTask.kt</code> 还原上游跨平台版本</td><td>Linux CI Runner</td></tr>
 <tr><td>Rust 代码 CI 合规 — <code>lib.rs</code> 通过 <code>cargo fmt</code> 格式检查 + <code>cargo clippy -D warnings</code>，确保上游 OHOS / Test workflow 通过</td><td>Linux CI Runner</td></tr>
 <tr><td>Cargo 增量编译缓存修复 — CC/AR/BINDGEN/PROTOC/LIBCLANG_PATH/GIT_CEILING_DIRECTORIES 固化到 <code>.cargo/config.toml [env]</code>，构建加速 6 倍（~10min → ~1m45s）</td><td>本地开发（Windows + MSYS2）</td></tr>
@@ -179,7 +182,7 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
   ├── Tab 1: 电脑 — WOL 设备管理 + 性能监控
   ├── Tab 2: 路由器 — LuCI 管理面板
   ├── Tab 3: 组网 — EasyTier 网络管理
-  ├── Tab 4: 设置 — 高级设置 + 语言切换
+  ├── Tab 4: 设置 — 主题/语言/默认首页/调试/帮助/关于
   └── 底部 Tab 导航
 
 路由器（OpenWrt/ImmortalWRT）
@@ -219,8 +222,8 @@ PC
 
 | 文件 | 状态 | 说明 |
 |------|------|------|
-| `src/App.vue` | 修改 | Splash 遮罩 + 初始化检测 + 跳转 `/home` |
-| `src/pages/home.vue` | **新增** | Tab 容器（电脑/路由器/组网/设置），核心页面（~2800行） |
+| `src/App.vue` | 修改 | 主题初始化 + 窗口标题 + Toast + RouterView（Splash 已移除） |
+| `src/pages/home.vue` | **新增** | Tab 容器（电脑/路由器/组网/设置），核心页面（~2900行） |
 | `src/pages/index.vue` | **不动** | 原页面，`/` 路由 |
 | `src/composables/backend.ts` | 修改 | 新增 `httpGet`/`httpPost`/`tcpPing`/`luciProxy*` IPC 封装 |
 | `src-tauri/src/lib.rs` | 修改 | 新增 `http_get`/`http_post`/`tcp_ping` Tauri 命令 + LuCI HTTP 反向代理 |
@@ -255,6 +258,9 @@ PC
 - 状态指示灯（脉冲动画）+ 名称 + IP + 状态文字
 - 唤醒按钮（铃铛图标）、关机按钮（电源图标）
 - 点击展开详情：MAC、Router IP、Interface、Agent Port
+- 展开底部收起按钮 — 设备展开后底部显示向上箭头 + "收起/Collapse" 文字，点击即可折叠，无需滚动回父卡片
+- 设备信息摘要行（MAC · 路由器 IP · 接口 · 端口）仅在调试模式开启时展示
+- 子卡片展开方向 — `transform-origin: center bottom`，子卡片紧贴父卡片底部向下展开，视觉连贯
 - 路由器离线时卡片半透明（`opacity: 0.55`），所有操作按钮隐藏
 - 卡片入场顺次动画（每组内从 0ms 开始错开）
 
@@ -290,23 +296,29 @@ PC
 
 ### 设置页面
 
-提供 8-9 个菜单项（高级设置仅调试模式下显示），每项含彩色圆角方块图标（46×46，`border-radius: 16px`）、标题和副标题。图标背景使用 accent-soft 色，图标为 stroke 风格 SVG。设置卡片左右边距归零（<code>margin:8px 0</code>），由容器 <code>px-3</code> 统一控制，与电脑/路由器页边距一致。
+提供 9 个菜单项（高级设置仅调试模式下显示），每项含彩色圆角方块图标（46×46，`border-radius: 16px`）、标题和副标题。图标颜色由 SETTINGS_PALETTE 按可见项索引动态分配。菜单项顺序：Default Home → Theme → AMOLED Black → Language → Debug → [Advanced Settings] → Configuration Info → Help → About。
 
 **设置页总览信息卡片**：
 
-蓝色渐变背景，标题 "EasyTier + WOLPlus" + 副标题 "异地组网和远程设备管理" + 右侧 About 按钮（Tonal 按钮样式）。下方三个统计指标：电脑数 / 路由器数 / 网络数。
-
-**Advanced Settings（高级设置）**
-齿轮图标，副标题 "Mode, logging, config server, language"。**默认隐藏**，仅在开启调试模式后显示。点击跳转到原始页面 `/`（easytier-frontend-lib 自带的高级设置面板），排在调试模式开关下方。
-
-**Language（语言）**
-地球图标，副标题显示当前语言和 "点击切换语言" 提示，右侧蓝色胶囊标签显示 `中文` 或 `English`。点击调用 `toggleLang()`，切换 `locale` ref 并写入 `localStorage['easytierLang']`，UI 所有文本即时更新。
+蓝色渐变背景，标题 "EasyTier + WOLPlus" + 副标题 "异地组网和远程设备管理" + 右侧 About 按钮（版本号显示）。下方三个统计指标：电脑数 / 路由器数 / 网络数。
 
 **Default Tab（默认首页）**
 九宫格图标，副标题显示当前默认首页名称。右侧原生 `<select>` 下拉，可选电脑 / 路由器 / 组网。选中值存入 `localStorage['defaultTab']`，仅首次加载时影响 `activeTab` 初始值。
 
+**Theme（主题）**
+月亮图标，副标题显示当前主题模式 + "点击切换主题" 提示，右侧蓝色胶囊标签显示 `浅色` / `深色` / `跟随系统`。点击调用 `toggleTheme()`，循环切换浅色 → 深色 → 跟随系统，写入 `localStorage['themeMode']`，由 `applyTheme()` 统一状态机管理（综合 `themeMode` + `amoledMode` + 系统 `prefers-color-scheme`），同步调用 Android `ThemeBridge` 动态切换状态栏/导航栏颜色。
+
+**AMOLED Black（AMOLED 纯黑）**
+深色半圆图标，副标题 "AMOLED 屏幕纯黑色模式"。右侧开关 toggle（`localStorage['amoledMode']`）。开启后 AMOLED 作为与浅色/深色平等的第三个独立主题，由 `applyTheme()` 统一状态机管理。纯黑背景色（`#000`），卡片/标题栏/Tab 栏/代码块/分隔线等全部组件独立适配，不再作为深色的子类。仅在深色模式下可开启。
+
+**Language（语言）**
+地球图标，副标题显示当前语言和 "点击切换语言" 提示，右侧蓝色胶囊标签显示 `中文` 或 `English`。点击调用 `toggleLang()`，切换 `locale` ref 并写入 `localStorage['easytierLang']`，UI 所有文本即时更新。
+
 **Debug Mode（调试模式）**
-齿轮图标，副标题 "显示高级选项和调试信息"，右侧开关 toggle。开启后生效两处：1) 组网页底部显示 Debug 区域（本机 IP、端口、raw TOML 文本等诊断信息）；2) 解锁高级设置菜单项（显示在调试模式下方）。
+齿轮图标，副标题 "显示高级选项和调试信息"，右侧开关 toggle。开启后生效两处：1) 组网页底部显示 Debug 区域（本机 IP、端口、raw TOML 文本等诊断信息）；2) 解锁高级设置菜单项（显示在调试模式下方）；3) 电脑页设备卡片底部显示设备信息摘要行（MAC · 路由器 IP · 接口 · 端口）。
+
+**Advanced Settings（高级设置）**
+齿轮图标，副标题 "Mode, logging, config server, language"。**默认隐藏**，仅在开启调试模式后显示。点击跳转到原始页面 `/`（easytier-frontend-lib 自带的高级设置面板），排在调试模式开关下方。
 
 **Configuration Info（配置信息）**
 云下载图标，副标题 "全部数据导入与导出" / "Import/Export all data"，右侧两个操作按钮：
@@ -331,9 +343,6 @@ PC
 - **EasyTier VPN**：P2P 虚拟组网原理和功能特性说明
 - **LuCI 路由器**：OpenWrt 管理面板接入说明（LAN / VPN 双模式）
 - **配置导入导出**：TOML 配置文件结构和导入导出操作说明
-
-**AMOLED Black（AMOLED 纯黑）**
-深色半圆图标，副标题 "AMOLED 屏幕纯黑色模式"。右侧开关 toggle（`localStorage['amoledMode']`）。开启后 AMOLED 作为与浅色/深色平等的第三个独立主题，由 `applyTheme()` 统一状态机管理。纯黑背景色（`#000`），卡片/标题栏/Tab 栏/代码块/分隔线等全部组件独立适配，不再作为深色的子类。
 
 **About（关于）**
 信息图标，副标题显示版本号（来自 `package.json` 的 `pkg.version`）。点击打开关于 Dialog，包含项目简介（提及 PC 性能监控）、项目地址链接、致谢（EasyTier + luci-app-wolplus）。
@@ -435,7 +444,7 @@ Phase poll 期间路由器离线 → 立即中止，设备置为 offline
 ```
 点击 Connect:
   1. 清空 trafficHistory + 重置 lastTraffic（在 await 之前，确保图表立即重置）
-  2. sendConfigs(ids) → 加载 TOML 配置
+  2. runNetworkInstance(config, true) → 直接路径加载配置并运行（与旧版 RemoteManagement 一致）
   3. 等待 2s
   4. fetchNetInfo() → 获取 Peer 数据
   5. 成功 → netConnectTime = Date.now()
@@ -511,7 +520,7 @@ Glassmorphism + Material You 混合风格，自定义 CSS 变量体系。
 **防重播机制**：动画播放一次后通过 `@animationend` 事件移除动画标记类（`md-card-enter` / `md-animated`），避免 `display:none` 切换（`v-show` Tab 切换）时浏览器重启动画。新设备出现时创建新 DOM 元素，动画正常触发。
 
 ```css
-.md-animated { animation: stats-slide-in 0.35s ease-out both; animation-delay: calc(var(--i, 0) * 0.1s); }
+.md-animated { animation: stats-slide-in 0.35s ease-out both; animation-delay: calc(var(--i, 0) * 0.08s); }
 @keyframes stats-slide-in { from { opacity:0; transform:translateY(16px); } to { opacity:1; transform:translateY(0); } }
 ```
 
@@ -552,7 +561,7 @@ Glassmorphism + Material You 混合风格，自定义 CSS 变量体系。
 
 - 左列：`flex-1 min-w-0`，标题和副标题垂直排列，标题过长时自动换行
 - 右列：`flex-shrink:0`，优先保证宽度不被压缩，不换行（`white-space:nowrap`）
-- 右列内容根据场景不同：电脑页无右列、组网页为 NAT 标签 + 已连接状态、设置页为 About 按钮
+- 右列内容根据场景不同：电脑页为刷新按钮（绿色 Tonal）、组网页为 NAT 标签 + 已连接状态、设置页为 About 按钮
 - `.md-hero-head` 不使用 `flex-wrap:wrap`，确保右列始终在同行显示
 
 **按钮与标签的样式区分**：
