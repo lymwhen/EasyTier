@@ -1,4 +1,5 @@
-import { Event, listen } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
+import type { Event as TauriEvent } from "@tauri-apps/api/event";
 import { type } from "@tauri-apps/plugin-os";
 import { NetworkTypes } from "easytier-frontend-lib"
 import { Utils } from "easytier-frontend-lib";
@@ -18,15 +19,26 @@ const EVENTS = Object.freeze({
     EVENT_LAGGED: 'event_lagged',
 });
 
-function onSaveConfigs(event: Event<StoredGuiConfig[]>) {
+function onSaveConfigs(event: TauriEvent<StoredGuiConfig[]>) {
     console.log(`Received event '${EVENTS.SAVE_CONFIGS}': ${event.payload}`);
-    localStorage.setItem(
-        'networkList',
-        JSON.stringify(event.payload.map(({ config, source }) => ({
-            config: NetworkTypes.normalizeNetworkConfig(config),
-            source: source ?? 'legacy',
-        }))),
-    );
+
+    let localList: any[] = []
+    try { localList = JSON.parse(localStorage.getItem('networkList') || '[]'); if (!Array.isArray(localList)) localList = [] } catch { localList = [] }
+
+    const localIds = new Set(localList.map((e: any) => e?.config?.instance_id).filter(Boolean))
+
+    const merged = [...localList]
+
+    for (const entry of event.payload) {
+        const id = entry.config?.instance_id
+        if (!id || localIds.has(id)) continue
+        merged.push({
+            config: NetworkTypes.normalizeNetworkConfig(entry.config),
+            source: entry.source ?? 'legacy',
+        })
+    }
+
+    localStorage.setItem('networkList', JSON.stringify(merged))
 }
 
 function normalizeInstanceIdPayload(payload: unknown): string {
@@ -54,7 +66,7 @@ function normalizeInstanceIdPayload(payload: unknown): string {
     return fallback === '[object Object]' ? '' : fallback
 }
 
-async function onPreRunNetworkInstance(event: Event<unknown>) {
+async function onPreRunNetworkInstance(event: TauriEvent<unknown>) {
     const instanceId = normalizeInstanceIdPayload(event.payload)
     console.log(`Received event '${EVENTS.PRE_RUN_NETWORK_INSTANCE}', raw payload:`, event.payload, 'normalized:', instanceId)
     if (type() === 'android') {
@@ -62,7 +74,7 @@ async function onPreRunNetworkInstance(event: Event<unknown>) {
     }
 }
 
-async function onPostRunNetworkInstance(event: Event<unknown>) {
+async function onPostRunNetworkInstance(event: TauriEvent<unknown>) {
     const instanceId = normalizeInstanceIdPayload(event.payload)
     console.log(`Received event '${EVENTS.POST_RUN_NETWORK_INSTANCE}', raw payload:`, event.payload, 'normalized:', instanceId)
     if (type() === 'android') {
@@ -70,12 +82,12 @@ async function onPostRunNetworkInstance(event: Event<unknown>) {
     }
 }
 
-async function onVpnServiceStop(event: Event<unknown>) {
+async function onVpnServiceStop(event: TauriEvent<unknown>) {
     console.log(`Received event '${EVENTS.VPN_SERVICE_STOP}', raw payload:`, event.payload)
     await syncMobileVpnService();
 }
 
-async function onDhcpIpChanged(event: Event<unknown>) {
+async function onDhcpIpChanged(event: TauriEvent<unknown>) {
     const instanceId = normalizeInstanceIdPayload(event.payload)
     console.log(`Received event '${EVENTS.DHCP_IP_CHANGED}' for instance: ${instanceId}`);
     if (type() === 'android') {
@@ -83,7 +95,7 @@ async function onDhcpIpChanged(event: Event<unknown>) {
     }
 }
 
-async function onProxyCidrsUpdated(event: Event<unknown>) {
+async function onProxyCidrsUpdated(event: TauriEvent<unknown>) {
     const instanceId = normalizeInstanceIdPayload(event.payload)
     console.log(`Received event '${EVENTS.PROXY_CIDRS_UPDATED}' for instance: ${instanceId}`);
     if (type() === 'android') {
@@ -91,7 +103,7 @@ async function onProxyCidrsUpdated(event: Event<unknown>) {
     }
 }
 
-async function onEventLagged(event: Event<unknown>) {
+async function onEventLagged(event: TauriEvent<unknown>) {
     if (type() === 'android') {
         await onNetworkInstanceChange(normalizeInstanceIdPayload(event.payload));
     }

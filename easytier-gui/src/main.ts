@@ -37,7 +37,10 @@ async function main() {
 
   const router = createRouter({
     history: createWebHistory(),
-    routes,
+    routes: [
+      { path: '/', redirect: '/home' },
+      ...routes,
+    ],
   })
 
   app.use(router)

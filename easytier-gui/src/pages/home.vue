@@ -1,5 +1,8 @@
 <script setup lang="ts">
-import { generateNetworkConfig, sendConfigs, collectNetworkInfo, updateNetworkConfigState, parseNetworkConfig, httpGet, httpPost, tcpPing, deleteNetworkInstance, luciProxyStart, luciProxyStop, luciGetLastPath } from '~/composables/backend'
+import { generateNetworkConfig, runNetworkInstance, collectNetworkInfo, updateNetworkConfigState, parseNetworkConfig, httpGet, httpPost, tcpPing, deleteNetworkInstance, luciProxyStart, luciProxyStop, luciGetLastPath, initRpcConnection } from '~/composables/backend'
+import { initMobileVpnService } from '~/composables/mobile_vpn'
+import { listenGlobalEvents } from '~/composables/event'
+import { type } from '@tauri-apps/plugin-os'
 import { loadLastNetworkInstanceId, saveLastNetworkInstanceId } from '~/composables/config'
 import { Utils, I18nUtils } from 'easytier-frontend-lib'
 import pkg from '~/../package.json'
@@ -770,8 +773,7 @@ function doConnectWithBounce() {
 async function doConnect() {
   if (!currentNet.value || netConnecting.value) return; netConnecting.value = true; trafficHistory.splice(0, trafficHistory.length); lastTraffic = { up: 0, down: 0, ts: 0 }
   try {
-    const ids = networks.value.map(e => e.config.instance_id)
-    await sendConfigs(ids)
+    await runNetworkInstance(currentNet.value.config, true)
     saveLastNetworkInstanceId(currentNet.value.config.instance_id)
     await new Promise(r => setTimeout(r, 2000))
     await fetchNetInfo()
@@ -1344,8 +1346,15 @@ function netName(): string { const n = currentNet.value; return n ? (n.config.in
 
 function onDocClick(e: MouseEvent) { const t = e.target as HTMLElement; if (!t.closest('.md-switch-menu') && !t.closest('.md-switch-btn')) showSwitchMenu.value = false }
 
-onMounted(() => {
+onMounted(async () => {
   applyTheme()
+
+  if (type() === 'android') {
+    try { await initMobileVpnService() } catch { /* */ }
+  }
+  cleanupFns.push(await listenGlobalEvents())
+  await initRpcConnection(true)
+
   loadWolConfig(); checkAllWolStatus(); wolPeriod = new Utils.PeriodicTask(checkAllWolStatus, 30000); wolPeriod.start()
   loadNetworks(); if (netInstId.value) refreshNet(); netPeriod = new Utils.PeriodicTask(fetchNetInfo, 3000); netPeriod.start()
   loadLuciConfig()
@@ -1358,7 +1367,9 @@ onMounted(() => {
   document.addEventListener('click', onDocClick)
   document.addEventListener('click', onLuciDocClick)
 })
-onUnmounted(() => { wolPeriod?.stop(); netPeriod?.stop(); if (statsTimer) clearInterval(statsTimer); stopLuciProxyFn(); for (const k of Object.keys(phaseTimers)) clearTimeout(phaseTimers[k]); if (snackTimer) clearTimeout(snackTimer); document.removeEventListener('click', onDocClick); document.removeEventListener('click', onLuciDocClick) })
+const cleanupFns: Array<() => void> = []
+
+onUnmounted(() => { cleanupFns.forEach(fn => fn()); wolPeriod?.stop(); netPeriod?.stop(); if (statsTimer) clearInterval(statsTimer); stopLuciProxyFn(); for (const k of Object.keys(phaseTimers)) clearTimeout(phaseTimers[k]); if (snackTimer) clearTimeout(snackTimer); document.removeEventListener('click', onDocClick); document.removeEventListener('click', onLuciDocClick) })
 </script>
 
 <template>
