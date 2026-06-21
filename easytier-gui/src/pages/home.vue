@@ -181,6 +181,28 @@ const defaultTab = ref<Tab>((localStorage.getItem('defaultTab') as Tab) || 'wol'
 const activeTab = ref<Tab>(defaultTab.value)
 const showDebug = ref(false)
 
+const SETTINGS_PALETTE = [
+  { tint: 'rgba(100,181,255,0.14)', tone: '#8ab4f8' },
+  { tint: 'rgba(191,90,242,0.14)', tone: '#bf5af2' },
+  { tint: 'rgba(255,159,10,0.14)', tone: '#ff9f0a' },
+  { tint: 'rgba(100,181,255,0.14)', tone: '#8ab4f8' },
+  { tint: 'rgba(48,209,88,0.14)', tone: '#30d158' },
+  { tint: 'rgba(239,83,80,0.14)', tone: '#ef5350' },
+  { tint: 'rgba(100,181,255,0.14)', tone: '#8ab4f8' },
+  { tint: 'rgba(255,159,10,0.14)', tone: '#ff9f0a' },
+]
+const visibleSettingsKeys = computed(() => {
+  const keys = ['home', 'theme', 'amoled', 'lang', 'debug']
+  if (showDebug.value) keys.push('advanced')
+  keys.push('config', 'help')
+  return keys
+})
+function settingsIconStyle(key: string): string {
+  const idx = visibleSettingsKeys.value.indexOf(key)
+  const c = SETTINGS_PALETTE[idx] || SETTINGS_PALETTE[0]
+  return `--tint:${c.tint};--tone:${c.tone}`
+}
+
 function switchTab(tab: Tab) {
   activeTab.value = tab
   if (tab === 'wol') { checkAllWolStatus(); manageStatsPoll() }
@@ -1635,9 +1657,15 @@ onUnmounted(() => { cleanupFns.forEach(fn => fn()); wolPeriod?.stop(); netPeriod
                 </div>
               </template>
 
-              <!-- Device info summary card -->
-              <div class="md-card md-stats-card md-stats-info-card">
+              <!-- Device info summary card (debug only) -->
+              <div v-if="showDebug" class="md-card md-stats-card md-stats-info-card">
                 <div class="md-stats-info">{{ w.mac }} &middot; {{ w.router_ip }} &middot; {{ w.interface || 'br-lan' }} &middot; {{ w.agent_port || 32249 }}</div>
+              </div>
+
+              <!-- Collapse button -->
+              <div class="md-stats-collapse" @click="toggleDeviceExpand(i)">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 15l-6-6-6 6"/></svg>
+                <span>{{ locale === 'cn' ? '收起' : 'Collapse' }}</span>
               </div>
             </template>
           </template>
@@ -1936,7 +1964,7 @@ onUnmounted(() => { cleanupFns.forEach(fn => fn()); wolPeriod?.stop(); netPeriod
 
         <div class="md-card md-settings-card">
           <div class="md-row">
-            <div class="md-symbol" style="--tint:rgba(100,181,255,0.14);--tone:#8ab4f8">
+            <div class="md-symbol" :style="settingsIconStyle('home')">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
             </div>
             <div class="flex-1">
@@ -1952,7 +1980,7 @@ onUnmounted(() => { cleanupFns.forEach(fn => fn()); wolPeriod?.stop(); netPeriod
         </div>
         <div class="md-card md-settings-card">
           <div class="md-row">
-            <div class="md-symbol" style="--tint:rgba(191,90,242,0.14);--tone:#bf5af2">
+            <div class="md-symbol" :style="settingsIconStyle('theme')">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
             </div>
             <div class="flex-1">
@@ -1968,7 +1996,7 @@ onUnmounted(() => { cleanupFns.forEach(fn => fn()); wolPeriod?.stop(); netPeriod
         </div>
         <div class="md-card md-settings-card" @click="amoledMode = !amoledMode">
           <div class="md-row">
-            <div class="md-symbol" style="--tint:rgba(255,159,10,0.14);--tone:#ff9f0a">
+            <div class="md-symbol" :style="settingsIconStyle('amoled')">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
             </div>
             <div class="flex-1">
@@ -1980,7 +2008,7 @@ onUnmounted(() => { cleanupFns.forEach(fn => fn()); wolPeriod?.stop(); netPeriod
         </div>
         <div class="md-card md-settings-card" @click="toggleLang">
           <div class="md-row">
-            <div class="md-symbol" style="--tint:rgba(100,181,255,0.14);--tone:#8ab4f8">
+            <div class="md-symbol" :style="settingsIconStyle('lang')">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
             </div>
             <div class="flex-1">
@@ -1992,7 +2020,7 @@ onUnmounted(() => { cleanupFns.forEach(fn => fn()); wolPeriod?.stop(); netPeriod
         </div>
         <div class="md-card md-settings-card" @click="showDebug = !showDebug">
           <div class="md-row">
-            <div class="md-symbol" style="--tint:rgba(48,209,88,0.14);--tone:#30d158">
+            <div class="md-symbol" :style="settingsIconStyle('debug')">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
             </div>
             <div class="flex-1">
@@ -2004,7 +2032,7 @@ onUnmounted(() => { cleanupFns.forEach(fn => fn()); wolPeriod?.stop(); netPeriod
         </div>
         <div v-if="showDebug" class="md-card md-settings-card" @click="router.push('/')">
           <div class="md-row">
-            <div class="md-symbol" style="--tint:rgba(239,83,80,0.14);--tone:#ef5350">
+            <div class="md-symbol" :style="settingsIconStyle('advanced')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
             </div>
             <div class="flex-1">
@@ -2016,7 +2044,7 @@ onUnmounted(() => { cleanupFns.forEach(fn => fn()); wolPeriod?.stop(); netPeriod
         </div>
         <div class="md-card md-settings-card">
           <div class="md-row">
-            <div class="md-symbol" style="--tint:rgba(100,181,255,0.14);--tone:#8ab4f8">
+            <div class="md-symbol" :style="settingsIconStyle('config')">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             </div>
             <div class="flex-1">
@@ -2029,7 +2057,7 @@ onUnmounted(() => { cleanupFns.forEach(fn => fn()); wolPeriod?.stop(); netPeriod
         </div>
         <div class="md-card md-settings-card" @click="showHelpDlg = true">
           <div class="md-row">
-            <div class="md-symbol" style="--tint:rgba(255,159,10,0.14);--tone:#ff9f0a">
+            <div class="md-symbol" :style="settingsIconStyle('help')">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
             </div>
             <div class="flex-1">
@@ -2727,7 +2755,7 @@ html[data-theme="amoled"] .md-device-group-open > .md-card:first-child {
   box-shadow:0 2px 6px rgba(0,0,0,0.1);
 }
 /* Child cards float up: stronger shadow + staggered enter animation */
-.md-stats-card { padding:12px 16px 4px; margin-bottom:10px; cursor:default; position:relative; box-shadow:var(--md-shadow); transition:box-shadow 0.3s; }
+.md-stats-card { padding:12px 16px; margin-bottom:10px; cursor:default; position:relative; box-shadow:var(--md-shadow); transition:box-shadow 0.3s; }
 .md-animated { animation:stats-slide-in 0.35s ease-out both; animation-delay:calc(var(--i, 0) * 0.08s); }
 .md-card-enter { animation:stats-slide-in 0.35s ease-out both; }
 @keyframes stats-slide-in { from { opacity:0; transform:translateY(16px); } to { opacity:1; transform:translateY(0); } }
@@ -2735,7 +2763,16 @@ html[data-theme="amoled"] .md-device-group-open > .md-card:first-child {
 .md-stats-loading-card { padding:8px 16px; }
 .md-stats-info-card { padding:10px 16px; }
 .md-stats-info { font-size:0.68rem; color:var(--muted); opacity:0.85; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.md-stats-loading { display:flex; align-items:center; justify-content:center; gap:8px; padding:16px 0; color:var(--muted); font-size:0.82rem; }
+.md-stats-loading {
+  display:flex; align-items:center; justify-content:center; gap:8px; padding:16px 0; color:var(--muted); font-size:0.82rem;
+}
+.md-stats-collapse {
+  display:flex; align-items:center; justify-content:center; gap:4px;
+  margin-top:-2px; margin-bottom:2px; padding:2px 0;
+  color:var(--muted); font-size:0.75rem; font-weight:600;
+  cursor:pointer; transition:color 0.2s;
+}
+.md-stats-collapse:active { color:var(--accent); }
 .md-stats-hdr { display:flex; align-items:baseline; flex-wrap:wrap; gap:4px 8px; margin-bottom:2px; }
 .md-stats-legends { margin-left:auto; display:flex; flex-wrap:wrap; justify-content:flex-end; gap:2px 10px; }
 .md-stats-label { font-size:0.76rem; font-weight:700; color:var(--ink); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
