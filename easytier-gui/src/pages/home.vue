@@ -2748,7 +2748,7 @@ html[data-theme="dark"] .md-tab-active, html[data-theme="amoled"] .md-tab-active
   opacity:0.82;
   box-shadow:0 2px 6px rgba(0,0,0,0.06);
   transform:scale(0.95);
-  transform-origin:center top;
+  transform-origin:center bottom;
 }
 html[data-theme="dark"] .md-device-group-open > .md-card:first-child,
 html[data-theme="amoled"] .md-device-group-open > .md-card:first-child {
