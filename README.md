@@ -1,12 +1,12 @@
 # EasyTier + WOLPlus
 
-[![Github release](https://img.shields.io/github/v/tag/EasyTier/EasyTier)](https://github.com/EasyTier/EasyTier/releases)
-[![GitHub](https://img.shields.io/github/license/EasyTier/EasyTier)](https://github.com/EasyTier/EasyTier/blob/main/LICENSE)
-[![GitHub last commit](https://img.shields.io/github/last-commit/EasyTier/EasyTier)](https://github.com/EasyTier/EasyTier/commits/main)
-[![GitHub issues](https://img.shields.io/github/issues/EasyTier/EasyTier)](https://github.com/EasyTier/EasyTier/issues)
-[![GitHub Core Actions](https://github.com/EasyTier/EasyTier/actions/workflows/core.yml/badge.svg)](https://github.com/EasyTier/EasyTier/actions/workflows/core.yml)
-[![GitHub GUI Actions](https://github.com/EasyTier/EasyTier/actions/workflows/gui.yml/badge.svg)](https://github.com/EasyTier/EasyTier/actions/workflows/gui.yml)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/EasyTier/EasyTier)
+[![Github release](https://img.shields.io/github/v/tag/lymwhen/EasyTier)](https://github.com/lymwhen/EasyTier/releases)
+[![GitHub](https://img.shields.io/github/license/lymwhen/EasyTier)](https://github.com/lymwhen/EasyTier/blob/main/LICENSE)
+[![GitHub last commit](https://img.shields.io/github/last-commit/lymwhen/EasyTier)](https://github.com/lymwhen/EasyTier/commits/main)
+[![GitHub issues](https://img.shields.io/github/issues/lymwhen/EasyTier)](https://github.com/lymwhen/EasyTier/issues)
+[![GitHub Core Actions](https://github.com/lymwhen/EasyTier/actions/workflows/core.yml/badge.svg)](https://github.com/lymwhen/EasyTier/actions/workflows/core.yml)
+[![GitHub GUI Actions](https://github.com/lymwhen/EasyTier/actions/workflows/gui.yml/badge.svg)](https://github.com/lymwhen/EasyTier/actions/workflows/gui.yml)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/lymwhen/EasyTier)
 
 > ✨ 基于 Rust + Tauri v2 的跨平台异地组网与远程设备管理一体化应用
 >
@@ -21,7 +21,7 @@
 
 ## 项目简介
 
-本项目是 [EasyTier](https://github.com/EasyTier/EasyTier) 的功能增强分支，在保留 EasyTier 全部组网能力的基础上，深度整合了 **WOL 电脑唤醒/关机管理**、**LuCI 路由器反向代理管理**、**PC 硬件性能实时监控**、**一键配置导入/导出** 等实用功能，并采用 Glassmorphism + Material You 混合风格进行了全面界面美化。
+本项目是 [EasyTier](https://github.com/lymwhen/EasyTier) 的功能增强分支，在保留 EasyTier 全部组网能力的基础上，深度整合了 **WOL 电脑唤醒/关机管理**、**LuCI 路由器反向代理管理**、**PC 硬件性能实时监控**、**一键配置导入/导出** 等实用功能，并采用 Glassmorphism + Material You 混合风格进行了全面界面美化。
 
 应用基于 **Tauri v2** 框架构建，支持 **Windows / macOS / Linux 桌面端** 和 **Android 移动端**，App 内嵌 easytier-core 实现去中心化组网，无需中心服务器。
 
@@ -67,6 +67,10 @@
 ---
 
 ## WOL 设备管理
+
+> ⚠️ WOL 功能为**可选增强特性**，需要额外安装以下组件方可使用：
+> - 路由器端：[luci-app-wolplus](https://github.com/lymwhen/luci-app-wolplus)（OpenWrt 路由器插件，需使用定制版以支持 WOL Proxy）
+> - PC 端：`wol-agent`（运行在每台被管理的 Windows PC 上）
 
 WOL 功能依赖路由器端 `luci-app-wolplus` CGI 中间层 + PC 端 `wol-agent`（Go 编写）协同工作，组成完整的 **唤醒 → 状态检测 → 关机** 操作闭环。
 
@@ -201,7 +205,7 @@ socks5_proxy = "socks5://0.0.0.0:32259"
 
 ### 安装
 
-从 [GitHub Releases](https://github.com/EasyTier/EasyTier/releases) 下载对应平台的安装包：
+从 [GitHub Releases](https://github.com/lymwhen/EasyTier/releases) 下载对应平台的安装包：
 
 | 平台 | 安装方式 |
 |------|---------|
@@ -214,14 +218,14 @@ socks5_proxy = "socks5://0.0.0.0:32259"
 
 ```bash
 # Linux（推荐）
-curl -fsSL "https://github.com/EasyTier/EasyTier/blob/main/script/install.sh?raw=true" | sudo bash -s install
+curl -fsSL "https://github.com/lymwhen/EasyTier/blob/main/script/install.sh?raw=true" | sudo bash -s install
 
 # macOS / Linux (Homebrew)
 brew tap brewforge/chinese
 brew install --cask easytier-gui
 
 # Windows（管理员权限运行）
-irm "https://github.com/EasyTier/EasyTier/blob/main/script/install.ps1?raw=true" | iex
+irm "https://github.com/lymwhen/EasyTier/blob/main/script/install.ps1?raw=true" | iex
 ```
 
 ### 基本使用流程
@@ -264,21 +268,14 @@ sudo easytier-core -d --network-name mynetwork --network-secret mysecret -p tcp:
 
 ---
 
-## 相关项目
-
-- [EasyTier](https://github.com/EasyTier/EasyTier) — 去中心化异地组网工具（本项目上游）
-- [luci-app-wolplus](https://github.com/animegasan/luci-app-wolplus) — OpenWrt WOL 设备管理 LuCI 插件 + PC 端 Go Agent
-- [ZeroTier](https://www.zerotier.com/) — 全球虚拟网络设备连接方案
-- [TailScale](https://tailscale.com/) — 简化网络配置的 VPN 解决方案
-
 ## 许可证
 
-本项目基于 EasyTier，在 [LGPL-3.0](https://github.com/EasyTier/EasyTier/blob/main/LICENSE) 许可下发布。新增的 WOLPlus 整合代码同样遵循 LGPL-3.0 许可。
+本项目基于 EasyTier，在 [LGPL-3.0](https://github.com/lymwhen/EasyTier/blob/main/LICENSE) 许可下发布。新增的 WOLPlus 整合代码同样遵循 LGPL-3.0 许可。
 
 ## 致谢
 
 - 🙏 **[EasyTier](https://github.com/EasyTier/EasyTier)** — 去中心化组网引擎，高性能 Rust 实现，稳定的 NAT 穿透能力，基于 Tauri v2 的 App 框架
-- 🙏 **[luci-app-wolplus](https://github.com/animegasan/luci-app-wolplus)** — 路由器端 WOL CGI 中间层和 PC 端 Go Agent，使跨隧道远程设备管理成为可能
+- 🙏 **[luci-app-wolplus](https://github.com/animegasan/luci-app-wolplus)** — OpenWrt 路由器 WOL 插件，提供 CGI API 通过 etherwake 发送魔术包
 
 ---
 
