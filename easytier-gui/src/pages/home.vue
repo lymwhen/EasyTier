@@ -2528,7 +2528,7 @@ html[data-theme="dark"] .md-chip, html[data-theme="amoled"] .md-chip { backgroun
 .ico-hidden { opacity:0; pointer-events:none; }
 .md-connect-btn-bounce { animation:connect-bounce 0.4s cubic-bezier(0.34,1.56,0.64,1) forwards !important; }
 @keyframes connect-bounce {
-  0% { transform:scale(1); }
+  0% { transform:scale(1) !important; }
   35% { transform:scale(0.88); }
   100% { transform:scale(1); }
 }
