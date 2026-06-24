@@ -100,6 +100,62 @@ Router first (hostname matches `/route|wrt|路由|home|家/i`), then by IP. Serv
 - **禁止**以 `@` 开头，禁止在 commit message 两端使用 `@'...'@` 包裹
 - **推送前**检查 `git log --oneline -1` 确认格式正确
 
+## Tag Release
+
+### 版本号格式
+`v` + 上游版本号 + `-c` + 定制化版本号（从 1 递增）
+
+示例：`v2.6.4-c5`、`v2.6.4-c6`
+
+- **上游版本号**：跟随 `package.json` 中的 `pkg.version`（当前 `2.6.4`）
+- **定制化版本号**：`c1`、`c2`、`c3`... 依次递增
+- **上游升级时**：定制化版本号重置为 `c1`（如上游升至 `2.7.0`，则下个 tag 为 `v2.7.0-c1`）
+
+### Tag Message 规范
+必须包含分类变更列表，格式如下：
+
+```
+vX.Y.Z-cN — 简短标题
+
+[Category] 分类名
+- 变更条目1
+- 变更条目2
+
+[Category] 分类名
+- 变更条目1
+```
+
+分类名使用英文标签（Docs / UI / Features / Fix / Assets），内容使用中文。
+
+### 多行文本处理（Windows 必读）
+`git tag -m "多行字符串"` 在 Windows shell 中会**截断多行内容**，仅保留第一行。
+**正确做法**：将 message 写入临时文件，用 `-F` 读取：
+
+```powershell
+# 错误（Windows 下会截断）
+git tag -a v2.6.4-c6 -m "v2.6.4-c6 — 标题
+- 第一行
+- 第二行"
+
+# 正确
+# 1. 写入文件
+echo "v2.6.4-c6 — 标题
+- 第一行
+- 第二行" > /tmp/tag_msg.txt
+
+# 2. 用 -F 读取
+git tag -a v2.6.4-c6 -F /tmp/tag_msg.txt
+```
+
+### 推送命令
+```bash
+# 推送 tag（首次）
+git push origin v2.6.4-c6
+
+# 如需覆盖已有 tag（⚠️ 慎用）
+git push origin v2.6.4-c6 --force
+```
+
 ## Upstream Tracking
 
 - **一切对上游的改动必须补充到** `docs/project.md` 的「相对上游变更清单」表格中
