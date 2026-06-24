@@ -277,7 +277,7 @@ interface StatsSnapshot {
   nets: { name: string; recvBps: number; sentBps: number }[]
 }
 
-const STATS_MAX_POINTS = 60  // 5 min at 5s interval
+const STATS_MAX_POINTS = 24  // 2 min at 5s interval
 
 function ensureStatsKeys(ip: string) {
   if (!statsHistory[ip]) statsHistory[ip] = []
@@ -925,7 +925,7 @@ const sortedServers = computed(() => [...netServers.value].sort((a, b) => (a.rou
 // Traffic speed tracking
 const netTrafficSpeed = reactive({ up: '', down: '', upBytes: 0, downBytes: 0, upTotal: '', downTotal: '', totalBytes: 0 })
 const trafficHistory = reactive<{ up: number; down: number }[]>([])
-const TRAFFIC_MAX_POINTS = 60 // ~3 min at 3s interval
+const TRAFFIC_MAX_POINTS = 40 // 2 min at 3s interval
 let lastTraffic = { up: 0, down: 0, ts: 0 }
 const TRAFFIC_UP_COLOR = '#43a047'
 const TRAFFIC_DOWN_COLOR = '#1e88e5'
@@ -969,7 +969,7 @@ function formatSpeedY(v: number): string {
 function formatXLabel(total: number, idx: number): string {
   const sec = (total - 1 - idx) * 3
   if (sec === 0) return 'now'
-  if (sec < 60) return '-' + sec + 's'
+  if (sec < 50) return '-' + sec + 's'
   const min = sec / 60
   // Round to nearest 0.5 to avoid floating point quirks
   const r = Math.round(min * 2) / 2
@@ -2385,7 +2385,7 @@ html[data-theme="dark"] .md-dialog textarea, html[data-theme="amoled"] .md-dialo
 
 .md-dlg-ft { display:flex; align-items:center; gap:6px; padding:6px 14px 12px; width:100%; }
 .md-dlg-btn { padding:8px 14px; border:none; border-radius:10px; font-size:0.85rem; font-weight:600; cursor:pointer; background:transparent; color:var(--accent); min-width:64px; letter-spacing:0.3px; transition:transform 160ms ease, background-color 160ms ease; }
-.md-dlg-btn:active { background:rgba(10,132,255,0.15); transform:scale(0.96); }
+.md-dlg-btn:active { background:rgba(10,132,255,0.15); transform:scale(0.92); }
 .md-dlg-btn-save { color:var(--accent); font-weight:700; background:transparent; }
 .md-dlg-btn-save:active { background:rgba(10,132,255,0.15); }
 .md-dlg-btn-del { color:#ef5350; background:transparent; }
@@ -2491,10 +2491,10 @@ html[data-theme="amoled"] .md-hero-connected {
   transition:transform 160ms ease, background-color 160ms ease; flex-shrink:0;
 }
 .md-wake-btn { background:color-mix(in srgb, var(--accent) 15%, var(--panel-strong)); color:var(--accent); }
-.md-wake-btn:active { transform:scale(0.96); }
+.md-wake-btn:active { transform:scale(0.92); }
 html[data-theme="dark"] .md-wake-btn, html[data-theme="amoled"] .md-wake-btn { background:color-mix(in srgb, var(--accent) 15%, var(--panel-strong)); color:var(--accent); }
 .md-shutdown-btn { background:color-mix(in srgb, #ef5350 15%, var(--panel-strong)); color:#ef5350; }
-.md-shutdown-btn:active { transform:scale(0.96); }
+.md-shutdown-btn:active { transform:scale(0.92); }
 html[data-theme="dark"] .md-shutdown-btn, html[data-theme="amoled"] .md-shutdown-btn { background:color-mix(in srgb, #ef9a9a 15%, var(--panel-strong)); color:#ef9a9a; }
 
 /* Chips */
@@ -2650,7 +2650,7 @@ html[data-theme="dark"] .md-sw-item:active, html[data-theme="amoled"] .md-sw-ite
   transition:transform 160ms ease, background-color 160ms ease;
 }
 .md-select::-webkit-calendar-picker-indicator { opacity:0; width:0; height:0; }
-.md-select:active { transform:scale(0.96); background-color:rgba(127,127,127,0.16); }
+.md-select:active { transform:scale(0.92); background-color:rgba(127,127,127,0.16); }
 html[data-theme="dark"] .md-select, html[data-theme="amoled"] .md-select {
   background-color:rgba(255,255,255,0.08); color:#f2f2f2;
 }
@@ -2711,7 +2711,7 @@ html[data-theme="amoled"] .md-tabs::before {
   color:#758093; transition:color 180ms ease, background-color 180ms ease, transform 180ms ease;
 }
 html[data-theme="dark"] .md-tab, html[data-theme="amoled"] .md-tab { color:#93a2b5; }
-.md-tab:active { transform:scale(0.96); }
+.md-tab:active { transform:scale(0.94); }
 .md-tab-active { color:var(--accent); background:rgba(10,132,255,0.055); box-shadow:inset 0 0 0 1px rgba(10,132,255,0.08); }
 html[data-theme="dark"] .md-tab-active, html[data-theme="amoled"] .md-tab-active { background:rgba(100,181,255,0.095); box-shadow:inset 0 0 0 1px rgba(100,181,255,0.1); }
 .md-tab svg { width:21px; height:21px; }
@@ -2805,23 +2805,23 @@ html[data-theme="amoled"] .md-device-group-open > .md-card:first-child {
 .md-hdr .md-settings-btn { min-height:30px; padding:0 10px; gap:5px; font-size:0.78rem; font-weight:700; }
 .md-hdr .md-settings-btn svg { width:16px; height:16px; }
 .md-refresh-icon { display:inline-block; }
-.md-settings-btn:active { transform:scale(0.96); }
+.md-settings-btn:active { transform:scale(0.92); }
 html[data-theme="dark"] .md-settings-btn, html[data-theme="amoled"] .md-settings-btn { background:rgba(255,255,255,0.08); }
 .md-settings-btn-export { background:color-mix(in srgb, var(--green) 15%, var(--panel-strong)); color:var(--green); }
-.md-settings-btn-export:active { transform:scale(0.96); }
+.md-settings-btn-export:active { transform:scale(0.92); }
 .md-settings-btn-primary { background:color-mix(in srgb, var(--accent) 15%, var(--panel-strong)); color:var(--accent); }
-.md-settings-btn-primary:active { transform:scale(0.96); }
+.md-settings-btn-primary:active { transform:scale(0.92); }
 html[data-theme="dark"] .md-settings-btn-primary, html[data-theme="amoled"] .md-settings-btn-primary { background:color-mix(in srgb, var(--accent) 15%, var(--panel-strong)); color:var(--accent); }
 .md-settings-btn-white { background:rgba(127,127,127,0.12); color:var(--ink); }
-.md-settings-btn-white:active { transform:scale(0.96); background:rgba(127,127,127,0.2); }
+.md-settings-btn-white:active { transform:scale(0.92); background:rgba(127,127,127,0.2); }
 html[data-theme="dark"] .md-settings-btn-white { background:rgba(255,255,255,0.15); color:#f2f2f2; }
 html[data-theme="dark"] .md-settings-btn-white:active { background:rgba(255,255,255,0.25); }
 html[data-theme="amoled"] .md-settings-btn-white { background:rgba(255,255,255,0.12); color:#f2f2f2; }
 html[data-theme="amoled"] .md-settings-btn-white:active { background:rgba(255,255,255,0.2); }
 .md-settings-btn-green { background:color-mix(in srgb, var(--green) 15%, var(--panel-strong)); color:var(--green); }
-.md-settings-btn-green:active { transform:scale(0.96); }
+.md-settings-btn-green:active { transform:scale(0.92); }
 .md-settings-btn-red { background:color-mix(in srgb, #ef5350 15%, var(--panel-strong)); color:#ef5350; }
-.md-settings-btn-red:active { transform:scale(0.96); }
+.md-settings-btn-red:active { transform:scale(0.92); }
 html[data-theme="dark"] .md-settings-btn-red, html[data-theme="amoled"] .md-settings-btn-red { background:color-mix(in srgb, #ef5350 15%, var(--panel-strong)); color:#ef9a9a; }
 
 /* Help / About dialog content */
