@@ -2522,7 +2522,6 @@ html[data-theme="dark"] .md-chip, html[data-theme="amoled"] .md-chip { backgroun
   box-shadow:var(--md-shadow), inset 0 0 0 1px rgba(255,255,255,0.18);
   transition: background 0.4s ease, color 0.4s ease, box-shadow 0.4s ease, transform 0.15s ease;
 }
-.md-connect-btn:active { transform:scale(0.92); }
 .md-connect-ico { position:relative; width:32px; height:32px; flex-shrink:0; }
 .md-connect-ico svg { position:absolute; inset:0; transition:opacity 0.3s ease; }
 .ico-hidden { opacity:0; pointer-events:none; }
