@@ -1,8 +1,194 @@
 # 本地 Android 构建
 
-EasyTier Tauri v2 Android App 本地（Windows）构建指南。
+EasyTier Tauri v2 Android App 本地构建指南，覆盖 Ubuntu/WSL 与 Windows。
 
 > CI 全平台构建请参阅 [docs/CI全平台构建.md](CI全平台构建.md)。
+
+---
+
+## Ubuntu / WSL 快速构建（工具缓存已配置）
+
+当前 Ubuntu/WSL 环境已经安装并缓存 Rust、JDK、Android SDK/NDK、protoc、pnpm 和 Gradle 依赖。重新开始会话时，先加载环境：
+
+```bash
+source /mnt/d/tools/EasyTierLinux/env.sh
+cd /mnt/d/projects/projectsalpha/EasyTier
+```
+
+### 工具和缓存位置
+
+| 项目 | 路径 |
+|------|------|
+| Ubuntu 构建环境 | `/mnt/d/tools/EasyTierLinux/env.sh` |
+| 一键构建脚本 | `/mnt/d/tools/EasyTierLinux/build-android-arm64.sh` |
+| JNI 桥生成脚本 | `/mnt/d/tools/EasyTierLinux/generate-wry-bridge.sh` |
+| JNI 桥校验脚本 | `/mnt/d/tools/EasyTierLinux/verify-android-jni.sh` |
+| Rust / Cargo | `/mnt/d/tools/rust-linux` |
+| JDK 17 | `/mnt/d/tools/Java/jdk-17.0.21-linux` |
+| Linux Android SDK | `/mnt/d/tools/Android/SdkLinux` |
+| Linux NDK 原始包 | `/mnt/d/tools/Android/ndk-archives/android-ndk-r27-linux.zip` |
+| protoc 35.1 | `/mnt/d/tools/EasyTierLinux/protoc` |
+| Ubuntu 主机 C 编译器 | `/mnt/d/tools/EasyTierLinux/bin/cc` |
+| pnpm 9.12.1 | `/mnt/d/tools/EasyTierLinux/bin/pnpm` |
+| Gradle 用户缓存 | `/mnt/f/tmp/gradle-tmp` |
+| APK 输出目录 | `/mnt/f/tmp` |
+
+Linux NDK 不要直接解压到 NTFS 目录。NDK 中存在 8 组仅大小写不同的头文件，NTFS 默认无法同时保存；因此 D 目录保留原始 ZIP，`SdkLinux/ndk/.../linux-x86_64` 指向 ext4/home 下的解压缓存。
+
+### 一键构建
+
+代码没有依赖清单变化时，直接执行：
+
+```bash
+source /mnt/d/tools/EasyTierLinux/env.sh
+/mnt/d/tools/EasyTierLinux/build-android-arm64.sh
+```
+
+脚本会依次完成：
+
+1. 构建 `tauri-plugin-vpnservice` 和 `easytier-web/frontend-lib`
+2. 构建 `easytier-gui` 前端
+3. 交叉编译 `libapp_lib.so`
+4. 校验 Android Kotlin JNI 桥和 Native 导出
+5. 执行 Gradle `assembleArm64Release`
+6. 将带时间戳的 APK 复制到 `/mnt/f/tmp`
+
+可选环境变量：
+
+```bash
+# 强制重新安装 pnpm 依赖
+INSTALL_DEPS=1 /mnt/d/tools/EasyTierLinux/build-android-arm64.sh
+
+# 前端依赖没有变化，跳过 plugin/frontend-lib 构建
+SKIP_FRONTEND_DEPS=1 /mnt/d/tools/EasyTierLinux/build-android-arm64.sh
+
+# Native 没有变化，复用现有 libapp_lib.so
+SKIP_RUST=1 /mnt/d/tools/EasyTierLinux/build-android-arm64.sh
+
+# 清理 Android 构建缓存后再构建
+CLEAN_ANDROID=1 /mnt/d/tools/EasyTierLinux/build-android-arm64.sh
+```
+
+### 手动构建步骤
+
+**1. 安装依赖（仅首次、依赖变化或 `node_modules` 缺失时）**
+
+```bash
+source /mnt/d/tools/EasyTierLinux/env.sh
+cd /mnt/d/projects/projectsalpha/EasyTier/easytier-gui
+pnpm install --frozen-lockfile --ignore-scripts
+```
+
+**2. 构建前端依赖和 GUI 前端**
+
+当前定制的 `easytier-gui` 构建命令是 `vite build`，不会自动构建 `frontend-lib`，因此必须显式构建：
+
+```bash
+cd /mnt/d/projects/projectsalpha/EasyTier
+pnpm --dir tauri-plugin-vpnservice build
+pnpm --dir easytier-web/frontend-lib build
+pnpm --dir easytier-gui build
+```
+
+**3. 交叉编译 Rust Native Library**
+
+```bash
+source /mnt/d/tools/EasyTierLinux/env.sh
+cd /mnt/d/projects/projectsalpha/EasyTier
+
+cargo build \
+  --manifest-path easytier-gui/src-tauri/Cargo.toml \
+  --package easytier-gui \
+  --lib \
+  --release \
+  --target aarch64-linux-android \
+  --features 'tauri/custom-protocol' \
+  --locked \
+  --config 'source.crates-io.replace-with="ustc"' \
+  --config 'source.ustc.registry="sparse+https://mirrors.ustc.edu.cn/crates.io-index/"'
+```
+
+USTC 镜像用于首次下载 Cargo 依赖；已有缓存时不影响增量构建。
+
+**4. 校验 Android JNI 桥**
+
+```bash
+source /mnt/d/tools/EasyTierLinux/env.sh
+cd /mnt/d/projects/projectsalpha/EasyTier
+
+/mnt/d/tools/EasyTierLinux/verify-android-jni.sh \
+  "$PWD" \
+  "$PWD/target/aarch64-linux-android/release/libapp_lib.so"
+```
+
+正常输出：
+
+```text
+bridge=22 native=22 missing=[] extra=[]
+Android JNI bridge matches libapp_lib.so
+```
+
+如果 `Rust.kt` 缺失或校验失败，必须先重新生成 JNI 桥：
+
+```bash
+/mnt/d/tools/EasyTierLinux/generate-wry-bridge.sh "$PWD"
+/mnt/d/tools/EasyTierLinux/verify-android-jni.sh \
+  "$PWD" \
+  "$PWD/target/aarch64-linux-android/release/libapp_lib.so"
+```
+
+> ⚠️ **关键：不要直接复用旧的 `gen/android/.../generated` 文件。** Gradle 使用 `-x rustBuildArm64Release` 时不会执行 Tauri/Wry codegen。旧 Kotlin JNI 类与新 `libapp_lib.so` 不匹配会导致点击图标立即闪退。生成版本必须与 `Cargo.lock` 中的 `wry` 版本一致，当前为 `wry 0.55.1`。
+
+**5. 复制 Native Library 并执行 Gradle**
+
+```bash
+ROOT=/mnt/d/projects/projectsalpha/EasyTier
+cp "$ROOT/target/aarch64-linux-android/release/libapp_lib.so" \
+  "$ROOT/easytier-gui/src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a/libapp_lib.so"
+
+cd "$ROOT/easytier-gui/src-tauri/gen/android"
+./gradlew assembleArm64Release --no-daemon -x rustBuildArm64Release
+```
+
+如果怀疑 APK 使用了旧 Native/JNI 文件，清理后再构建：
+
+```bash
+./gradlew :app:clean assembleArm64Release --no-daemon -x rustBuildArm64Release
+```
+
+**6. 复制 APK**
+
+```bash
+ROOT=/mnt/d/projects/projectsalpha/EasyTier
+ts="$(date +%Y%m%d%H%M)"
+cp "$ROOT/easytier-gui/src-tauri/gen/android/app/build/outputs/apk/arm64/release/app-arm64-release.apk" \
+  "/mnt/f/tmp/app-arm64-release-$ts.apk"
+```
+
+### Lockfile 处理原则
+
+- `Cargo.lock`：优先以上游分支的 `Cargo.lock` 为基线，只针对定制依赖做最小解析。不要直接 `cargo generate-lockfile` 全量重建；当前项目曾因此解析出不兼容的 `rust-i18n 4.0.x` / `rust-i18n-support 4.2.x` 组合，导致 Rust 编译失败。
+- `pnpm-lock.yaml`：使用 pnpm 9.12.1 更新，不要混用 pnpm 12 生成：
+
+  ```bash
+  source /mnt/d/tools/EasyTierLinux/env.sh
+  cd /mnt/d/projects/projectsalpha/EasyTier/easytier-gui
+  pnpm install --lockfile-only --no-frozen-lockfile
+  ```
+
+- `androidx.lifecycle:lifecycle-process` 是 Wry `ProcessLifecycleOwner` 所需依赖，不应删除。
+
+### Ubuntu/WSL 构建耗时参考
+
+| 场景 | 预计耗时 |
+|------|----------|
+| 无变更，只重新打包 | 数分钟 |
+| 仅 Android Kotlin/Manifest 变更，`SKIP_RUST=1` | 约 2–4 分钟 |
+| 仅 Rust Native 变更 | Rust 增量编译 + Gradle 打包 |
+| 前端变更 | Vite 构建 + Gradle 打包 |
+| 全新环境、冷缓存 | 主要耗时在 Cargo/Gradle 下载和首次编译 |
+
+缓存已经配置在 `/mnt/d/tools`、`/mnt/f/tmp/gradle-tmp` 和 Cargo/Rust 缓存目录。正常增量构建不要再重新下载工具链。
 
 ---
 
