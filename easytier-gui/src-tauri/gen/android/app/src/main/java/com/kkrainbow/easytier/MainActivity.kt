@@ -7,12 +7,18 @@ import android.os.Handler
 import android.os.Looper
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
+import androidx.activity.OnBackPressedCallback
 
 class MainActivity : TauriActivity() {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                moveTaskToBack(true)
+            }
+        })
         initService()
     }
 

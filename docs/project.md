@@ -12,9 +12,9 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 
 ## 相对上游变更清单
 
-> 以下为 `HEAD` 相对 `upstream/main` 的全部文件级变更及必要性说明。
+> 以下为 `HEAD` 相对 `upstream/releases/v2.7.0` 的全部文件级变更及必要性说明。
 > 每次对上游文件进行新增/修改后，**必须**同步更新此表格。
-> 分支 `main` 的 merge base: `73bea01`，上游最新: `upstream/main`。
+> 当前跟进上游：`upstream/releases/v2.7.0`（`8b7f1f01`，tag `v2.7.0`）。
 
 ### 核心功能变更（必要）
 
@@ -23,8 +23,9 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 | `easytier-gui/src/pages/home.vue` | **[新增]** WOL/网络/路由器/设置四个 Tab 主界面（~2900行） | 必要 — 项目核心 |
 | `easytier-gui/src/App.vue` | 主题初始化 + 窗口标题 + Toast + RouterView（Splash 已移除） | 必要 — 初始化流程 |
 | `easytier-gui/src/composables/backend.ts` | 新增 `httpGet`/`httpPost`/`tcpPing`/`luciProxy*` IPC 封装 | 必要 — 前端 HTTP/代理调用 |
+| `easytier-gui/src/composables/event.ts` | `onSaveConfigs` 改为合并本地网络配置，避免覆盖用户配置；接入上游 `normalizeConfigSource` | 必要 — 修复配置覆盖 |
 | `easytier-gui/src-tauri/src/lib.rs` | 新增 `http_get`/`http_post`/`tcp_ping` 命令 + LuCI HTTP 反向代理完整实现（~360行） | 必要 — 后端 HTTP/代理支持 |
-| `easytier-gui/src-tauri/Cargo.toml` | 新增 `reqwest(socks)`/`hyper`/`http-body-util`/`hyper-util`/`bytes` + `tauri-plugin-opener`/`tauri-plugin-clipboard-manager` 依赖 | 必要 — Rust 侧 HTTP 客户端 + 代理服务器 + 跨平台剪贴板/浏览器 |
+| `easytier-gui/src-tauri/Cargo.toml` | 新增 `reqwest(socks)`/`hyper`/`http-body-util`/`hyper-util`/`bytes` + `tauri-plugin-opener`/`tauri-plugin-positioner` 依赖 | 必要 — Rust 侧 HTTP 客户端 + 代理服务器 + 跨平台浏览器/托盘定位 |
 | `easytier-gui/index.html` | viewport 添加 `maximum-scale=1.0, user-scalable=no` | 必要 — 禁用 Android 双指缩放 |
 | `easytier-gui/src-tauri/tauri.conf.json` | 插件权限配置：`shell.open` scope、clipboard-manager 权限 | 必要 — 跨平台浏览器打开 + 剪贴板 |
 | `easytier-gui/src-tauri/capabilities/migrated.json` | 新增 `shell:allow-open`、`clipboard-manager:allow-read`、`clipboard-manager:allow-write` 权限 | 必要 — 插件能力声明 |
@@ -45,13 +46,13 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 
 | 文件 | 变更 | 必要性 |
 |------|------|--------|
-| `easytier-gui/package.json` | build script 移除 `vue-tsc --noEmit`（跳过 TS 类型检查加速构建） | 必要 — 构建加速 |
-| `pnpm-workspace.yaml` | 添加 `allowBuilds: esbuild, unrs-resolver, vue-demi` | 必要 — pnpm 原生构建许可 |
+| `easytier-gui/package.json` | `dev`/`build` 保持定制精简命令，移除 frontend-lib 预构建与 `vue-tsc --noEmit`；新增 `@tauri-apps/plugin-opener` | 必要 — 保持定制构建流程/浏览器打开能力 |
+| `pnpm-workspace.yaml` | 保留 lockfile 解冻背景注释 | Fork 适配 — 记录 `--no-frozen-lockfile` 原因 |
 | `pnpm-lock.yaml` | 依赖锁文件更新（因新增依赖变更） | 必要 — 附带产物 |
 | `Cargo.lock` | Rust 依赖锁更新（新增 reqwest/hyper + kcp-sys rev） | 必要 — 附带产物 |
 | `easytier-gui/src/auto-imports.d.ts` | **[自动生成]** unplugin-auto-import 更新 | 附带 — 新增 IPC 函数自动导入声明 |
 | `easytier-gui/src/typed-router.d.ts` | **[自动生成]** 新增 `/home` 路由声明 | 附带 — 新增页面自动路由注册 |
-| `.gitignore` | 新增 1 行忽略规则 | 必要 — 忽略本地构建产物 |
+| `.gitignore` | 新增 Tauri Android 构建产物、`.claude/`、`.mimocode/` 忽略规则 | 必要 — 忽略本地构建/工具产物 |
 
 ### CI/CD（Fork 适配）
 
@@ -113,7 +114,7 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 <tr><td>PC 性能监控 — 实时采集 CPU/内存/GPU 使用率、磁盘 IO 读写速度、网络上下行流量，SVG 面积渐变折线图展示（60 点 / 3 分钟窗口）；硬件信息（CPU 型号、内存 DDR 类型与频率、GPU 型号）；10 秒自动刷新；颜色标识健康状态</td><td>全平台</td></tr>
 <tr><td>路径标签（ET-LAN / LAN 蓝色胶囊）— 根据 <code>netRunning</code> 与 <code>router_ip</code> 自动判断路径模式</td><td>全平台</td></tr>
 <tr><td rowspan="9"><b>组网</b></td><td>总览信息卡片 — 毛玻璃标题 + 虚拟IP副标题 + 接口IPv4/IPv6（每地址一行，v4在前v6在后，ASCII升序）+ NAT标签 + 三统计（节点/服务器/累计流量）；标题与标签垂直居中，标题过长自动换行</td><td>全平台</td></tr>
-<tr><td>Peer 卡片展示 — 上半部分：IP + 主机名 + 延迟/丢包率；下半部分两行布局：第一行流量 + P2P/TCP/NAT标签（正常大小），第二行版本号（`v2.6.4` 格式）；左右垂直居中对齐</td><td>全平台</td></tr>
+<tr><td>Peer 卡片展示 — 上半部分：IP + 主机名 + 延迟/丢包率；下半部分两行布局：第一行流量 + P2P/TCP/NAT标签（正常大小），第二行版本号（`v2.7.0` 格式）；左右垂直居中对齐</td><td>全平台</td></tr>
 <tr><td>网络质量颜色分级 — 绿（正常）/ 蓝（loss>3% 或 lat>50）/ 橙（loss>5% 或 lat>100）/ 红（loss>10% 或 lat>300）；NAT 标签：绿/绿/绿/蓝/橙对应 Open/NAT1/NAT2/NAT3/NAT4</td><td>全平台</td></tr>
 <tr><td>Peer 排序 — 路由器优先（hostname 匹配 <code>/route|wrt|路由|home|家/i</code>），其余按 IP 排序；服务器按 hostname 字母排序</td><td>全平台</td></tr>
 <tr><td>实时速率图表 — SVG 面积渐变折线图（与性能监控同款 area-fill 样式），绿色上行 `#43a047` / 蓝色下行 `#1e88e5`，3 分钟窗口（60 点），HTML 坐标轴标签覆盖 SVG 之上；连接重建时速率防负值 + 清空旧数据</td><td>全平台</td></tr>
@@ -286,7 +287,7 @@ PC
 
 **速率图表**：实时上下行速率面积渐变折线图（60 点 / 3 分钟），HTML 坐标轴标签覆盖在 SVG 之上。Y 轴最大值叠于左上角，y=0 不显示标签（横轴线隐式表达），图表线随卡片宽度拉伸。
 
-**网络设备列表**：Peer 卡片，上半部分 IP+主机名+延迟/丢包率，下半部分两行布局：第一行流量+P2P/TCP/NAT标签（正常大小），第二行版本号（`v2.6.4`）。左右两侧垂直居中对齐。
+**网络设备列表**：Peer 卡片，上半部分 IP+主机名+延迟/丢包率，下半部分两行布局：第一行流量+P2P/TCP/NAT标签（正常大小），第二行版本号（`v2.7.0`）。左右两侧垂直居中对齐。
 
 **服务器列表**：同设备卡片布局，按主机名字母排序。
 
@@ -582,7 +583,7 @@ Glassmorphism + Material You 混合风格，自定义 CSS 变量体系。
 
 - 左侧：流量和版本号分为两行，底部对齐（`flex flex-col justify-end`）
 - 右侧：P2P/Relay、TCP/UDP、NAT 标签垂直居中于左侧整体高度（`align-items:center`）
-- 版本号格式：`v2.6.4`（小写 v 前缀）
+- 版本号格式：`v2.7.0`（小写 v 前缀）
 - TCP/UDP 显示为大写（`.toUpperCase()`）
 
 **总览信息卡片**（组网页）：

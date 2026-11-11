@@ -3,10 +3,12 @@ import type { Event as TauriEvent } from "@tauri-apps/api/event";
 import { type } from "@tauri-apps/plugin-os";
 import { NetworkTypes } from "easytier-frontend-lib"
 import { Utils } from "easytier-frontend-lib";
+import { normalizeConfigSource } from './config_source'
+import { onNetworkInstanceUpdate } from './mobile_vpn'
 
 interface StoredGuiConfig {
     config: NetworkTypes.NetworkConfig
-    source?: 'user' | 'webhook' | 'legacy'
+    source?: unknown
 }
 
 const EVENTS = Object.freeze({
@@ -34,7 +36,7 @@ function onSaveConfigs(event: TauriEvent<StoredGuiConfig[]>) {
         if (!id || localIds.has(id)) continue
         merged.push({
             config: NetworkTypes.normalizeNetworkConfig(entry.config),
-            source: entry.source ?? 'legacy',
+            source: normalizeConfigSource(entry.source),
         })
     }
 
@@ -91,7 +93,7 @@ async function onDhcpIpChanged(event: TauriEvent<unknown>) {
     const instanceId = normalizeInstanceIdPayload(event.payload)
     console.log(`Received event '${EVENTS.DHCP_IP_CHANGED}' for instance: ${instanceId}`);
     if (type() === 'android') {
-        await onNetworkInstanceChange(instanceId);
+        await onNetworkInstanceUpdate(instanceId);
     }
 }
 
@@ -99,13 +101,13 @@ async function onProxyCidrsUpdated(event: TauriEvent<unknown>) {
     const instanceId = normalizeInstanceIdPayload(event.payload)
     console.log(`Received event '${EVENTS.PROXY_CIDRS_UPDATED}' for instance: ${instanceId}`);
     if (type() === 'android') {
-        await onNetworkInstanceChange(instanceId);
+        await onNetworkInstanceUpdate(instanceId);
     }
 }
 
 async function onEventLagged(event: TauriEvent<unknown>) {
     if (type() === 'android') {
-        await onNetworkInstanceChange(normalizeInstanceIdPayload(event.payload));
+        await onNetworkInstanceUpdate(normalizeInstanceIdPayload(event.payload));
     }
 }
 

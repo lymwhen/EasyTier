@@ -127,7 +127,7 @@ Cargo 增量编译依赖"指纹"(fingerprint) 稳定。以下措施保证指纹�
 2. **Vite + Cargo 同一 bash 调用** — 单次环境快照
 3. **`GIT_CEILING_DIRECTORIES`** — easytier-core 的 `constants.rs` 使用 `git_version::git_version!()` proc-macro，编译时运行 `git describe` 并生成 `include_bytes!(".git/index")`。Cargo 基于 mtime 追踪该文件 → 任何 git 操作（含 IDE 后台刷新）都会更新 `.git/index` mtime → easytier-core 指纹失效。设置此变量后 proc-macro 找不到 git 仓库 → 走 fallback（`CARGO_PKG_VERSION`）→ 不生成 git 文件追踪 → 指纹稳定
 
-开发构建的版本号因此显示纯 `CARGO_PKG_VERSION`（如 `2.6.4`），无 commit hash。CI 不受影响。
+开发构建的版本号因此显示纯 `CARGO_PKG_VERSION`（如 `2.7.0`），无 commit hash。CI 不受影响。
 
 ---
 
