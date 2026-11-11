@@ -36,7 +36,7 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 |------|------|--------|
 | `MainActivity.kt` | 新增主题 Bridge（`ThemeBridge`，动态切换状态栏颜色）+ 禁用双指缩放 + 移除旧 `PasteBridge`（剪贴板已迁移至 `tauri-plugin-clipboard-manager`） | 必要 — Android 主题/缩放/剪贴板 |
 | `AndroidManifest.xml` | `usesCleartextTraffic="true"` 硬编码 | 必要 — 局域网 HTTP 请求 |
-| `app/build.gradle.kts` | release 构建添加 `manifestPlaceholders["usesCleartextTraffic"]="true"` | 必要 — 配合明文 HTTP |
+| `app/build.gradle.kts` | release 构建添加 `manifestPlaceholders["usesCleartextTraffic"]="true"`；补充 `androidx.lifecycle:lifecycle-process:2.6.2` | 必要 — 配合明文 HTTP + Wry 生命周期桥 |
 | `themes.xml` / `values-night/themes.xml` | 状态栏/导航栏颜色（浅色 `#FCFCFC` / 深色 `#1F1F1F`） | 必要 — UI 适配 |
 | 所有 `mipmap-*` 图标 | 替换为 EasyTier 品牌图标 | 必要 — 品牌 |
 | `ic_launcher_foreground.xml` | 矢量图标改为 EasyTier 三层 V 形 | 必要 — 品牌 |
