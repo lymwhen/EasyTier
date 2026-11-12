@@ -167,6 +167,7 @@ const T: Record<string, [string, string]> = {
   networkIO: ['Network', '网络'],
   recv: ['Recv', '接收'],
   sent: ['Sent', '发送'],
+  protocols: ['Protocols', '协议'],
   loadingStats: ['Loading stats...', '加载中...'],
 }
 function tt(key: string): string {
@@ -279,6 +280,15 @@ interface StatsSnapshot {
 
 const STATS_MAX_POINTS = 24  // 2 min at 5s interval
 
+function numericStatValue(value: unknown): number {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+  return 0
+}
+
 function ensureStatsKeys(ip: string) {
   if (!statsHistory[ip]) statsHistory[ip] = []
   if (!(ip in statsRaw)) statsRaw[ip] = null
@@ -322,7 +332,7 @@ async function fetchStats(ip: string, port: number) {
     const curDisks: { name: string; read: number; write: number }[] = []
     if (data.disks) {
       for (const d of data.disks) {
-        curDisks.push({ name: d.name || '', read: d.read_bytes || 0, write: d.write_bytes || 0 })
+        curDisks.push({ name: d.name || '', read: numericStatValue(d.read_bytes), write: numericStatValue(d.write_bytes) })
       }
     }
 
@@ -330,7 +340,7 @@ async function fetchStats(ip: string, port: number) {
     const curNets: { name: string; recv: number; sent: number }[] = []
     if (data.network) {
       for (const n of data.network) {
-        curNets.push({ name: n.name || '', recv: n.recv_bytes || 0, sent: n.sent_bytes || 0 })
+        curNets.push({ name: n.name || '', recv: numericStatValue(n.recv_bytes), sent: numericStatValue(n.sent_bytes) })
       }
     }
 
@@ -765,6 +775,8 @@ const netIfaceIpv4 = ref<string[]>([])
 const netIfaceIpv6 = ref<string[]>([])
 const netPeers = ref<any[]>([])
 const netServers = ref<any[]>([])
+const netExpanded = reactive<Record<string, boolean>>({})
+const tunnelCompact = reactive<Record<string, boolean>>({})
 const netLoading = ref(false)
 const showNetEditor = ref(false)
 const editingNetToml = ref('')
@@ -781,7 +793,7 @@ const netDiscovering = computed(() => netRunning.value && !netPeers.length && !n
 const connectBounce = ref(false)
 
 async function fetchNetInfo() { if (!netInstId.value) return; try { const resp = await collectNetworkInfo(netInstId.value); const infoMap = resp.info?.map || {}; const info = infoMap[netInstId.value] || Object.values(infoMap)[0]; if (info) { netRunning.value = info.running; const my = info.my_node_info; netSelfIp.value = formatIp(my?.virtual_ipv4); netSelfNat.value = my?.stun_info || null; const ifv4s = my?.ips?.interface_ipv4s || []; const ifv6s = my?.ips?.interface_ipv6s || []; netIfaceIpv4.value = ifv4s.map((a: any) => formatIp(a)).filter(ip => ip && !ip.startsWith('127.') && !ip.startsWith('169.254.')).sort()
-netIfaceIpv6.value = ifv6s.map((a: any) => formatIpv6(a)).filter(ip => ip && ip !== '::1' && !ip.startsWith('fe80:') && !ip.startsWith('fd') && !ip.startsWith('fc')).sort(); const all = (info.peer_route_pairs || []).filter((p: any) => p.route?.cost > 0); netPeers.value = all.filter((p: any) => !isServer(p)); netServers.value = all.filter((p: any) => isServer(p)) } } catch { /* */ } updateTrafficSpeed() }
+netIfaceIpv6.value = ifv6s.map((a: any) => formatIpv6(a)).filter(ip => ip && ip !== '::1' && !ip.startsWith('fe80:') && !ip.startsWith('fd') && !ip.startsWith('fc')).sort(); const all = (info.peer_route_pairs || []).filter((p: any) => p.route?.cost > 0); netPeers.value = all.filter((p: any) => !isServer(p)); netServers.value = all.filter((p: any) => isServer(p)) } } catch { /* */ } updateTrafficSpeed(); scheduleProtocolFit() }
 async function refreshNet() { netLoading.value = true; await fetchNetInfo(); netLoading.value = false }
 
 function doConnectWithBounce() {
@@ -850,12 +862,31 @@ function isRouterHost(hostname: string): boolean {
   return /route|wrt|路由|home|家/i.test(hostname)
 }
 
+function displayHostname(hostname?: string): string {
+  return (hostname || '').replace(/^PublicServer_/, '')
+}
+
+function tunnelSummary(types: unknown[], compact = false): string {
+  const names = [...new Set(types.filter((t): t is string => typeof t === 'string' && !!t).map(t => t.toUpperCase()))]
+  if (!names.length) return ''
+  if (names.length === 1) return names[0]
+
+  const prefixes = names.map(name => name.match(/^([A-Z0-9]+)-/)?.[1] || '')
+  const prefix = prefixes[0] && prefixes.every(value => value === prefixes[0]) ? prefixes[0] : ''
+  if (compact) return prefix ? `${prefix}:${names.length}` : `${names.length} Proto`
+
+  const protocols = prefix ? names.map(name => name.slice(prefix.length + 1)) : names
+  return prefix ? `${prefix}:${protocols.join('/')}` : protocols.join('/')
+}
+
 function formatBytes(b: number): string {
-  if (!b || b < 0) return ''
-  if (b < 1024) return b + 'B'
-  if (b < 1048576) return (b / 1024).toFixed(0) + 'KB'
-  if (b < 1073741824) return (b / 1048576).toFixed(1) + 'MB'
-  return (b / 1073741824).toFixed(1) + 'GB'
+  const bytes = numericStatValue(b)
+  if (!bytes || bytes < 0) return ''
+  if (bytes < 1024) return bytes + 'B'
+  if (bytes < 1048576) return (bytes / 1024).toFixed(0) + 'KB'
+  if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + 'MB'
+  if (bytes < 1099511627776) return (bytes / 1073741824).toFixed(1) + 'GB'
+  return (bytes / 1099511627776).toFixed(1) + 'TB'
 }
 
 function qualityText(lat: string, loss: string): string {
@@ -874,19 +905,28 @@ function qualityCls(lat: string, loss: string): string {
   return 'md-q-good'
 }
 
+function natTypeKey(value: unknown): string {
+  if (typeof value === 'number') return String(value)
+  if (typeof value !== 'string') return ''
+  const trimmed = value.trim()
+  return /^\d+$/.test(trimmed) ? trimmed : trimmed.toLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
 function natLabel(s: any): { text: string; cls: string } {
-  if (!s || s.udp_nat_type === undefined) return { text: '', cls: '' }
-  const t = s.udp_nat_type
-  if (t === 1) return { text: 'Open', cls: 'md-nat-g' }
-  const m: Record<number, { n: number; cls: string }> = {
-    3: { n: 1, cls: 'md-nat-g' },
-    4: { n: 2, cls: 'md-nat-g' },
-    5: { n: 3, cls: 'md-nat-b' },
-    6: { n: 4, cls: 'md-nat-o' },
+  const t = natTypeKey(s?.udp_nat_type ?? s?.udpNatType)
+  const m: Record<string, { text: string; cls: string }> = {
+    '1': { text: 'Open', cls: 'md-nat-g' },
+    'openinternet': { text: 'Open', cls: 'md-nat-g' },
+    '3': { text: 'NAT1', cls: 'md-nat-g' },
+    'fullcone': { text: 'NAT1', cls: 'md-nat-g' },
+    '4': { text: 'NAT2', cls: 'md-nat-g' },
+    'restricted': { text: 'NAT2', cls: 'md-nat-g' },
+    '5': { text: 'NAT3', cls: 'md-nat-b' },
+    'portrestricted': { text: 'NAT3', cls: 'md-nat-b' },
+    '6': { text: 'NAT4', cls: 'md-nat-o' },
+    'symmetric': { text: 'NAT4', cls: 'md-nat-o' },
   }
-  const e = m[t]
-  if (!e) return { text: '', cls: '' }
-  return { text: 'NAT' + e.n, cls: e.cls }
+  return m[t] || { text: '', cls: '' }
 }
 
 function buildDetail(p: any): any {
@@ -894,19 +934,88 @@ function buildDetail(p: any): any {
   if (pr?.conns?.length) {
     let lat = 0, loss = 0, up = 0, down = 0
     for (const c of pr.conns) {
-      if (c.stats?.latency_us) lat += c.stats.latency_us
-      loss += c.loss_rate || 0
-      up += (c.stats?.tx_bytes || 0)
-      down += (c.stats?.rx_bytes || 0)
+      lat += numericStatValue(c.stats?.latency_us)
+      loss += numericStatValue(c.loss_rate)
+      up += numericStatValue(c.stats?.tx_bytes)
+      down += numericStatValue(c.stats?.rx_bytes)
     }
     const n = pr.conns.length
     if (lat > 0) { d.lat = Math.round(lat / 1000 / n) + 'ms'; d.latNum = Math.round(lat / 1000 / n) }
     d.loss = n > 0 ? Math.round(loss / n * 100) + '%' : ''
     if (up > 0) d.up = '↑' + formatBytes(up)
     if (down > 0) d.down = '↓' + formatBytes(down)
-    d.tun = [...new Set(pr.conns.map((c: any) => (c.tunnel?.tunnel_type || '?').toUpperCase()))].join(', ')
+    const tunnelTypes = [...new Set(pr.conns.map((c: any) => c.tunnel?.tunnel_type || '?'))]
+    d.tun = tunnelSummary(tunnelTypes)
+    d.tunCompact = tunnelSummary(tunnelTypes, true)
+    d.tunFull = tunnelTypes.map((t: string) => t.toUpperCase()).join(', ')
   }
   return d
+}
+
+function tunnelDisplay(p: any): string {
+  const d = buildDetail(p)
+  return tunnelCompact[peerKey(p)] && d.tunCompact ? d.tunCompact : d.tun
+}
+
+let protocolFitFrame = 0
+let protocolFitObserver: ResizeObserver | null = null
+const observedProtocolRows = new WeakSet<HTMLElement>()
+
+function scheduleProtocolFit() {
+  if (protocolFitFrame) cancelAnimationFrame(protocolFitFrame)
+  protocolFitFrame = requestAnimationFrame(() => {
+    protocolFitFrame = 0
+    updateProtocolFit()
+  })
+}
+
+function measureChipWidth(element: HTMLElement, text: string): number {
+  const probe = element.cloneNode(false) as HTMLElement
+  probe.textContent = text
+  probe.style.position = 'absolute'
+  probe.style.visibility = 'hidden'
+  probe.style.pointerEvents = 'none'
+  probe.style.width = 'max-content'
+  probe.style.minWidth = '0'
+  probe.style.maxWidth = 'none'
+  probe.style.flex = 'none'
+  probe.style.overflow = 'visible'
+  element.parentElement?.appendChild(probe)
+  const width = probe.getBoundingClientRect().width
+  probe.remove()
+  return width
+}
+
+function updateProtocolFit() {
+  const groups = document.querySelectorAll<HTMLElement>('.md-card-tags[data-peer-key]')
+  for (const group of groups) {
+    const key = group.dataset.peerKey
+    const proto = group.querySelector<HTMLElement>('.md-chip-proto')
+    const row = group.closest<HTMLElement>('.md-row-bot')
+    if (!key || !proto || !row) continue
+
+    if (protocolFitObserver && !observedProtocolRows.has(row)) {
+      observedProtocolRows.add(row)
+      protocolFitObserver.observe(row)
+    }
+
+    const d = buildDetail(netPeers.value.concat(netServers.value).find(p => peerKey(p) === key) || {})
+    const full = d.tun
+    const compact = d.tunCompact
+    if (!full || !compact || full === compact) {
+      delete tunnelCompact[key]
+      continue
+    }
+
+    const children = Array.from(group.children) as HTMLElement[]
+    const gap = parseFloat(getComputedStyle(group).columnGap || getComputedStyle(group).gap || '0') || 0
+    const fixedWidth = children.filter(child => child !== proto).reduce((sum, child) => sum + child.getBoundingClientRect().width, 0)
+    const fullWidth = measureChipWidth(proto, full)
+    const requiredWidth = fixedWidth + fullWidth + gap * Math.max(0, children.length - 1)
+    const maxWidth = parseFloat(getComputedStyle(group).maxWidth)
+    const availableWidth = Number.isFinite(maxWidth) ? maxWidth : group.parentElement?.clientWidth || 0
+    tunnelCompact[key] = requiredWidth > availableWidth + 0.5
+  }
 }
 
 const sortedPeers = computed(() => {
@@ -920,7 +1029,7 @@ const sortedPeers = computed(() => {
   return list
 })
 
-const sortedServers = computed(() => [...netServers.value].sort((a, b) => (a.route?.hostname || '').localeCompare(b.route?.hostname || '')))
+const sortedServers = computed(() => [...netServers.value].sort((a, b) => displayHostname(a.route?.hostname).localeCompare(displayHostname(b.route?.hostname))))
 
 // Traffic speed tracking
 const netTrafficSpeed = reactive({ up: '', down: '', upBytes: 0, downBytes: 0, upTotal: '', downTotal: '', totalBytes: 0 })
@@ -936,8 +1045,8 @@ function updateTrafficSpeed() {
     const pr = p.peer
     if (pr?.conns?.length) {
       for (const c of pr.conns) {
-        up += c.stats?.tx_bytes || 0
-        down += c.stats?.rx_bytes || 0
+        up += numericStatValue(c.stats?.tx_bytes)
+        down += numericStatValue(c.stats?.rx_bytes)
       }
     }
   }
@@ -1370,6 +1479,9 @@ function onDocClick(e: MouseEvent) { const t = e.target as HTMLElement; if (!t.c
 
 onMounted(async () => {
   applyTheme()
+  window.addEventListener('resize', scheduleProtocolFit)
+  protocolFitObserver = new ResizeObserver(scheduleProtocolFit)
+  document.fonts?.ready.then(scheduleProtocolFit)
 
   if (type() === 'android') {
     try { await initMobileVpnService() } catch { /* */ }
@@ -1391,7 +1503,7 @@ onMounted(async () => {
 })
 const cleanupFns: Array<() => void> = []
 
-onUnmounted(() => { cleanupFns.forEach(fn => fn()); wolPeriod?.stop(); netPeriod?.stop(); if (statsTimer) clearInterval(statsTimer); stopLuciProxyFn(); for (const k of Object.keys(phaseTimers)) clearTimeout(phaseTimers[k]); if (snackTimer) clearTimeout(snackTimer); document.removeEventListener('click', onDocClick); document.removeEventListener('click', onLuciDocClick) })
+onUnmounted(() => { cleanupFns.forEach(fn => fn()); wolPeriod?.stop(); netPeriod?.stop(); if (statsTimer) clearInterval(statsTimer); stopLuciProxyFn(); for (const k of Object.keys(phaseTimers)) clearTimeout(phaseTimers[k]); if (snackTimer) clearTimeout(snackTimer); if (protocolFitFrame) cancelAnimationFrame(protocolFitFrame); protocolFitObserver?.disconnect(); window.removeEventListener('resize', scheduleProtocolFit); document.removeEventListener('click', onDocClick); document.removeEventListener('click', onLuciDocClick) })
 </script>
 
 <template>
@@ -1817,7 +1929,7 @@ onUnmounted(() => { cleanupFns.forEach(fn => fn()); wolPeriod?.stop(); netPeriod
           <!-- Network Devices -->
           <div v-if="netPeers.length" class="md-section">
             <div class="md-sec-hdr"><span class="md-sec-title">{{ tt('networkDevices') }}</span><span class="md-badge">{{ netPeers.length }}</span></div>
-            <div v-for="(p, pi) in sortedPeers" :key="peerKey(p)" class="md-card md-card-item md-card-enter" :style="{ animationDelay: (pi * 0.1) + 's' }" @animationend="$event.target.classList.remove('md-card-enter')">
+            <div v-for="(p, pi) in sortedPeers" :key="peerKey(p)" class="md-card md-card-item md-card-enter" :style="{ animationDelay: (pi * 0.1) + 's' }" @click="netExpanded[peerKey(p)] = !netExpanded[peerKey(p)]" @animationend="$event.target.classList.remove('md-card-enter')">
               <div class="md-row md-row-top">
                 <div class="flex-1 min-w-0 flex items-center gap-2">
                   <span class="md-name">{{ formatIp(p.route?.ipv4_addr) }}</span>
@@ -1834,22 +1946,23 @@ onUnmounted(() => { cleanupFns.forEach(fn => fn()); wolPeriod?.stop(); netPeriod
                   </div>
                   <div v-if="buildDetail(p).ver" class="md-sub" style="margin-top:2px;opacity:0.5">v{{ buildDetail(p).ver }}</div>
                 </div>
-                <div class="flex items-center gap-1 flex-shrink-0">
+                <div class="md-card-tags" :data-peer-key="peerKey(p)">
                   <span class="md-rt" :class="costCls(p.route?.cost)">{{ costLabel(p.route?.cost) }}</span>
-                  <span v-if="buildDetail(p).tun" class="md-chip">{{ buildDetail(p).tun }}</span>
+                  <span v-if="buildDetail(p).tun" class="md-chip md-chip-proto">{{ tunnelDisplay(p) }}</span>
                   <span v-if="natLabel(p.route?.stun_info).text" class="md-chip md-chip-nat" :class="natLabel(p.route?.stun_info).cls">{{ natLabel(p.route?.stun_info).text }}</span>
                 </div>
               </div>
+              <div v-if="netExpanded[peerKey(p)] && buildDetail(p).tunFull" class="md-extra">{{ tt('protocols') }}: {{ buildDetail(p).tunFull }}</div>
             </div>
           </div>
 
           <!-- Servers -->
           <div v-if="netServers.length" class="md-section">
             <div class="md-sec-hdr"><span class="md-sec-title">{{ tt('servers') }}</span><span class="md-badge">{{ netServers.length }}</span></div>
-            <div v-for="(p, si) in sortedServers" :key="peerKey(p)" class="md-card md-card-item md-card-enter" :style="{ animationDelay: (si * 0.1) + 's' }" @animationend="$event.target.classList.remove('md-card-enter')">
+            <div v-for="(p, si) in sortedServers" :key="peerKey(p)" class="md-card md-card-item md-card-enter" :style="{ animationDelay: (si * 0.1) + 's' }" @click="netExpanded[peerKey(p)] = !netExpanded[peerKey(p)]" @animationend="$event.target.classList.remove('md-card-enter')">
               <div class="md-row md-row-top">
                 <div class="flex-1 min-w-0 flex items-center gap-2">
-                  <span class="md-name truncate">{{ p.route?.hostname || tt('server') }}</span>
+                  <span class="md-name truncate">{{ displayHostname(p.route?.hostname) || tt('server') }}</span>
                 </div>
                 <span v-if="buildDetail(p).lat" class="md-quality" :class="qualityCls(buildDetail(p).lat, buildDetail(p).loss)">{{ qualityText(buildDetail(p).lat, buildDetail(p).loss) }}</span>
               </div>
@@ -1861,12 +1974,13 @@ onUnmounted(() => { cleanupFns.forEach(fn => fn()); wolPeriod?.stop(); netPeriod
                   </div>
                   <div v-if="buildDetail(p).ver" class="md-sub" style="margin-top:2px;opacity:0.5">v{{ buildDetail(p).ver }}</div>
                 </div>
-                <div class="flex items-center gap-1 flex-shrink-0">
+                <div class="md-card-tags" :data-peer-key="peerKey(p)">
                   <span class="md-rt" :class="costCls(p.route?.cost)">{{ costLabel(p.route?.cost) }}</span>
-                  <span v-if="buildDetail(p).tun" class="md-chip">{{ buildDetail(p).tun }}</span>
+                  <span v-if="buildDetail(p).tun" class="md-chip md-chip-proto">{{ tunnelDisplay(p) }}</span>
                   <span v-if="natLabel(p.route?.stun_info).text" class="md-chip md-chip-nat" :class="natLabel(p.route?.stun_info).cls">{{ natLabel(p.route?.stun_info).text }}</span>
                 </div>
               </div>
+              <div v-if="netExpanded[peerKey(p)] && buildDetail(p).tunFull" class="md-extra">{{ tt('protocols') }}: {{ buildDetail(p).tunFull }}</div>
             </div>
           </div>
 
@@ -2582,7 +2696,10 @@ html[data-theme="dark"] .md-card, html[data-theme="amoled"] .md-card {
 .md-settings-card { margin-bottom:10px; }
 .md-row { display:flex; align-items:center; gap:12px; padding:14px 16px; }
 .md-row-top { padding-bottom:1px; align-items:center; }
-.md-row-bot { padding-top:1px; }
+.md-row-bot { padding-top:1px; align-items:flex-end; }
+.md-card-tags { display:flex; align-items:flex-end; justify-content:flex-end; flex-wrap:nowrap; gap:4px; min-width:0; max-width:72%; }
+.md-card-tags > .md-rt, .md-card-tags > .md-chip-nat { flex-shrink:0; }
+.md-chip-proto { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .md-name { font-size:0.9rem; font-weight:760; }
 .md-sub { font-size:0.76rem; color:var(--muted); margin-top:2px; line-height:1.3; }
 .md-chevron { width:18px; height:18px; opacity:0.45; transition:transform 0.2s; flex-shrink:0; color:var(--muted); }

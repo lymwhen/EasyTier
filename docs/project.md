@@ -583,9 +583,11 @@ Glassmorphism + Material You 混合风格，自定义 CSS 变量体系。
 ```
 
 - 左侧：流量和版本号分为两行，底部对齐（`flex flex-col justify-end`）
-- 右侧：P2P/Relay、TCP/UDP、NAT 标签垂直居中于左侧整体高度（`align-items:center`）
+- 右侧：P2P/Relay、协议摘要、NAT 标签固定在右下角并保持单行；协议过长时压缩，窄屏不覆盖左侧流量/版本信息
 - 版本号格式：`v2.7.0`（小写 v 前缀）
-- TCP/UDP 显示为大写（`.toUpperCase()`）
+- 协议摘要提取公共前缀：空间足够时 `TXT-TCP, TXT-UDP` → `TXT:TCP/UDP`；右侧空间不足时压缩为 `TXT:2` / `TXT:3`。程序通过 DOM/ResizeObserver 动态测量可用宽度，点击卡片可展开查看完整协议名
+- 协议摘要保留 `md-chip` 标签样式，与 P2P/Relay、NAT 标签同排显示
+- 服务器名去掉公共前缀 `PublicServer_`
 
 **总览信息卡片**（组网页）：
 
