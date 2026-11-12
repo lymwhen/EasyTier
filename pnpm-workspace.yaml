@@ -9,7 +9,7 @@ packages:
   - 'tauri-plugin-vpnservice'
 
 # Allow native builds for packages that ship platform-specific binaries;
-# required after pnpm lockfile differs from upstream (--no-frozen-lockfile)
+# keeps native dependency builds reproducible across local and CI installs
 
 overrides:
   happy-dom: 16.8.1

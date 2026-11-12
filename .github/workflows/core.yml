@@ -168,8 +168,8 @@ jobs:
         uses: ./.github/actions/prepare-build
         with:
           target: ${{ matrix.TARGET }}
-          gui: true
-          pnpm: true
+          gui: false
+          pnpm: false
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: Swatinem/rust-cache@v2

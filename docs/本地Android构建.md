@@ -199,49 +199,32 @@ cp "$ROOT/easytier-gui/src-tauri/gen/android/app/build/outputs/apk/arm64/release
 
 ---
 
-## 一、前置：配置文件 `.cargo/config.toml`
+## 一、前置：加载 `/mnt/d/tools/EasyTierLinux/env.sh`
 
-构建依赖以下配置。该文件含本机绝对路径，通过 `skip-worktree` 隔离，不影响远端仓库和 CI：
+不要把本机绝对路径写入仓库中的 `.cargo/config.toml`。这些路径只属于当前 Ubuntu/WSL 构建环境；如果提交到仓库，会污染 GitHub Actions 的 `PROTOC`、`LIBCLANG_PATH` 和 Android 交叉编译工具链，导致所有 Rust、Web、OHOS、Nix 工作流失败。
 
-```toml
-[env]
-CC_aarch64_linux_android = "D:/tools/Android/Sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/windows-x86_64/bin/aarch64-linux-android21-clang.cmd"
-AR_aarch64_linux_android = "D:/tools/Android/Sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-ar.exe"
-BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android = "-resource-dir=D:/tools/Android/Sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/18 --sysroot=D:/tools/Android/Sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/windows-x86_64/sysroot -ID:/tools/Android/Sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include"
-PROTOC = "C:/Users/lymly/protoc/bin/protoc.exe"
-LIBCLANG_PATH = "C:/Users/lymly/llvm-dll"
-GIT_CEILING_DIRECTORIES = "D:/projects/projectsAlpha/EasyTier"
-
-[target.aarch64-linux-android]
-linker = "D:/tools/Android/Sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/windows-x86_64/bin/aarch64-linux-android21-clang.cmd"
-ar = "D:/tools/Android/Sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-ar.exe"
-```
-
-### 各变量作用
-
-| 变量 | 用途 |
-|------|------|
-| `CC_aarch64_linux_android` / `AR_*` / `BINDGEN_EXTRA_CLANG_ARGS_*` | Android NDK 交叉编译（kcp-sys, ring 等 C 依赖） |
-| `PROTOC` | prost-wkt-types build.rs |
-| `LIBCLANG_PATH` | kcp-sys bindgen |
-| `GIT_CEILING_DIRECTORIES` | 阻止 git-version proc-macro 读取 `.git/` 文件（见下文"指纹稳定性"） |
-| `[target.aarch64-linux-android]` | linker、ar 路径 |
-
-### skip-worktree 隔离
+统一通过环境脚本注入：
 
 ```bash
-git update-index --skip-worktree .cargo/config.toml
+source /mnt/d/tools/EasyTierLinux/env.sh
 ```
 
-效果：`git status`/`git diff` 不显示该文件变动，`git pull`/`git merge` 不覆盖本地版本。
+### 环境变量来源
 
-上游更新此文件时（低频，几个月一次）：
-```bash
-git update-index --no-skip-worktree .cargo/config.toml
-git checkout .cargo/config.toml               # 获取上游新版
-# 手动将上述 [env] + [target] 块合并进去
-git update-index --skip-worktree .cargo/config.toml
-```
+| 变量 | env.sh 中的来源 | 用途 |
+|------|-----------------|------|
+| `CC_aarch64_linux_android` / `AR_*` / `BINDGEN_EXTRA_CLANG_ARGS_*` | `/mnt/d/tools/Android/SdkLinux/ndk/...` | Android NDK 交叉编译（kcp-sys、ring 等 C 依赖） |
+| `CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER` | Linux NDK clang | Android Rust 链接 |
+| `PROTOC` | `/mnt/d/tools/EasyTierLinux/protoc/bin/protoc` | prost-wkt-types build.rs |
+| `LIBCLANG_PATH` | Linux NDK musl libclang | kcp-sys bindgen |
+| `GIT_CEILING_DIRECTORIES` | 当前仓库路径 | 阻止 git-version proc-macro 读取 `.git/` 文件，保持 Cargo 指纹稳定 |
+
+### CI 隔离要求
+
+- `.cargo/config.toml` 只能保留上游的跨平台目标配置。
+- 本机工具链路径由 `env.sh`、构建脚本或命令行 `--config` 注入。
+- 不再使用 `git update-index --skip-worktree .cargo/config.toml` 隐藏宿主机配置。
+- 如果需要临时增加 Cargo 配置，优先使用 `cargo --config KEY=VALUE`，避免修改共享配置文件。
 
 ---
 
@@ -296,11 +279,11 @@ Copy-Item -Force "D:\projects\projectsAlpha\EasyTier\easytier-gui\src-tauri\gen\
 
 Tauri 的 `tauri_build::build()` / `generate_context!` 会嵌入 `dist/` 前端产物；手动 Gradle 使用 `-x rustBuildArm64Release` 时还会跳过 Android `assets/frontend/` 同步。Ubuntu 一键脚本已显式同步 assets。前端变更必须重新执行 Cargo 并按完整流程构建，再检查 APK 中的资源哈希，避免 `.so`、生成资源和 Gradle 缓存之间版本不一致。
 
-### 为什么 Vite + Cargo 必须同一 bash 调用
+### 为什么 Vite + Cargo 必须在同一环境脚本下执行
 
-MSYS2 bash 每次调用自动做 Unix/Windows 路径转换。分开调用 → 两次会话的路径转换结果可能不同 → PROTOC/LIBCLANG_PATH 值在 `C:/...` 和 `/c/...` 间波动 → prost-wkt-types、kcp-sys 的 build.rs 通过 `rerun-if-env-changed` 检测到变化 → easytier 依赖链全量重编。
+Cargo build.rs 会通过 `rerun-if-env-changed` 跟踪 `PROTOC`、`LIBCLANG_PATH` 和交叉编译变量。不同终端或不同路径格式会导致依赖链全量重编。
 
-同一 bash 调用内环境快照一致 → Cargo 指纹稳定 → 增量编译。
+同一 bash 调用先加载 `env.sh`，环境快照一致 → Cargo 指纹稳定 → 增量编译。
 
 ### 为什么 Gradle 必须用 PowerShell
 

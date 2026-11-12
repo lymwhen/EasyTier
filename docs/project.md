@@ -49,7 +49,7 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 | 文件 | 变更 | 必要性 |
 |------|------|--------|
 | `easytier-gui/package.json` | `dev`/`build` 保持定制精简命令，移除 frontend-lib 预构建与 `vue-tsc --noEmit`；新增 `@tauri-apps/plugin-opener` | 必要 — 保持定制构建流程/浏览器打开能力 |
-| `pnpm-workspace.yaml` | 保留 lockfile 解冻背景注释 | Fork 适配 — 记录 `--no-frozen-lockfile` 原因 |
+| `pnpm-workspace.yaml` | 保留 native build 白名单和依赖版本约束 | Fork 适配 — 保证本地/CI 安装一致 |
 | `pnpm-lock.yaml` | 依赖锁文件更新（因新增依赖变更） | 必要 — 附带产物 |
 | `Cargo.lock` | Rust 依赖锁更新（新增 reqwest/hyper + kcp-sys rev） | 必要 — 附带产物 |
 | `easytier-gui/src/auto-imports.d.ts` | **[自动生成]** unplugin-auto-import 更新 | 附带 — 新增 IPC 函数自动导入声明 |
@@ -61,7 +61,7 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 | 文件 | 变更 | 必要性 |
 |------|------|--------|
 | `.github/workflows/release-tag.yml` | **[新增]** 全平台构建 + GitHub Release 自动发布（455行） | 必要 — CI 全平台构建 |
-| `.github/actions/prepare-pnpm/action.yml` | 添加 `--no-frozen-lockfile`（因 lockfile 与上游不一致） | Fork 适配 |
+| `.github/actions/prepare-pnpm/action.yml` | 固定使用 `pnpm -r install --frozen-lockfile` | Fork 适配 — CI 可复现安装 |
 | `.github/workflows/docker.yml` | Docker 镜像标签通用化为 `${{ github.repository_owner }}` | Fork 适配 |
 
 ### 文档/资源
@@ -147,9 +147,9 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 <tr><td>文本选择上下文菜单 — 上游 <code>main.ts</code> 中 <code>contextmenu</code> 事件 <code>preventDefault()</code> 拦截了所有长按/右键菜单；修改为仅对非 INPUT/TEXTAREA 元素拦截，输入框保留系统菜单，桌面端普通页面右键仍被阻止</td><td>Android</td></tr>
 <tr><td>APK 四架构构建 — aarch64 / armv7 / i686 / x86_64</td><td>Android</td></tr>
 <tr><td rowspan="4"><b>CI / 构建</b></td><td>Tag 推送自动触发全平台构建 + GitHub Release Draft — <code>release-tag.yml</code> (455 行)，矩阵含 Core CLI ×16、GUI 桌面 ×7、Android APK ×4、Magisk 模块</td><td>全平台（CI 产物）</td></tr>
-<tr><td>CI 兼容适配 — <code>prepare-pnpm</code> 添加 <code>--no-frozen-lockfile</code>、<code>docker.yml</code> 仓库名通用化、<code>vue-tsc</code> 类型检查临时跳过、<code>BuildTask.kt</code> 还原上游跨平台版本</td><td>Linux CI Runner</td></tr>
+<tr><td>CI 兼容适配 — <code>prepare-pnpm</code> 使用 frozen lockfile、GUI/Mobile 仅构建 <code>easytier-gui...</code> 依赖闭包、Android cmdline-tools 使用稳定构建号、<code>docker.yml</code> 仓库名通用化</td><td>Linux CI Runner</td></tr>
 <tr><td>Rust 代码 CI 合规 — <code>lib.rs</code> 通过 <code>cargo fmt</code> 格式检查 + <code>cargo clippy -D warnings</code>，确保上游 OHOS / Test workflow 通过</td><td>Linux CI Runner</td></tr>
-<tr><td>Cargo 增量编译缓存修复 — CC/AR/BINDGEN/PROTOC/LIBCLANG_PATH/GIT_CEILING_DIRECTORIES 固化到 <code>.cargo/config.toml [env]</code>，构建加速 6 倍（~10min → ~1m45s）</td><td>本地开发（Windows + MSYS2）</td></tr>
+<tr><td>Cargo 环境隔离 — CC/AR/BINDGEN/PROTOC/LIBCLANG_PATH/GIT_CEILING_DIRECTORIES 由 <code>/mnt/d/tools/EasyTierLinux/env.sh</code> 注入，不写入 <code>.cargo/config.toml</code>，避免宿主机路径污染 CI</td><td>本地开发（Ubuntu / WSL）</td></tr>
 <tr><td rowspan="2"><b>跨平台 GUI</b></td><td>桌面安装包构建 — Linux（deb/rpm/AppImage，x86_64 + aarch64）、macOS（dmg，x86_64 + aarch64）、Windows（nsis installer，x86_64 + i686 + aarch64）</td><td>Windows / macOS / Linux</td></tr>
 <tr><td>Desktop GUI 基于 Tauri v2 — 内嵌 easytier-core，Core 模式直连（无需 easytier-web），TOML 配置文件驱动</td><td>Windows / macOS / Linux</td></tr>
 </table>

@@ -120,7 +120,7 @@ jobs:
           target: ${{ matrix.TARGET }}
           gui: true
           pnpm: true
-          pnpm-build-filter: ''
+          pnpm-build-filter: easytier-gui...
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: Swatinem/rust-cache@v2
