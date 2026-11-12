@@ -4,8 +4,7 @@ import { resolveTheme, applyTheme } from '~/composables/theme'
 import pkg from '~/../package.json'
 
 applyTheme(resolveTheme(
-  localStorage.getItem('themeMode') || 'auto',
-  localStorage.getItem('amoledMode') === '1'
+  localStorage.getItem('themeMode') || 'auto'
 ))
 
 onBeforeMount(async () => {

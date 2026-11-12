@@ -1,9 +1,9 @@
-export type Theme = 'light' | 'dark' | 'amoled'
+export type Theme = 'light' | 'dark'
 
-export function resolveTheme(themeMode: string, amoledMode: boolean): Theme {
+export function resolveTheme(themeMode: string): Theme {
   const sysDark = window.matchMedia('(prefers-color-scheme: dark)').matches
   const resolvedDark = themeMode === 'dark' || (themeMode === 'auto' && sysDark)
-  return (amoledMode && resolvedDark) ? 'amoled' : resolvedDark ? 'dark' : 'light'
+  return resolvedDark ? 'dark' : 'light'
 }
 
 export function applyTheme(theme: Theme) {
@@ -12,10 +12,6 @@ export function applyTheme(theme: Theme) {
 
   const w = window as any
   if (w._easytier_theme) {
-    if (theme === 'amoled' && w._easytier_theme.setAmoledMode) {
-      w._easytier_theme.setAmoledMode(true)
-    } else {
-      w._easytier_theme.setStatusBarStyle(theme !== 'light')
-    }
+    w._easytier_theme.setStatusBarStyle(theme !== 'light')
   }
 }

@@ -31,7 +31,7 @@ All project documentation is in `docs/` directory:
 | `easytier-gui/src-tauri/Cargo.toml` | Rust deps (reqwest with `socks` feature) |
 | `easytier-gui/src-tauri/gen/android/.../MainActivity.kt` | Android activity (theme bridge for status bar) |
 | `easytier-gui/src/composables/mobile_vpn.ts` | VPN service setup (routes, `disallowedApplications`) |
-| `easytier-gui/src/composables/theme.ts` | Theme state machine (resolveTheme, applyTheme, AMOLED support) |
+| `easytier-gui/src/composables/theme.ts` | Theme state machine (resolveTheme, applyTheme, pure-black dark support) |
 
 ## Build
 
