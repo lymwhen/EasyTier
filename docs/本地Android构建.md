@@ -48,10 +48,11 @@ source /mnt/d/tools/EasyTierLinux/env.sh
 
 1. 构建 `tauri-plugin-vpnservice` 和 `easytier-web/frontend-lib`
 2. 构建 `easytier-gui` 前端
-3. 交叉编译 `libapp_lib.so`
-4. 校验 Android Kotlin JNI 桥和 Native 导出
-5. 执行 Gradle `assembleArm64Release`
-6. 将带时间戳的 APK 复制到 `/mnt/f/tmp`
+3. 将 `easytier-gui/dist/` 同步到 Android `assets/frontend/`
+4. 交叉编译 `libapp_lib.so`
+5. 校验 Android Kotlin JNI 桥和 Native 导出
+6. 执行 Gradle `assembleArm64Release`
+7. 将带时间戳的 APK 复制到 `/mnt/f/tmp`
 
 可选环境变量：
 
@@ -62,7 +63,7 @@ INSTALL_DEPS=1 /mnt/d/tools/EasyTierLinux/build-android-arm64.sh
 # 前端依赖没有变化，跳过 plugin/frontend-lib 构建
 SKIP_FRONTEND_DEPS=1 /mnt/d/tools/EasyTierLinux/build-android-arm64.sh
 
-# Native 没有变化，复用现有 libapp_lib.so
+# 仅重新打包，且 Rust 与前端产物均未变化
 SKIP_RUST=1 /mnt/d/tools/EasyTierLinux/build-android-arm64.sh
 
 # 清理 Android 构建缓存后再构建
@@ -145,6 +146,12 @@ Android JNI bridge matches libapp_lib.so
 ROOT=/mnt/d/projects/projectsalpha/EasyTier
 cp "$ROOT/target/aarch64-linux-android/release/libapp_lib.so" \
   "$ROOT/easytier-gui/src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a/libapp_lib.so"
+
+# Gradle 使用 -x rustBuildArm64Release 时不会同步 Tauri 前端资源
+ASSETS="$ROOT/easytier-gui/src-tauri/gen/android/app/src/main/assets/frontend"
+rm -rf "$ASSETS"
+mkdir -p "$ASSETS"
+cp -a "$ROOT/easytier-gui/dist/." "$ASSETS/"
 
 cd "$ROOT/easytier-gui/src-tauri/gen/android"
 ./gradlew assembleArm64Release --no-daemon -x rustBuildArm64Release
@@ -287,7 +294,7 @@ Copy-Item -Force "D:\projects\projectsAlpha\EasyTier\easytier-gui\src-tauri\gen\
 
 ### 为什么三步缺一不可
 
-Tauri 的 `tauri_build::build()` 在 Cargo 编译阶段将 `dist/` 以 BROTLI 压缩嵌入 `.so`。**即使只改前端，也必须重新编译 .so**，否则 APK 加载旧前端。
+Tauri 的 `tauri_build::build()` / `generate_context!` 会嵌入 `dist/` 前端产物；手动 Gradle 使用 `-x rustBuildArm64Release` 时还会跳过 Android `assets/frontend/` 同步。Ubuntu 一键脚本已显式同步 assets。前端变更必须重新执行 Cargo 并按完整流程构建，再检查 APK 中的资源哈希，避免 `.so`、生成资源和 Gradle 缓存之间版本不一致。
 
 ### 为什么 Vite + Cargo 必须同一 bash 调用
 
@@ -340,7 +347,7 @@ Cargo 增量编译依赖"指纹"(fingerprint) 稳定。以下措施保证指纹�
 | Gradle `Could not move temporary workspace` | bash + NTFS 文件锁冲突 | 用 PowerShell，设 `$env:GRADLE_USER_HOME` |
 | `link.exe` 找不到 | 无 VS Build Tools | 改用 MinGW-w64 |
 | `libclang.dll` / `protoc` 找不到 | kcp-sys / prost-wkt-types 构建需要 | 安装 LLVM / protoc 到 `$HOME` |
-| APK 不更新前端 | Tauri 将 `dist/` 嵌入 `.so` | 前端变更也必须跑 Cargo |
+| APK 不更新前端 | 前端嵌入 `.so`，且 Gradle 跳过 `rustBuild` 时不会同步 `assets/frontend/` | 前端变更必须跑 Cargo + Vite，同步资源并检查 APK 资源哈希 |
 | `usesCleartextTraffic` 不生效 | Release 默认 false | Manifest 硬编码 + manifestPlaceholders |
 | Windows 符号链接失败 | 非管理员无权限 | BuildTask.kt 改用文件复制 |
 | Gradle 缓存损坏 | JDK 切换或磁盘问题 | 删 `~/.gradle/caches` |
