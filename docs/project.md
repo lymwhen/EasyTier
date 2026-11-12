@@ -147,7 +147,7 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 <tr><td>文本选择上下文菜单 — 上游 <code>main.ts</code> 中 <code>contextmenu</code> 事件 <code>preventDefault()</code> 拦截了所有长按/右键菜单；修改为仅对非 INPUT/TEXTAREA 元素拦截，输入框保留系统菜单，桌面端普通页面右键仍被阻止</td><td>Android</td></tr>
 <tr><td>APK 四架构构建 — aarch64 / armv7 / i686 / x86_64</td><td>Android</td></tr>
 <tr><td rowspan="4"><b>CI / 构建</b></td><td>Tag 推送自动触发全平台构建 + GitHub Release Draft — <code>release-tag.yml</code> (455 行)，矩阵含 Core CLI ×16、GUI 桌面 ×7、Android APK ×4、Magisk 模块</td><td>全平台（CI 产物）</td></tr>
-<tr><td>CI 兼容适配 — <code>prepare-pnpm</code> 使用 frozen lockfile、GUI/Mobile 仅构建 <code>easytier-gui...</code> 依赖闭包、Android cmdline-tools 使用稳定构建号、<code>docker.yml</code> 仓库名通用化</td><td>Linux CI Runner</td></tr>
+<tr><td>CI 兼容适配 — <code>prepare-pnpm</code> 使用 frozen lockfile、GUI/Mobile 仅构建 <code>easytier-gui...</code> 依赖闭包、Android cmdline-tools 使用稳定构建号、macOS 签名凭据缺失时回退未签名构建、<code>docker.yml</code> 仓库名通用化</td><td>Linux CI Runner</td></tr>
 <tr><td>Rust 代码 CI 合规 — <code>lib.rs</code> 通过 <code>cargo fmt</code> 格式检查 + <code>cargo clippy -D warnings</code>，确保上游 OHOS / Test workflow 通过</td><td>Linux CI Runner</td></tr>
 <tr><td>Cargo 环境隔离 — CC/AR/BINDGEN/PROTOC/LIBCLANG_PATH/GIT_CEILING_DIRECTORIES 由 <code>/mnt/d/tools/EasyTierLinux/env.sh</code> 注入，不写入 <code>.cargo/config.toml</code>，避免宿主机路径污染 CI</td><td>本地开发（Ubuntu / WSL）</td></tr>
 <tr><td rowspan="2"><b>跨平台 GUI</b></td><td>桌面安装包构建 — Linux（deb/rpm/AppImage，x86_64 + aarch64）、macOS（dmg，x86_64 + aarch64）、Windows（nsis installer，x86_64 + i686 + aarch64）</td><td>Windows / macOS / Linux</td></tr>
