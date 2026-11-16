@@ -9,6 +9,7 @@ import pkg from '~/../package.json'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import Textarea from 'primevue/textarea'
+import { listen } from '@tauri-apps/api/event'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager'
 import { resolveTheme, applyTheme as setTheme } from '~/composables/theme'
@@ -18,14 +19,17 @@ const router = useRouter()
 const { locale } = useI18n()
 
 // --- snackbar ---
+type SnackType = 'info' | 'progress' | 'success' | 'error'
 const snackMsg = ref('')
 const snackShow = ref(false)
+const snackType = ref<SnackType>('info')
 let snackTimer: ReturnType<typeof setTimeout> | null = null
-function showSnack(msg: string) {
+function showSnack(msg: string, type: SnackType = 'info', duration = 2500) {
   snackMsg.value = msg
+  snackType.value = type
   snackShow.value = true
   if (snackTimer) clearTimeout(snackTimer)
-  snackTimer = setTimeout(() => { snackShow.value = false }, 2500)
+  snackTimer = setTimeout(() => { snackShow.value = false }, duration)
 }
 
 // --- i18n ---
@@ -167,11 +171,29 @@ const T: Record<string, [string, string]> = {
   sent: ['Sent', '发送'],
   protocols: ['Protocols', '协议'],
   loadingStats: ['Loading stats...', '加载中...'],
+  clipboardEmpty: ['Clipboard is empty', '剪贴板为空'],
+  routerConnectFailed: ['Cannot connect to router {ip}', '无法连接到路由器 {ip}'],
+  transferUpload: ['Upload', '上传'],
+  transferDownload: ['Download', '下载'],
+  transferUnknownFile: ['File', '文件'],
+  transferStart: ['{action} started · {name}', '{action}开始 · {name}'],
+  transferProgress: ['{action} · {name} · {value}', '{action} · {name} · {value}'],
+  transferSuccess: ['{action} completed · {name} · {summary}', '{action}完成 · {name} · {summary}'],
+  transferFailure: ['{action} failed · {name} · {error}', '{action}失败 · {name} · {error}'],
+  transferSaved: ['Saved · {name}', '已保存 · {name}'],
+  transferExternalStarted: ['System download started · {name}', '系统下载已开始 · {name}'],
+  transferTimeout: ['Timed out', '操作超时'],
+  transferHttpError: ['HTTP {code}', 'HTTP {code}'],
+  transferUnavailable: ['File is no longer available', '文件已不可用'],
 }
 function tt(key: string): string {
   const entry = T[key]
   if (!entry) return key
   return locale.value === 'cn' ? entry[1] : entry[0]
+}
+
+function ttx(key: string, vars: Record<string, string | number>): string {
+  return tt(key).replace(/\{(\w+)\}/g, (_, name: string) => String(vars[name] ?? `{${name}}`))
 }
 
 // --- Tabs ---
@@ -247,13 +269,17 @@ const wolFirstCheck = ref(true)
 const wolDebug = ref('')
 const phaseTimers: Record<string, ReturnType<typeof setTimeout>> = {}
 const checkingWol = ref(false)
-const expandedDeviceIdx = ref<number | null>(null)
+const expandedDeviceId = ref<string | null>(null)
 const statsHistory = reactive<Record<string, StatsSnapshot[]>>({})
 const statsRaw = reactive<Record<string, StatsRaw | null>>({})
 const statsError = reactive<Record<string, string>>({})
 const statsLoading = reactive<Record<string, boolean>>({})
 let statsTimer: ReturnType<typeof setInterval> | null = null
 let wolPeriod: Utils.PeriodicTask | null = null
+
+function wolDeviceKey(w: Pick<WolDevice, 'mac' | 'ip' | 'agent_port'>) {
+  return w.mac?.trim() || `${w.ip}:${w.agent_port || 32249}`
+}
 
 // --- Stats types ---
 interface StatsRaw {
@@ -294,13 +320,13 @@ function ensureStatsKeys(ip: string) {
   if (!(ip in statsError)) statsError[ip] = ''
 }
 
-function toggleDeviceExpand(idx: number) {
-  if (expandedDeviceIdx.value === idx) {
-    expandedDeviceIdx.value = null
+function toggleDeviceExpand(w: WolDevice) {
+  const deviceId = wolDeviceKey(w)
+  if (expandedDeviceId.value === deviceId) {
+    expandedDeviceId.value = null
   } else {
-    expandedDeviceIdx.value = idx
-    const w = sortedWol.value[idx]
-    if (w?.ip) {
+    expandedDeviceId.value = deviceId
+    if (w.ip) {
       ensureStatsKeys(w.ip)
       if (statsHistory[w.ip].length === 0) fetchStats(w.ip, w.agent_port || 32249)
     }
@@ -399,13 +425,13 @@ const statsInfo = reactive<Record<string, any>>({})
 
 function manageStatsPoll() {
   if (statsTimer) { clearInterval(statsTimer); statsTimer = null }
-  if (activeTab.value === 'wol' && expandedDeviceIdx.value !== null) {
-    const ip = sortedWol.value[expandedDeviceIdx.value]?.ip
-    if (ip) {
+  if (activeTab.value === 'wol' && expandedDeviceId.value !== null) {
+    const dev = sortedWol.value.find(w => wolDeviceKey(w) === expandedDeviceId.value)
+    if (dev?.ip) {
       statsTimer = setInterval(() => {
-        if (activeTab.value === 'wol' && expandedDeviceIdx.value !== null) {
-          const dev = sortedWol.value[expandedDeviceIdx.value!]
-          if (dev?.ip) fetchStats(dev.ip, dev.agent_port || 32249)
+        if (activeTab.value === 'wol' && expandedDeviceId.value !== null) {
+          const current = sortedWol.value.find(w => wolDeviceKey(w) === expandedDeviceId.value)
+          if (current?.ip) fetchStats(current.ip, current.agent_port || 32249)
         } else {
           if (statsTimer) { clearInterval(statsTimer); statsTimer = null }
         }
@@ -707,7 +733,7 @@ async function readClipboard(): Promise<string> {
 
 async function importFromClipboard(refName: 'wol' | 'net' | 'luci') {
   const text = await readClipboard()
-  if (!text) { showSnack('Clipboard is empty'); return }
+  if (!text) { showSnack(tt('clipboardEmpty')); return }
   if (refName === 'wol') wolToml.value = text
   else if (refName === 'net') editingNetToml.value = text
   else luciToml.value = text
@@ -1092,6 +1118,7 @@ const luciIdx = ref(-1)
 const proxyUrl = ref('')
 const luciIframeSrc = ref('')
 const luciIframeKey = ref(0)
+const luciIframeNonce = ref(0)
 const luciLoading = ref(false)
 const luciCurrentPath = ref('/cgi-bin/luci/admin/')
 const showLuciEditor = ref(false)
@@ -1114,20 +1141,36 @@ function loadLuciConfig() {
 }
 const currentLuciRouter = computed(() => luciIdx.value >= 0 ? luciRouters.value[luciIdx.value] : null)
 
+function luciRouterId(r: LuciRouter) {
+  const input = `${r.ip}|${r.username}|${r.password}`
+  let hash = 2166136261
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+  return `router-${(hash >>> 0).toString(16)}`
+}
+
+function buildLuciIframeUrl(path: string, routerId: string) {
+  const separator = path.includes("?") ? "&" : "?"
+  return `${proxyUrl.value}${path}${separator}__et_router=${encodeURIComponent(routerId)}&__et_nonce=${++luciIframeNonce.value}`
+}
+
 async function startLuciProxy(r: LuciRouter) {
   luciLoading.value = true
+  luciIframeSrc.value = ''
   try {
-    await luciProxyStop()
     const socks5 = getSocks5Proxy()
-    const url = await luciProxyStart(r.ip, r.username, r.password, socks5 || null)
+    const routerId = luciRouterId(r)
+    const url = await luciProxyStart(routerId, r.ip, r.username, r.password, socks5 || null)
     proxyUrl.value = url
-    luciIframeSrc.value = url + '/cgi-bin/luci/admin/'
+    luciIframeSrc.value = buildLuciIframeUrl('/cgi-bin/luci/admin/', routerId)
     luciCurrentPath.value = '/cgi-bin/luci/admin/'
     lastLuciPathType.value = socks5 ? 'tunnel' : 'lan'
     luciIframeKey.value++
     localStorage.setItem('lastLuciRouterIp', r.ip)
   } catch (e: any) {
-    showSnack(showDebug.value ? String(e) : (locale.value === 'cn' ? `无法连接到路由器 ${r.ip}` : `Cannot connect to router ${r.ip}`))
+    showSnack(showDebug.value ? String(e) : ttx('routerConnectFailed', { ip: r.ip }), 'error', 3500)
     proxyUrl.value = ''
   }
   luciLoading.value = false
@@ -1145,17 +1188,17 @@ async function refreshLuciIframe() {
   luciIframeSrc.value = ''  // hide iframe immediately, show spinner during restart
   try {
     const socks5 = getSocks5Proxy()
-    const prevPath = await luciGetLastPath().catch(() => '/cgi-bin/luci/admin/')
-    await luciProxyStop()
-    const url = await luciProxyStart(r.ip, r.username, r.password, socks5 || null)
+    const routerId = luciRouterId(r)
+    const prevPath = await luciGetLastPath(routerId).catch(() => '/cgi-bin/luci/admin/')
+    const url = await luciProxyStart(routerId, r.ip, r.username, r.password, socks5 || null)
     proxyUrl.value = url
     luciCurrentPath.value = prevPath
-    luciIframeSrc.value = url + prevPath
+    luciIframeSrc.value = buildLuciIframeUrl(prevPath, routerId)
     lastLuciPathType.value = socks5 ? 'tunnel' : 'lan'
     luciIframeKey.value++
     localStorage.setItem('lastLuciRouterIp', r.ip)
   } catch (e: any) {
-    showSnack(showDebug.value ? String(e) : (locale.value === 'cn' ? `无法连接到路由器 ${r.ip}` : `Cannot connect to router ${r.ip}`))
+    showSnack(showDebug.value ? String(e) : ttx('routerConnectFailed', { ip: r.ip }), 'error', 3500)
     proxyUrl.value = ''
   }
   luciLoading.value = false
@@ -1174,7 +1217,8 @@ password = "${r.password}"
   luciToml.value = lines.join('\n')
   saveLuciConfigSilent()
   if (wasCurrent) {
-    stopLuciProxyFn()
+    proxyUrl.value = ''
+    luciIframeSrc.value = ''
     if (luciRouters.value.length > 0) {
       luciIdx.value = Math.min(idx, luciRouters.value.length - 1)
       startLuciProxy(luciRouters.value[luciIdx.value])
@@ -1414,7 +1458,7 @@ function openImportDlg() {
 
 async function doImportFromClipboard() {
   const text = await readClipboard()
-  if (!text) { showSnack('Clipboard is empty'); return }
+  if (!text) { showSnack(tt('clipboardEmpty')); return }
   importText.value = text
 }
 
@@ -1473,6 +1517,112 @@ function netName(): string { const n = currentNet.value; return n ? (n.config.in
 
 function onDocClick(e: MouseEvent) { const t = e.target as HTMLElement; if (!t.closest('.md-switch-menu') && !t.closest('.md-switch-btn')) showSwitchMenu.value = false }
 
+interface RouterTransferPayload {
+  event: 'started' | 'progress' | 'finished' | 'failed'
+  direction: 'upload' | 'download'
+  path: string
+  filename?: string | null
+  error?: string | null
+  transferred?: number | null
+  content_length?: number | null
+  duration_ms?: number | null
+}
+
+interface NativeTransferPayload {
+  status: 'saved' | 'external-started' | 'failed'
+  filename: string
+  error?: string | null
+}
+
+const transferStates = new Map<string, { startedAt: number, lastShownAt: number, lastValue: number }>()
+
+function formatTransferBytes(value?: number | null): string {
+  if (!value || value <= 0) return ''
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let size = value
+  let unit = 0
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024
+    unit++
+  }
+  return `${size >= 10 || unit === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unit]}`
+}
+
+function formatTransferDuration(ms?: number | null): string {
+  if (!ms || ms < 1000) return locale.value === 'cn' ? '不到 1 秒' : '< 1s'
+  const seconds = Math.round(ms / 1000)
+  if (seconds < 60) return locale.value === 'cn' ? `${seconds} 秒` : `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  const rest = seconds % 60
+  return locale.value === 'cn' ? `${minutes} 分 ${rest} 秒` : `${minutes}m ${rest}s`
+}
+
+function transferName(payload: RouterTransferPayload | NativeTransferPayload): string {
+  return payload.filename || ('path' in payload ? payload.path.split('/').pop() || payload.path : tt('transferUnknownFile'))
+}
+
+function transferAction(direction: 'upload' | 'download'): string {
+  return tt(direction === 'upload' ? 'transferUpload' : 'transferDownload')
+}
+
+function transferError(error?: string | null): string {
+  const raw = (error || '').trim()
+  if (!raw) return tt('transferTimeout')
+  if (/timed out|timeout/i.test(raw)) return tt('transferTimeout')
+  if (/no longer available/i.test(raw)) return tt('transferUnavailable')
+  const http = raw.match(/HTTP\s+(\d+)/i)
+  if (http) return `${ttx('transferHttpError', { code: http[1] })} · ${raw.replace(/^.*?:\s*/, '')}`
+  return raw
+}
+
+function handleRouterTransfer(payload: RouterTransferPayload) {
+  const key = `${payload.direction}:${payload.path}`
+  const name = transferName(payload)
+  const action = transferAction(payload.direction)
+  const now = Date.now()
+
+  if (payload.event === 'started') {
+    const state = transferStates.get(key)
+    if (state && now - state.startedAt < 1000) return
+    transferStates.set(key, { startedAt: now, lastShownAt: now, lastValue: 0 })
+    const size = formatTransferBytes(payload.content_length)
+    showSnack(ttx('transferStart', { action, name: size ? `${name} · ${size}` : name }), 'progress', 3500)
+    return
+  }
+
+  if (payload.event === 'progress') {
+    const state = transferStates.get(key) || { startedAt: now, lastShownAt: 0, lastValue: 0 }
+    const value = payload.content_length
+      ? Math.min(100, Math.round((payload.transferred || 0) * 100 / payload.content_length))
+      : formatTransferBytes(payload.transferred)
+    const numericValue = typeof value === 'number' ? value : state.lastValue
+    if (now - state.lastShownAt < 2000 && numericValue - state.lastValue < 20) return
+    transferStates.set(key, { ...state, lastShownAt: now, lastValue: numericValue })
+    showSnack(ttx('transferProgress', { action, name, value: typeof value === 'number' ? `${value}%` : value }), 'progress', 3000)
+    return
+  }
+
+  transferStates.delete(key)
+  if (payload.event === 'finished') {
+    const summary = [formatTransferBytes(payload.content_length || payload.transferred), formatTransferDuration(payload.duration_ms)].filter(Boolean).join(' · ')
+    showSnack(ttx('transferSuccess', { action, name, summary: summary || 'OK' }), 'success', 4000)
+  } else {
+    showSnack(ttx('transferFailure', { action, name, error: transferError(payload.error) }), 'error', 5000)
+  }
+}
+
+function handleNativeTransfer(payload: NativeTransferPayload) {
+  const name = payload.filename || tt('transferUnknownFile')
+  if (payload.status === 'saved') showSnack(ttx('transferSaved', { name }), 'success', 3500)
+  else if (payload.status === 'external-started') showSnack(ttx('transferExternalStarted', { name }), 'progress', 3500)
+  else showSnack(ttx('transferFailure', { action: tt('transferDownload'), name, error: transferError(payload.error) }), 'error', 5000)
+}
+
+function onNativeTransferEvent(event: Event) {
+  const detail = (event as CustomEvent<NativeTransferPayload>).detail
+  if (detail?.status && detail.filename) handleNativeTransfer(detail)
+}
+
 onMounted(async () => {
   applyTheme()
   window.addEventListener('resize', scheduleProtocolFit)
@@ -1483,6 +1633,8 @@ onMounted(async () => {
     try { await initMobileVpnService() } catch { /* */ }
   }
   cleanupFns.push(await listenGlobalEvents())
+  cleanupFns.push(await listen<RouterTransferPayload>('router-transfer', ({ payload }) => handleRouterTransfer(payload)))
+  window.addEventListener('easytier-native-transfer', onNativeTransferEvent)
   await initRpcConnection(true)
 
   loadWolConfig(); checkAllWolStatus(); wolPeriod = new Utils.PeriodicTask(checkAllWolStatus, 30000); wolPeriod.start()
@@ -1499,7 +1651,7 @@ onMounted(async () => {
 })
 const cleanupFns: Array<() => void> = []
 
-onUnmounted(() => { cleanupFns.forEach(fn => fn()); wolPeriod?.stop(); netPeriod?.stop(); if (statsTimer) clearInterval(statsTimer); stopLuciProxyFn(); for (const k of Object.keys(phaseTimers)) clearTimeout(phaseTimers[k]); if (snackTimer) clearTimeout(snackTimer); if (protocolFitFrame) cancelAnimationFrame(protocolFitFrame); protocolFitObserver?.disconnect(); window.removeEventListener('resize', scheduleProtocolFit); document.removeEventListener('click', onDocClick); document.removeEventListener('click', onLuciDocClick) })
+onUnmounted(() => { window.removeEventListener('easytier-native-transfer', onNativeTransferEvent); cleanupFns.forEach(fn => fn()); wolPeriod?.stop(); netPeriod?.stop(); if (statsTimer) clearInterval(statsTimer); stopLuciProxyFn(); for (const k of Object.keys(phaseTimers)) clearTimeout(phaseTimers[k]); if (snackTimer) clearTimeout(snackTimer); if (protocolFitFrame) cancelAnimationFrame(protocolFitFrame); protocolFitObserver?.disconnect(); window.removeEventListener('resize', scheduleProtocolFit); document.removeEventListener('click', onDocClick); document.removeEventListener('click', onLuciDocClick) })
 </script>
 
 <template>
@@ -1553,9 +1705,9 @@ onUnmounted(() => { cleanupFns.forEach(fn => fn()); wolPeriod?.stop(); netPeriod
             <div class="text-sm text-center px-4 md-text-muted">{{ tt('tapToAdd') }}</div>
           </div>
         </div>
-        <div v-for="(w, i) in sortedWol" :key="w.ip" class="md-device-group" :class="{ 'md-device-group-open': expandedDeviceIdx === i && w.status.online && routerOnline === true }">
-        <div class="md-card" :class="{ 'md-card-dim': routerOnline === false }">
-          <div class="md-row" @click="w.status.online ? toggleDeviceExpand(i) : null">
+        <div v-for="(w, i) in sortedWol" :key="wolDeviceKey(w)" class="md-device-group" :class="{ 'md-device-group-open': expandedDeviceId === wolDeviceKey(w) && w.status.online && routerOnline === true }">
+        <div class="md-card md-device-parent" :class="{ 'md-card-dim': routerOnline === false }">
+          <div class="md-row" @click="w.status.online ? toggleDeviceExpand(w) : null">
             <span class="md-dot" :class="{
               'md-dot-on': w.status.online && w.status.phase==='idle' && routerOnline === true,
               'md-dot-off': (!w.status.online || routerOnline === false) && w.status.phase==='idle',
@@ -1570,7 +1722,7 @@ onUnmounted(() => { cleanupFns.forEach(fn => fn()); wolPeriod?.stop(); netPeriod
                 <template v-else>{{ tt('noIpConfigured') }}</template>
               </div>
             </div>
-            <svg v-if="w.status.online" class="md-chevron" :class="{ 'md-chevron-open': expandedDeviceIdx === i }" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+            <svg v-if="w.status.online" class="md-chevron" :class="{ 'md-chevron-open': expandedDeviceId === wolDeviceKey(w) }" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
             <button v-if="w.ip && w.status.phase==='idle' && routerOnline === true && !w.status.online" class="md-wake-btn" @click.stop="doWake(w)">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
               {{ tt('wake') }}
@@ -1585,8 +1737,9 @@ onUnmounted(() => { cleanupFns.forEach(fn => fn()); wolPeriod?.stop(); netPeriod
             </button>
           </div>
         </div>
-          <!-- Expanded Stats — sibling cards (no indent), linked via accent bar -->
-          <template v-if="expandedDeviceIdx === i && w.status.online && routerOnline === true">
+          <!-- Expanded Stats — child workspace connected to the parent card -->
+          <template v-if="expandedDeviceId === wolDeviceKey(w) && w.status.online && routerOnline === true">
+            <div class="md-device-children">
             <!-- Loading -->
             <div v-if="statsHistory[w.ip].length === 0" class="md-card md-stats-card md-stats-loading-card md-animated" style="--i:0" @animationend="$event.target.classList.remove('md-animated')">
               <div class="md-stats-loading">
@@ -1770,12 +1923,13 @@ onUnmounted(() => { cleanupFns.forEach(fn => fn()); wolPeriod?.stop(); netPeriod
                 <div class="md-stats-info">{{ w.mac }} &middot; {{ w.router_ip }} &middot; {{ w.interface || 'br-lan' }} &middot; {{ w.agent_port || 32249 }}</div>
               </div>
 
-              <!-- Collapse button -->
-              <div class="md-stats-collapse" @click="toggleDeviceExpand(i)">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 15l-6-6-6 6"/></svg>
-                <span>{{ locale === 'cn' ? '收起' : 'Collapse' }}</span>
-              </div>
             </template>
+            </div>
+            <!-- Collapse button -->
+            <div class="md-stats-collapse" @click="toggleDeviceExpand(w)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 15l-6-6-6 6"/></svg>
+              <span>{{ locale === 'cn' ? '收起' : 'Collapse' }}</span>
+            </div>
           </template>
         </div>
         </div>
@@ -2372,7 +2526,10 @@ onUnmounted(() => { cleanupFns.forEach(fn => fn()); wolPeriod?.stop(); netPeriod
     </Dialog>
 
     <!-- Snackbar -->
-    <div v-if="snackShow" class="md-snackbar">{{ snackMsg }}</div>
+    <div v-if="snackShow" class="md-snackbar" :class="`md-snack-${snackType}`">
+      <span class="md-snack-indicator" aria-hidden="true"></span>
+      <span class="md-snack-message">{{ snackMsg }}</span>
+    </div>
   </div>
 </template>
 
@@ -2773,12 +2930,20 @@ html[data-theme="dark"] .md-tab-active { background:rgba(100,181,255,0.095); box
 /* Snackbar */
 .md-snackbar {
   position:fixed; bottom:calc(var(--safe-bottom) + 80px); left:50%; transform:translateX(-50%);
-  padding:10px 22px; border-radius:999px; font-size:0.88rem; font-weight:600;
+  display:flex; align-items:center; gap:9px;
+  padding:10px 18px; border-radius:999px; font-size:0.84rem; font-weight:600;
   background:var(--ink); color:var(--bg);
   box-shadow:0 8px 28px rgba(0,0,0,0.28); z-index:999;
   animation:md-snack-in 0.25s ease-out;
-  max-width:85vw; text-align:center;
+  width:max-content; max-width:min(88vw, 560px);
 }
+.md-snack-message { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.md-snack-indicator { width:8px; height:8px; border-radius:50%; flex:0 0 auto; background:currentColor; opacity:0.82; }
+.md-snack-progress .md-snack-indicator { animation:md-snack-pulse 1.1s ease-in-out infinite; }
+.md-snack-success { background:#18794e; color:#fff; }
+.md-snack-error { background:#b3261e; color:#fff; }
+.md-snack-info, .md-snack-progress { background:var(--ink); color:var(--bg); }
+@keyframes md-snack-pulse { 0%, 100% { transform:scale(0.8); opacity:0.55; } 50% { transform:scale(1.2); opacity:1; } }
 @keyframes md-snack-in { from{opacity:0;transform:translateX(-50%) translateY(12px)} to{opacity:1;transform:translateX(-50%) translateY(0)} }
 
 /* Traffic speed chart */
@@ -2791,24 +2956,61 @@ html[data-theme="dark"] .md-tab-active { background:rgba(100,181,255,0.095); box
 .md-traffic-svg { width:100%; height:90px; display:block; }
 .md-traffic-chart-wrap { position:relative; }
 
-/* Parent-child hierarchy: expand pushes parent down, children float up */
-.md-device-group { position:relative; margin-bottom:10px; }
-/* Parent card recedes: proportional shrink + slight fade + softer shadow */
-.md-device-group-open > .md-card:first-child {
-  opacity:0.82;
-  box-shadow:0 2px 6px rgba(0,0,0,0.06);
-  transform:scale(0.95);
-  transform-origin:center bottom;
+/* Parent-child hierarchy: parent remains primary, children form an indented tree workspace */
+.md-device-group { position:relative; margin-bottom:12px; }
+.md-device-parent { position:relative; z-index:1; margin-bottom:0; }
+.md-device-group-open > .md-device-parent {
+  border:1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow:var(--md-shadow), inset 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent);
 }
-html[data-theme="dark"] .md-device-group-open > .md-card:first-child {
-  box-shadow:0 2px 6px rgba(0,0,0,0.1);
+.md-device-children {
+  position:relative;
+  margin:0 0 2px 18px;
+  padding:0 0 0 20px;
 }
-/* Child cards float up: stronger shadow + staggered enter animation */
-.md-stats-card { padding:12px 16px; margin-bottom:10px; cursor:default; position:relative; box-shadow:var(--md-shadow); transition:box-shadow 0.3s; }
+.md-device-children::before {
+  content:"";
+  position:absolute;
+  left:5px;
+  top:-8px;
+  height:32px;
+  width:2px;
+  border-radius:999px;
+  background:color-mix(in srgb, var(--accent) 38%, transparent);
+}
+.md-stats-card {
+  padding:12px 16px;
+  margin-bottom:8px;
+  cursor:default;
+  position:relative;
+  border:1px solid var(--line);
+  border-radius:16px;
+  background:color-mix(in srgb, var(--panel-strong) 76%, transparent);
+  box-shadow:none;
+}
+.md-device-children > .md-stats-card::before {
+  content:"";
+  position:absolute;
+  left:-15px;
+  top:24px;
+  width:15px;
+  border-top:2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius:999px;
+}
+.md-device-children > .md-stats-card:not(:last-child)::after {
+  content:"";
+  position:absolute;
+  left:-15px;
+  top:24px;
+  height:calc(100% + 8px);
+  width:2px;
+  border-radius:999px;
+  background:color-mix(in srgb, var(--accent) 26%, transparent);
+}
 .md-animated { animation:stats-slide-in 0.35s ease-out both; animation-delay:calc(var(--i, 0) * 0.08s); }
 .md-card-enter { animation:stats-slide-in 0.35s ease-out both; }
-@keyframes stats-slide-in { from { opacity:0; transform:translateY(16px); } to { opacity:1; transform:translateY(0); } }
-.md-stats-card:last-child { margin-bottom:10px; }
+@keyframes stats-slide-in { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
+.md-device-children > .md-stats-card:last-of-type { margin-bottom:6px; }
 .md-stats-loading-card { padding:8px 16px; }
 .md-stats-info-card { padding:10px 16px; }
 .md-stats-info { font-size:0.68rem; color:var(--muted); opacity:0.85; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

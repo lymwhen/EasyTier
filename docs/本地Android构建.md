@@ -31,7 +31,7 @@ cd /mnt/d/projects/projectsalpha/EasyTier
 | Ubuntu 主机 C 编译器 | `/mnt/d/tools/EasyTierLinux/bin/cc` |
 | pnpm 9.12.1 | `/mnt/d/tools/EasyTierLinux/bin/pnpm` |
 | Gradle 用户缓存 | `/mnt/f/tmp/gradle-tmp` |
-| APK 输出目录 | `/mnt/f/tmp` |
+| APK 输出目录 | `/mnt/f/tmp/apk` |
 
 Linux NDK 不要直接解压到 NTFS 目录。NDK 中存在 8 组仅大小写不同的头文件，NTFS 默认无法同时保存；因此 D 目录保留原始 ZIP，`SdkLinux/ndk/.../linux-x86_64` 指向 ext4/home 下的解压缓存。
 
@@ -52,7 +52,7 @@ source /mnt/d/tools/EasyTierLinux/env.sh
 4. 交叉编译 `libapp_lib.so`
 5. 校验 Android Kotlin JNI 桥和 Native 导出
 6. 执行 Gradle `assembleArm64Release`
-7. 将带时间戳的 APK 复制到 `/mnt/f/tmp`
+7. 将带时间戳的 APK 复制到 `/mnt/f/tmp/apk`
 
 可选环境变量：
 
@@ -169,7 +169,7 @@ cd "$ROOT/easytier-gui/src-tauri/gen/android"
 ROOT=/mnt/d/projects/projectsalpha/EasyTier
 ts="$(date +%Y%m%d%H%M)"
 cp "$ROOT/easytier-gui/src-tauri/gen/android/app/build/outputs/apk/arm64/release/app-arm64-release.apk" \
-  "/mnt/f/tmp/app-arm64-release-$ts.apk"
+  "/mnt/f/tmp/apk/app-arm64-release-$ts.apk"
 ```
 
 ### Lockfile 处理原则

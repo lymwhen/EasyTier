@@ -40,15 +40,18 @@ use easytier_core::{
     connectivity::protocol::raw::TunnelDialer as _, process_runtime::CoreProcessRuntime,
     socket::SocketListener, tunnel::Tunnel,
 };
-use http_body_util::{BodyExt, Full};
-use hyper::body::Incoming;
+use http_body_util::{BodyExt, Full, StreamBody};
+use hyper::body::{Frame, Incoming};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
+use std::collections::HashMap;
 use std::ops::Deref;
+use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::net::TcpListener;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpSocket};
 use tokio::sync::{Mutex, RwLock, RwLockReadGuard};
 use uuid::Uuid;
 
@@ -710,11 +713,18 @@ async fn tcp_ping(host: String, port: u16) -> Result<String, String> {
 // LuCI HTTP Reverse Proxy (local iframe → router)
 // ============================================================
 
+type ProxyBodyError = Box<dyn std::error::Error + Send + Sync>;
+type ProxyBody = http_body_util::combinators::UnsyncBoxBody<Bytes, ProxyBodyError>;
+
+const TRANSFER_PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+const TRANSFER_PROGRESS_BYTES: u64 = 1024 * 1024;
+const TRANSFER_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 struct ProxyHandle {
     #[allow(dead_code)]
     port: u16,
     shutdown_tx: tokio::sync::oneshot::Sender<()>,
-    shared: Arc<SharedState>,
+    state: std::sync::Arc<ProxyState>,
 }
 
 struct SharedState {
@@ -723,13 +733,561 @@ struct SharedState {
     last_path_type: std::sync::Mutex<String>, // "tunnel" or "lan"
 }
 
+struct ProxyState {
+    routers: std::sync::RwLock<HashMap<String, std::sync::Arc<ProxyCtx>>>,
+    active_router_id: std::sync::Mutex<String>,
+}
+
 struct ProxyCtx {
+    app: AppHandle,
     client: reqwest::Client,
     cookie: Mutex<String>,
     router_ip: String,
     username: String,
     password: String,
-    shared: Arc<SharedState>,
+    shared: std::sync::Arc<SharedState>,
+    download_cache: std::sync::Mutex<HashMap<String, CachedDownload>>,
+    last_download: std::sync::Mutex<Option<CachedDownload>>,
+    download_dir: PathBuf,
+}
+
+#[derive(Clone)]
+struct CachedDownload {
+    path: PathBuf,
+    content_type: Option<String>,
+    content_disposition: Option<String>,
+    content_length: u64,
+}
+
+impl ProxyState {
+    fn router(&self, router_id: &str) -> Option<std::sync::Arc<ProxyCtx>> {
+        self.routers
+            .read()
+            .unwrap()
+            .get(router_id)
+            .map(std::sync::Arc::clone)
+    }
+
+    fn active_router_id(&self) -> String {
+        self.active_router_id.lock().unwrap().clone()
+    }
+}
+
+fn internal_cookie_value(headers: &reqwest::header::HeaderMap, name: &str) -> Option<String> {
+    header_value(headers, "cookie")?
+        .split(';')
+        .filter_map(|part| {
+            let (key, value) = part.trim().split_once('=')?;
+            (key == name).then(|| value.trim().to_string())
+        })
+        .next()
+}
+
+fn request_query_value(path: &str, name: &str) -> Option<String> {
+    let request_url = url::Url::parse("http://127.0.0.1").ok()?.join(path).ok()?;
+    request_url
+        .query_pairs()
+        .find(|(key, _)| key == name)
+        .map(|(_, value)| value.to_string())
+}
+
+fn request_router_id(
+    request_path: &str,
+    headers: &reqwest::header::HeaderMap,
+    state: &ProxyState,
+) -> String {
+    if let Some(router_id) = request_query_value(request_path, "__et_router") {
+        return router_id;
+    }
+    if let Some(router_id) = internal_cookie_value(headers, "__et_router") {
+        return router_id;
+    }
+    if let Some(referer) = header_value(headers, "referer")
+        && let Ok(referer) = url::Url::parse(&referer)
+        && let Some(router_id) = referer
+            .query_pairs()
+            .find(|(key, _)| key == "__et_router")
+            .map(|(_, value)| value.to_string())
+    {
+        return router_id;
+    }
+    state.active_router_id()
+}
+
+fn upstream_browser_cookie(headers: &reqwest::header::HeaderMap) -> Option<String> {
+    let cookies: Vec<_> = header_value(headers, "cookie")?
+        .split(';')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .filter(|part| !part.starts_with("__et_router="))
+        .map(str::to_owned)
+        .collect();
+    (!cookies.is_empty()).then(|| cookies.join("; "))
+}
+
+#[derive(Clone, serde::Serialize)]
+struct RouterTransferEvent {
+    event: String,
+    direction: String,
+    path: String,
+    filename: Option<String>,
+    content_type: Option<String>,
+    content_length: Option<u64>,
+    transferred: u64,
+    duration_ms: u64,
+    status: Option<u16>,
+    error: Option<String>,
+}
+
+fn router_transfer_event(
+    event: &str,
+    direction: &str,
+    path: &str,
+    filename: Option<String>,
+    content_type: Option<String>,
+    content_length: Option<u64>,
+    transferred: u64,
+    duration_ms: u64,
+    status: Option<u16>,
+    error: Option<String>,
+) -> RouterTransferEvent {
+    RouterTransferEvent {
+        event: event.to_string(),
+        direction: direction.to_string(),
+        path: path.to_string(),
+        filename,
+        content_type,
+        content_length,
+        transferred,
+        duration_ms,
+        status,
+        error,
+    }
+}
+
+fn emit_router_transfer(app: &AppHandle, event: RouterTransferEvent) {
+    let _ = app.emit("router-transfer", event);
+}
+
+fn header_value(headers: &reqwest::header::HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+}
+
+fn content_length(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+    header_value(headers, "content-length").and_then(|value| value.parse::<u64>().ok())
+}
+
+fn content_disposition_filename(value: &str) -> Option<String> {
+    for part in value.split(';') {
+        let part = part.trim();
+        if let Some(rest) = part.strip_prefix("filename*=") {
+            let value = rest.trim().trim_matches('"');
+            if let Some((_, filename)) = value.split_once("''") {
+                return Some(filename.trim_matches('"').to_string());
+            }
+        }
+        if let Some(rest) = part.strip_prefix("filename=") {
+            return Some(rest.trim().trim_matches('"').to_string());
+        }
+    }
+    None
+}
+
+fn strip_internal_router_query(path: &str) -> String {
+    let Some((base, query)) = path.split_once('?') else {
+        return path.to_string();
+    };
+    let mut kept = Vec::new();
+    for part in query.split('&') {
+        if !part.starts_with("__et_router=") && !part.starts_with("__et_nonce=") {
+            kept.push(part);
+        }
+    }
+    if kept.is_empty() {
+        base.to_string()
+    } else {
+        format!("{base}?{}", kept.join("&"))
+    }
+}
+
+fn download_cache_key(target_url: &str) -> Option<String> {
+    let target = url::Url::parse(target_url).ok()?;
+    let mut path = target.path().to_string();
+    if let Some(query) = target.query() {
+        path.push('?');
+        path.push_str(query);
+    }
+    Some(strip_internal_router_query(&path))
+}
+
+fn cached_download_key_from_request(path: &str) -> Option<String> {
+    let request_url = url::Url::parse("http://127.0.0.1").ok()?.join(path).ok()?;
+    if request_url.path() != "/__easytier_download__" {
+        return None;
+    }
+    let target = request_url
+        .query_pairs()
+        .find(|(key, _)| key == "url")?
+        .1
+        .to_string();
+    download_cache_key(&target)
+}
+
+async fn file_proxy_body(path: PathBuf) -> Result<ProxyBody, String> {
+    use futures_util::TryStreamExt as _;
+
+    let file = tokio::fs::File::open(path)
+        .await
+        .map_err(|e| format!("Failed to open cached download: {e}"))?;
+    let stream = futures_util::stream::unfold(file, |mut file| async move {
+        let mut buffer = vec![0_u8; 64 * 1024];
+        match file.read(&mut buffer).await {
+            Ok(0) => None,
+            Ok(size) => {
+                buffer.truncate(size);
+                Some((Ok(Bytes::from(buffer)), file))
+            }
+            Err(error) => Some((Err(error), file)),
+        }
+    });
+    Ok(StreamBody::new(
+        stream
+            .map_ok(Frame::data)
+            .map_err(|error| -> ProxyBodyError { error.into() }),
+    )
+    .boxed_unsync())
+}
+
+async fn cached_download_response(cached: &CachedDownload) -> Result<Response<ProxyBody>, String> {
+    let body = file_proxy_body(cached.path.clone()).await?;
+    let mut builder = Response::builder()
+        .status(StatusCode::OK)
+        .header("content-length", cached.content_length.to_string())
+        .header("cross-origin-resource-policy", "cross-origin");
+    if let Some(content_type) = &cached.content_type {
+        builder = builder.header("content-type", content_type);
+    }
+    if let Some(content_disposition) = &cached.content_disposition {
+        builder = builder.header("content-disposition", content_disposition);
+    }
+    Ok(builder.body(body).unwrap())
+}
+
+async fn cache_download_response(
+    resp: reqwest::Response,
+    ctx: &std::sync::Arc<ProxyCtx>,
+    path: &str,
+    filename: Option<String>,
+    content_type: Option<String>,
+    content_disposition: Option<String>,
+    content_length: Option<u64>,
+    status: u16,
+) -> Result<Response<ProxyBody>, String> {
+    use futures_util::StreamExt as _;
+
+    let cache_key = download_cache_key(&format!("http://{}{}", ctx.router_ip, path))
+        .unwrap_or_else(|| path.to_string());
+    let cache_path = ctx
+        .download_dir
+        .join(format!("{}.download", Uuid::new_v4().simple()));
+    let mut output = tokio::fs::File::create(&cache_path)
+        .await
+        .map_err(|e| format!("Failed to create download cache: {e}"))?;
+    let mut stream = Box::pin(tracked_transfer_stream(
+        resp.bytes_stream(),
+        ctx.app.clone(),
+        "download",
+        path.to_string(),
+        filename,
+        content_type.clone(),
+        content_length,
+        Some(status),
+        true,
+    ));
+    let mut total = 0_u64;
+    loop {
+        match stream.next().await {
+            Some(Ok(chunk)) => {
+                output
+                    .write_all(&chunk)
+                    .await
+                    .map_err(|e| format!("Failed to write download cache: {e}"))?;
+                total += chunk.len() as u64;
+            }
+            None => break,
+            Some(Err(error)) => {
+                drop(output);
+                let _ = tokio::fs::remove_file(&cache_path).await;
+                return Err(error.to_string());
+            }
+        }
+    }
+    output
+        .flush()
+        .await
+        .map_err(|e| format!("Failed to flush download cache: {e}"))?;
+
+    let cached = CachedDownload {
+        path: cache_path,
+        content_type,
+        content_disposition,
+        content_length: total,
+    };
+    let previous = ctx
+        .download_cache
+        .lock()
+        .unwrap()
+        .insert(cache_key, cached.clone());
+    *ctx.last_download.lock().unwrap() = Some(cached.clone());
+    if let Some(previous) = previous {
+        tokio::spawn(async move {
+            let _ = tokio::fs::remove_file(previous.path).await;
+        });
+    }
+    cached_download_response(&cached).await
+}
+
+fn rewrite_location(value: &str, router_ip: &str) -> String {
+    let Ok(target) = url::Url::parse(value) else {
+        return value.to_string();
+    };
+    if !matches!(target.scheme(), "http" | "https") || target.host_str() != Some(router_ip) {
+        return value.to_string();
+    }
+    let mut path = target.path().to_string();
+    if let Some(query) = target.query() {
+        path.push('?');
+        path.push_str(query);
+    }
+    path
+}
+
+fn is_download_response(resp: &reqwest::Response) -> bool {
+    if header_value(&resp.headers(), "content-disposition")
+        .map(|value| value.to_ascii_lowercase().contains("attachment"))
+        .unwrap_or(false)
+    {
+        return true;
+    }
+
+    let content_type = header_value(&resp.headers(), "content-type")
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    matches!(
+        content_type.split(';').next().unwrap_or_default().trim(),
+        "application/octet-stream"
+            | "application/zip"
+            | "application/gzip"
+            | "application/x-gzip"
+            | "application/x-tar"
+            | "application/x-7z-compressed"
+            | "application/vnd.android.package-archive"
+    )
+}
+
+fn is_upload_request(
+    method: &reqwest::Method,
+    content_type: Option<&str>,
+    length: Option<u64>,
+) -> bool {
+    if method == reqwest::Method::GET || method == reqwest::Method::HEAD {
+        return false;
+    }
+    content_type
+        .map(|value| value.to_ascii_lowercase().contains("multipart/form-data"))
+        .unwrap_or(false)
+        || length.unwrap_or(0) >= 1024 * 1024
+}
+
+fn full_proxy_body(data: Bytes) -> ProxyBody {
+    Full::new(data)
+        .map_err(|never| -> ProxyBodyError { match never {} })
+        .boxed_unsync()
+}
+
+fn tracked_transfer_stream<S, E>(
+    stream: S,
+    app: AppHandle,
+    direction: &'static str,
+    path: String,
+    filename: Option<String>,
+    content_type: Option<String>,
+    content_length: Option<u64>,
+    status: Option<u16>,
+    report: bool,
+) -> impl futures_util::Stream<Item = Result<Bytes, ProxyBodyError>> + Send + 'static
+where
+    S: futures_util::Stream<Item = Result<Bytes, E>> + Send + 'static,
+    E: Into<ProxyBodyError> + Send + Sync + 'static,
+{
+    use futures_util::StreamExt as _;
+
+    let started_at = std::time::Instant::now();
+    if report {
+        emit_router_transfer(
+            &app,
+            router_transfer_event(
+                "started",
+                direction,
+                &path,
+                filename.clone(),
+                content_type.clone(),
+                content_length,
+                0,
+                0,
+                status,
+                None,
+            ),
+        );
+    }
+
+    let stream = Box::pin(stream);
+    futures_util::stream::unfold(
+        (
+            stream,
+            0_u64,
+            started_at,
+            std::time::Instant::now(),
+            0_u64,
+            false,
+        ),
+        move |(mut stream, mut transferred, started_at, mut last_emit, mut last_reported, done)| {
+            let app = app.clone();
+            let path = path.clone();
+            let filename = filename.clone();
+            let content_type = content_type.clone();
+            async move {
+                if done {
+                    return None;
+                }
+
+                match tokio::time::timeout(TRANSFER_IDLE_TIMEOUT, stream.next()).await {
+                    Err(_) => {
+                        let error = "Transfer timed out while waiting for more data".to_string();
+                        if report {
+                            emit_router_transfer(
+                                &app,
+                                router_transfer_event(
+                                    "failed",
+                                    direction,
+                                    &path,
+                                    filename,
+                                    content_type,
+                                    content_length,
+                                    transferred,
+                                    started_at.elapsed().as_millis() as u64,
+                                    status,
+                                    Some(error),
+                                ),
+                            );
+                        }
+                        Some((
+                            Err("Transfer timed out while waiting for more data".into()),
+                            (
+                                stream,
+                                transferred,
+                                started_at,
+                                last_emit,
+                                last_reported,
+                                true,
+                            ),
+                        ))
+                    }
+                    Ok(Some(Ok(bytes))) => {
+                        transferred += bytes.len() as u64;
+                        if report
+                            && (last_emit.elapsed() >= TRANSFER_PROGRESS_INTERVAL
+                                || transferred.saturating_sub(last_reported)
+                                    >= TRANSFER_PROGRESS_BYTES)
+                        {
+                            emit_router_transfer(
+                                &app,
+                                router_transfer_event(
+                                    "progress",
+                                    direction,
+                                    &path,
+                                    filename,
+                                    content_type,
+                                    content_length,
+                                    transferred,
+                                    started_at.elapsed().as_millis() as u64,
+                                    status,
+                                    None,
+                                ),
+                            );
+                            last_emit = std::time::Instant::now();
+                            last_reported = transferred;
+                        }
+                        Some((
+                            Ok(bytes),
+                            (
+                                stream,
+                                transferred,
+                                started_at,
+                                last_emit,
+                                last_reported,
+                                false,
+                            ),
+                        ))
+                    }
+                    Ok(Some(Err(error))) => {
+                        let error: ProxyBodyError = error.into();
+                        if report {
+                            emit_router_transfer(
+                                &app,
+                                router_transfer_event(
+                                    "failed",
+                                    direction,
+                                    &path,
+                                    filename,
+                                    content_type,
+                                    content_length,
+                                    transferred,
+                                    started_at.elapsed().as_millis() as u64,
+                                    status,
+                                    Some(error.to_string()),
+                                ),
+                            );
+                        }
+                        Some((
+                            Err(error),
+                            (
+                                stream,
+                                transferred,
+                                started_at,
+                                last_emit,
+                                last_reported,
+                                true,
+                            ),
+                        ))
+                    }
+                    Ok(None) => {
+                        if report {
+                            emit_router_transfer(
+                                &app,
+                                router_transfer_event(
+                                    "finished",
+                                    direction,
+                                    &path,
+                                    filename,
+                                    content_type,
+                                    content_length,
+                                    transferred,
+                                    started_at.elapsed().as_millis() as u64,
+                                    status,
+                                    None,
+                                ),
+                            );
+                        }
+                        None
+                    }
+                }
+            }
+        },
+    )
 }
 
 static PROXY: once_cell::sync::Lazy<std::sync::Mutex<Option<ProxyHandle>>> =
@@ -737,7 +1295,8 @@ static PROXY: once_cell::sync::Lazy<std::sync::Mutex<Option<ProxyHandle>>> =
 
 fn build_proxy_client(socks5_proxy: &Option<String>) -> Result<reqwest::Client, String> {
     let mut builder = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(3))
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .tcp_keepalive(std::time::Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::none());
     if let Some(p) = socks5_proxy {
         builder =
@@ -755,12 +1314,16 @@ async fn luci_login(
     password: &str,
 ) -> Result<String, String> {
     let login_url = format!("http://{}/cgi-bin/luci/", router_ip);
-    let resp = client
-        .post(&login_url)
-        .form(&[("luci_username", username), ("luci_password", password)])
-        .send()
-        .await
-        .map_err(|e| format!("Login request failed: {}", e))?;
+    let resp = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        client
+            .post(&login_url)
+            .form(&[("luci_username", username), ("luci_password", password)])
+            .send(),
+    )
+    .await
+    .map_err(|_| "Login request timed out".to_string())?
+    .map_err(|e| format!("Login request failed: {}", e))?;
     let status = resp.status().as_u16();
     let mut found_cookie = String::new();
     for cookie in resp.headers().get_all("set-cookie") {
@@ -797,49 +1360,122 @@ fn is_html(resp: &reqwest::Response) -> bool {
 
 async fn proxy_request(
     req: Request<Incoming>,
-    ctx: &Arc<ProxyCtx>,
-) -> Result<Response<Full<Bytes>>, hyper::Error> {
-    let path = req
+    state: &std::sync::Arc<ProxyState>,
+) -> Result<Response<ProxyBody>, hyper::Error> {
+    let request_path = req
         .uri()
         .path_and_query()
         .map(|pq| pq.as_str())
         .unwrap_or("/")
         .to_string();
+    let path = strip_internal_router_query(&request_path);
+    let router_id = request_router_id(&request_path, req.headers(), state);
+    let Some(ctx) = state.router(&router_id) else {
+        return build_error_response("Router session is not available");
+    };
     let target_url = format!("http://{}{}", ctx.router_ip, path);
+    if request_path.starts_with("/__easytier_download__") {
+        let cached = cached_download_key_from_request(&request_path)
+            .and_then(|cache_key| ctx.download_cache.lock().unwrap().get(&cache_key).cloned())
+            .or_else(|| ctx.last_download.lock().unwrap().clone());
+        return match cached {
+            Some(cached) => cached_download_response(&cached)
+                .await
+                .or_else(|error| build_error_response(&error)),
+            None => build_error_response("Download is no longer available"),
+        };
+    }
     let method = req.method().clone();
+    let request_content_type = header_value(req.headers(), "content-type");
+    let request_length = content_length(req.headers());
+    let report_upload = is_upload_request(&method, request_content_type.as_deref(), request_length);
 
     let cookie = ctx.cookie.lock().await.clone();
+    let browser_cookie = upstream_browser_cookie(req.headers());
+    let cookie_header = match browser_cookie {
+        Some(browser_cookie) if !cookie.is_empty() => format!("{cookie}; {browser_cookie}"),
+        Some(browser_cookie) => browser_cookie,
+        None => cookie,
+    };
     let mut proxy_req = ctx
         .client
-        .request(method, &target_url)
-        .header("Cookie", &cookie);
+        .request(method.clone(), &target_url)
+        .header("Cookie", &cookie_header);
 
     for (name, value) in req.headers() {
         let n = name.as_str().to_lowercase();
         if n != "host"
             && n != "cookie"
-            && n != "content-length"
             && n != "origin"
             && n != "referer"
+            && n != "transfer-encoding"
             && let Ok(v) = value.to_str()
         {
             proxy_req = proxy_req.header(name.as_str(), v);
         }
     }
 
-    let (parts, body) = req.into_parts();
-    let body_bytes = match body.collect().await {
-        Ok(b) => b.to_bytes(),
-        Err(_) => return build_error_response("Failed to read request body"),
-    };
-    if !body_bytes.is_empty() {
-        proxy_req = proxy_req.body(body_bytes.to_vec());
+    let (_parts, body) = req.into_parts();
+    let has_body = method != reqwest::Method::GET && method != reqwest::Method::HEAD;
+    if has_body {
+        let body_stream = tracked_transfer_stream(
+            body.into_data_stream(),
+            ctx.app.clone(),
+            "upload",
+            path.clone(),
+            None,
+            request_content_type.clone(),
+            request_length,
+            None,
+            report_upload,
+        );
+        proxy_req = proxy_req.body(reqwest::Body::wrap_stream(body_stream));
     }
 
-    let resp = match proxy_req.send().await {
-        Ok(r) => r,
-        Err(e) => return build_error_response(&e.to_string()),
-    };
+    let resp =
+        match tokio::time::timeout(std::time::Duration::from_secs(30), proxy_req.send()).await {
+            Err(_) => {
+                if report_upload {
+                    emit_router_transfer(
+                        &ctx.app,
+                        router_transfer_event(
+                            "failed",
+                            "upload",
+                            &path,
+                            None,
+                            request_content_type.clone(),
+                            request_length,
+                            0,
+                            0,
+                            None,
+                            Some("Router request timed out".to_string()),
+                        ),
+                    );
+                }
+                return build_error_response("Router request timed out");
+            }
+            Ok(Err(e)) => {
+                if report_upload {
+                    emit_router_transfer(
+                        &ctx.app,
+                        router_transfer_event(
+                            "failed",
+                            "upload",
+                            &path,
+                            None,
+                            request_content_type.clone(),
+                            request_length,
+                            0,
+                            0,
+                            None,
+                            Some(e.to_string()),
+                        ),
+                    );
+                }
+                return build_error_response(&e.to_string());
+            }
+            Ok(Ok(resp)) => resp,
+        };
 
     // Only track page navigations (HTML), not resource loads (CSS/JS/images)
     if is_html(&resp) {
@@ -860,74 +1496,165 @@ async fn proxy_request(
         match luci_login(&ctx.client, &ctx.router_ip, &ctx.username, &ctx.password).await {
             Ok(new_cookie) => {
                 *ctx.cookie.lock().await = new_cookie.clone();
-                if !body_bytes.is_empty() {
-                    return build_error_response("Session expired during POST, please retry");
+                if has_body {
+                    return build_error_response("Session expired during upload, please retry");
                 }
                 let retry_req = ctx
                     .client
-                    .request(
-                        reqwest::Method::from_bytes(parts.method.as_str().as_bytes())
-                            .unwrap_or(reqwest::Method::GET),
-                        &target_url,
-                    )
+                    .request(method.clone(), &target_url)
                     .header("Cookie", &new_cookie);
-                match retry_req.send().await {
-                    Ok(r) => {
-                        if is_html(&r) {
-                            *ctx.shared.last_path.lock().unwrap() = path.to_string();
-                        }
-                        return build_proxy_response(r).await;
-                    }
+                let retry_resp = match retry_req.send().await {
+                    Ok(r) => r,
                     Err(e) => return build_error_response(&e.to_string()),
+                };
+                if is_html(&retry_resp) {
+                    *ctx.shared.last_path.lock().unwrap() = path.to_string();
                 }
+                return build_proxy_response(retry_resp, &ctx, &router_id, &path, &method).await;
             }
             Err(e) => return build_error_response(&e.to_string()),
         }
     }
 
-    build_proxy_response(resp).await
+    build_proxy_response(resp, &ctx, &router_id, &path, &method).await
 }
 
 async fn build_proxy_response(
     resp: reqwest::Response,
-) -> Result<Response<Full<Bytes>>, hyper::Error> {
+    ctx: &std::sync::Arc<ProxyCtx>,
+    router_id: &str,
+    path: &str,
+    method: &reqwest::Method,
+) -> Result<Response<ProxyBody>, hyper::Error> {
     let status =
         StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    // Collect headers before consuming body
+    let response_content_type = header_value(&resp.headers(), "content-type");
+    let response_length = content_length(&resp.headers());
+    let response_content_disposition = header_value(&resp.headers(), "content-disposition");
+    let filename = response_content_disposition
+        .as_deref()
+        .and_then(content_disposition_filename);
+    let report_download = is_download_response(&resp);
+
+    let response_is_html = is_html(&resp);
     let headers: Vec<_> = resp
         .headers()
         .iter()
         .filter(|(name, _)| {
             let n = name.as_str().to_lowercase();
-            n != "transfer-encoding"
-                && n != "content-encoding"
-                && n != "x-frame-options"
-                && n != "content-security-policy"
+            !matches!(
+                n.as_str(),
+                "transfer-encoding"
+                    | "connection"
+                    | "keep-alive"
+                    | "proxy-authenticate"
+                    | "proxy-authorization"
+                    | "te"
+                    | "trailer"
+                    | "upgrade"
+                    | "content-security-policy"
+                    | "content-security-policy-report-only"
+                    | "x-frame-options"
+                    | "x-content-type-options"
+                    | "cross-origin-embedder-policy"
+                    | "cross-origin-opener-policy"
+                    | "cross-origin-resource-policy"
+            ) && !(response_is_html && n == "content-disposition")
         })
         .map(|(name, value)| (name.clone(), value.clone()))
         .collect();
-    let resp_body = resp.bytes().await.unwrap_or_default();
+
+    if report_download
+        && method != reqwest::Method::HEAD
+        && status != StatusCode::NO_CONTENT
+        && status != StatusCode::NOT_MODIFIED
+    {
+        return cache_download_response(
+            resp,
+            ctx,
+            path,
+            filename,
+            response_content_type,
+            response_content_disposition,
+            response_length,
+            status.as_u16(),
+        )
+        .await
+        .or_else(|error| build_error_response(&error));
+    }
+
+    let body = if method == reqwest::Method::HEAD
+        || status == StatusCode::NO_CONTENT
+        || status == StatusCode::NOT_MODIFIED
+    {
+        if report_download {
+            emit_router_transfer(
+                &ctx.app,
+                router_transfer_event(
+                    "finished",
+                    "download",
+                    path,
+                    filename,
+                    response_content_type,
+                    response_length,
+                    0,
+                    0,
+                    Some(status.as_u16()),
+                    None,
+                ),
+            );
+        }
+        full_proxy_body(Bytes::new())
+    } else {
+        use futures_util::TryStreamExt as _;
+        let body_stream = tracked_transfer_stream(
+            resp.bytes_stream(),
+            ctx.app.clone(),
+            "download",
+            path.to_string(),
+            filename,
+            response_content_type,
+            response_length,
+            Some(status.as_u16()),
+            report_download,
+        );
+        StreamBody::new(body_stream.map_ok(Frame::data)).boxed_unsync()
+    };
+
     let mut builder = Response::builder().status(status);
     for (name, value) in headers {
         if let Ok(v) = value.to_str() {
-            builder = builder.header(name.as_str(), v);
+            let value = if name.as_str().eq_ignore_ascii_case("location") {
+                rewrite_location(v, &ctx.router_ip)
+            } else {
+                v.to_string()
+            };
+            builder = builder.header(name.as_str(), value);
         }
     }
-    Ok(builder.body(Full::new(resp_body)).unwrap())
+    builder = builder.header("cross-origin-resource-policy", "cross-origin");
+    builder = builder.header(
+        "set-cookie",
+        format!("__et_router={router_id}; Path=/; SameSite=Lax"),
+    );
+    if response_is_html {
+        builder = builder.header("x-content-type-options", "nosniff");
+    }
+    Ok(builder.body(body).unwrap())
 }
 
-fn build_error_response(msg: &str) -> Result<Response<Full<Bytes>>, hyper::Error> {
+fn build_error_response(msg: &str) -> Result<Response<ProxyBody>, hyper::Error> {
     let builder = Response::builder()
         .status(StatusCode::BAD_GATEWAY)
         .header("content-type", "text/plain; charset=utf-8");
     Ok(builder
-        .body(Full::new(Bytes::from(msg.to_string())))
+        .body(full_proxy_body(Bytes::from(msg.to_string())))
         .unwrap())
 }
 
 async fn run_proxy(
     listener: TcpListener,
-    ctx: Arc<ProxyCtx>,
+    state: std::sync::Arc<ProxyState>,
     mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
 ) {
     loop {
@@ -937,11 +1664,11 @@ async fn run_proxy(
                 match result {
                     Ok((stream, _addr)) => {
                         let io = TokioIo::new(stream);
-                        let ctx2 = ctx.clone();
+                        let state2 = state.clone();
                         tokio::spawn(async move {
                             let svc = service_fn(move |req| {
-                                let ctx3 = ctx2.clone();
-                                async move { proxy_request(req, &ctx3).await }
+                                let state3 = state2.clone();
+                                async move { proxy_request(req, &state3).await }
                             });
                             let _ = http1::Builder::new()
                                 .half_close(true)
@@ -963,51 +1690,117 @@ fn stop_proxy_inner() {
     }
 }
 
+async fn bind_proxy_listener(preferred_port: Option<u16>) -> Result<TcpListener, String> {
+    for port in preferred_port.into_iter().chain(std::iter::once(0)) {
+        for _ in 0..20 {
+            let socket =
+                TcpSocket::new_v4().map_err(|e| format!("Failed to create proxy socket: {e}"))?;
+            socket
+                .set_reuseaddr(true)
+                .map_err(|e| format!("Failed to configure proxy socket: {e}"))?;
+            if let Err(e) = socket.bind(std::net::SocketAddr::from(([127, 0, 0, 1], port))) {
+                if port != 0 {
+                    let _ = e;
+                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                    continue;
+                }
+                return Err(format!("Failed to bind local port {port}: {e}"));
+            }
+            match socket.listen(1024) {
+                Ok(listener) => return Ok(listener),
+                Err(e) if port != 0 => {
+                    let _ = e;
+                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                }
+                Err(e) => return Err(format!("Failed to listen on local port {port}: {e}")),
+            }
+        }
+    }
+    Err("Failed to bind local proxy port".to_string())
+}
+
 #[tauri::command]
 async fn luci_proxy_start(
+    app: AppHandle,
+    router_id: String,
     router_ip: String,
     username: String,
     password: String,
     socks5_proxy: Option<String>,
 ) -> Result<String, String> {
+    if router_id.trim().is_empty() {
+        return Err("router_id is required".to_string());
+    }
+
+    let path_type = if socks5_proxy.is_some() {
+        "tunnel"
+    } else {
+        "lan"
+    };
+    if let Some(handle) = PROXY.lock().unwrap().as_ref() {
+        if let Some(ctx) = handle.state.router(&router_id)
+            && ctx.router_ip == router_ip
+            && *ctx.shared.last_path_type.lock().unwrap() == path_type
+        {
+            *handle.state.active_router_id.lock().unwrap() = router_id;
+            return Ok(format!("http://127.0.0.1:{}", handle.port));
+        }
+    }
+
     let client = build_proxy_client(&socks5_proxy)?;
     let cookie = luci_login(&client, &router_ip, &username, &password).await?;
-
-    let listener = TcpListener::bind("127.0.0.1:0")
+    let download_dir = app
+        .path()
+        .cache_dir()
+        .map(|path| path.join("router-downloads"))
+        .unwrap_or_else(|_| std::env::temp_dir().join("easytier-router-downloads"));
+    tokio::fs::create_dir_all(&download_dir)
         .await
-        .map_err(|e| format!("Failed to bind local port: {}", e))?;
-    let port = listener.local_addr().unwrap().port();
+        .map_err(|e| format!("Failed to create download cache directory: {e}"))?;
 
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-    let shared = Arc::new(SharedState {
+    let shared = std::sync::Arc::new(SharedState {
         last_path: std::sync::Mutex::new("/cgi-bin/luci/admin/".to_string()),
-        last_path_type: std::sync::Mutex::new(
-            if socks5_proxy.is_some() {
-                "tunnel"
-            } else {
-                "lan"
-            }
-            .to_string(),
-        ),
+        last_path_type: std::sync::Mutex::new(path_type.to_string()),
     });
-
-    stop_proxy_inner();
-    *PROXY.lock().unwrap() = Some(ProxyHandle {
-        port,
-        shutdown_tx,
-        shared: shared.clone(),
-    });
-
-    let ctx = Arc::new(ProxyCtx {
+    let ctx = std::sync::Arc::new(ProxyCtx {
+        app,
         client,
         cookie: Mutex::new(cookie),
         router_ip,
         username,
         password,
         shared,
+        download_cache: std::sync::Mutex::new(HashMap::new()),
+        last_download: std::sync::Mutex::new(None),
+        download_dir: download_dir.clone(),
     });
 
-    tokio::spawn(async move { run_proxy(listener, ctx, shutdown_rx).await });
+    if let Some(handle) = PROXY.lock().unwrap().as_ref() {
+        handle
+            .state
+            .routers
+            .write()
+            .unwrap()
+            .insert(router_id.clone(), ctx);
+        *handle.state.active_router_id.lock().unwrap() = router_id;
+        return Ok(format!("http://127.0.0.1:{}", handle.port));
+    }
+
+    let listener = bind_proxy_listener(Some(32260)).await?;
+    let port = listener.local_addr().unwrap().port();
+    let state = std::sync::Arc::new(ProxyState {
+        routers: std::sync::RwLock::new(HashMap::from([(router_id.clone(), ctx)])),
+        active_router_id: std::sync::Mutex::new(router_id),
+    });
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let state_for_server = state.clone();
+    tokio::spawn(async move { run_proxy(listener, state_for_server, shutdown_rx).await });
+    *PROXY.lock().unwrap() = Some(ProxyHandle {
+        port,
+        shutdown_tx,
+        state,
+    });
 
     Ok(format!("http://127.0.0.1:{}", port))
 }
@@ -1019,10 +1812,14 @@ async fn luci_proxy_stop() -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn luci_get_last_path() -> Result<String, String> {
+async fn luci_get_last_path(router_id: Option<String>) -> Result<String, String> {
     let guard = PROXY.lock().unwrap();
-    match guard.as_ref() {
-        Some(h) => Ok(h.shared.last_path.lock().unwrap().clone()),
+    let Some(handle) = guard.as_ref() else {
+        return Ok("/cgi-bin/luci/admin/".to_string());
+    };
+    let router_id = router_id.unwrap_or_else(|| handle.state.active_router_id());
+    match handle.state.router(&router_id) {
+        Some(ctx) => Ok(ctx.shared.last_path.lock().unwrap().clone()),
         None => Ok("/cgi-bin/luci/admin/".to_string()),
     }
 }

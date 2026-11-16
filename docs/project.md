@@ -20,13 +20,13 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 
 | 文件 | 变更 | 必要性 |
 |------|------|--------|
-| `easytier-gui/src/pages/home.vue` | **[新增]** WOL/网络/路由器/设置四个 Tab 主界面（~2900行） | 必要 — 项目核心 |
+| `easytier-gui/src/pages/home.vue` | **[新增]** WOL/网络/路由器/设置四个 Tab 主界面；电脑卡片稳定 ID、树状父子层级、路由器传输状态提示 | 必要 — 项目核心 |
 | `easytier-gui/src/App.vue` | 主题初始化 + 窗口标题 + Toast + RouterView（Splash 已移除） | 必要 — 初始化流程 |
 | `easytier-gui/src/composables/theme.ts` | `Theme` 收敛为浅色/深色，保留自动/浅色/深色切换解析；深色统一使用纯黑主题 | 必要 — 主题切换逻辑 |
 | `easytier-gui/src/composables/backend.ts` | 新增 `httpGet`/`httpPost`/`tcpPing`/`luciProxy*` IPC 封装 | 必要 — 前端 HTTP/代理调用 |
 | `easytier-gui/src/composables/event.ts` | `onSaveConfigs` 改为合并本地网络配置，避免覆盖用户配置；接入上游 `normalizeConfigSource` | 必要 — 修复配置覆盖 |
-| `easytier-gui/src-tauri/src/lib.rs` | 新增 `http_get`/`http_post`/`tcp_ping` 命令 + LuCI HTTP 反向代理完整实现（~360行） | 必要 — 后端 HTTP/代理支持 |
-| `easytier-gui/src-tauri/Cargo.toml` | 新增 `reqwest(socks)`/`hyper`/`http-body-util`/`hyper-util`/`bytes` + `tauri-plugin-opener`/`tauri-plugin-positioner` 依赖 | 必要 — Rust 侧 HTTP 客户端 + 代理服务器 + 跨平台浏览器/托盘定位 |
+| `easytier-gui/src-tauri/src/lib.rs` | 新增 `http_get`/`http_post`/`tcp_ping` 命令 + LuCI 流式反向代理、文件传输进度事件、长传输超时控制 | 必要 — 后端 HTTP/代理支持 |
+| `easytier-gui/src-tauri/Cargo.toml` | 新增 `reqwest(socks,stream)`/`hyper`/`http-body-util`/`hyper-util`/`bytes`/`futures-util` + `tauri-plugin-opener`/`tauri-plugin-positioner` 依赖 | 必要 — Rust 侧流式 HTTP 客户端 + 代理服务器 + 跨平台浏览器/托盘定位 |
 | `easytier-gui/index.html` | viewport 添加 `maximum-scale=1.0, user-scalable=no` | 必要 — 禁用 Android 双指缩放 |
 | `easytier-gui/src-tauri/tauri.conf.json` | 插件权限配置：`shell.open` scope、clipboard-manager 权限 | 必要 — 跨平台浏览器打开 + 剪贴板 |
 | `easytier-gui/src-tauri/capabilities/migrated.json` | 新增 `shell:allow-open`、`clipboard-manager:allow-read`、`clipboard-manager:allow-write` 权限 | 必要 — 插件能力声明 |
@@ -35,7 +35,7 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 
 | 文件 | 变更 | 必要性 |
 |------|------|--------|
-| `MainActivity.kt` | 新增主题 Bridge（`ThemeBridge`，动态切换状态栏颜色）+ 禁用双指缩放 + 移除旧 `PasteBridge`（剪贴板已迁移至 `tauri-plugin-clipboard-manager`） | 必要 — Android 主题/缩放/剪贴板 |
+| `MainActivity.kt` | 新增主题 Bridge、禁用双指缩放、`DownloadListener + DownloadManager` 下载、加固版文件选择 ChromeClient 包装器 | 必要 — Android 主题/文件传输兼容性 |
 | `MainForegroundService.kt` | 主前台服务保留 `dataSync` 类型，避免 Android 10–13 因 `specialUse` 类型不匹配导致启动闪退 | 必要 — Android 启动兼容性 |
 | `AndroidManifest.xml` | `usesCleartextTraffic="true"` 硬编码 | 必要 — 局域网 HTTP 请求 |
 | `app/build.gradle.kts` | release 构建添加 `manifestPlaceholders["usesCleartextTraffic"]="true"`；补充 `androidx.lifecycle:lifecycle-process:2.6.2` | 必要 — 配合明文 HTTP + Wry 生命周期桥 |
@@ -51,7 +51,7 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 | `easytier-gui/package.json` | `dev`/`build` 保持定制精简命令，移除 frontend-lib 预构建与 `vue-tsc --noEmit`；新增 `@tauri-apps/plugin-opener` | 必要 — 保持定制构建流程/浏览器打开能力 |
 | `pnpm-workspace.yaml` | 保留 native build 白名单和依赖版本约束 | Fork 适配 — 保证本地/CI 安装一致 |
 | `pnpm-lock.yaml` | 依赖锁文件更新（因新增依赖变更） | 必要 — 附带产物 |
-| `Cargo.lock` | Rust 依赖锁更新（新增 reqwest/hyper + kcp-sys rev） | 必要 — 附带产物 |
+| `Cargo.lock` | Rust 依赖锁更新（新增流式传输依赖 + kcp-sys rev） | 必要 — 附带产物 |
 | `easytier-gui/src/auto-imports.d.ts` | **[自动生成]** unplugin-auto-import 更新 | 附带 — 新增 IPC 函数自动导入声明 |
 | `easytier-gui/src/typed-router.d.ts` | **[自动生成]** 新增 `/home` 路由声明 | 附带 — 新增页面自动路由注册 |
 | `.gitignore` | 新增 Tauri Android 构建产物、`.claude/`、`.mimocode/` 忽略规则 | 必要 — 忽略本地构建/工具产物 |
@@ -270,6 +270,226 @@ PC
 **PC 性能监控**：展开设备详情后显示 CPU/内存/GPU 使用率图表、磁盘 IO 读写速度、网络上下行流量，10 秒自动刷新。
 
 **自动刷新**：30 秒轮询设备在线状态。
+
+
+### 电脑页面升级计划（命令功能待实施）
+
+> 本节记录电脑页面升级方案。父子卡片层级优化已实施；远程命令执行、长时命令和命令结果能力仍按本节计划实施。实施时保留现有 WOL、性能监控和定制内容，不对 `easytier-core` 做修改。
+
+#### 升级目标
+
+1. 加强设备卡片展开后的父子层级，使父设备始终是视觉主体。
+2. 在电脑设备下增加可配置的远程命令执行能力。
+3. 支持长时间命令：App 退出、切后台或网络短暂中断时，命令继续执行并可重新接入。
+4. 支持命令运行状态、退出码、stdout/stderr 和增量结果返回。
+5. 命令执行必须基于 `wol-agent` 本地白名单，不开放任意 Shell。
+
+#### 父子卡片层级
+
+现有展开状态以数组下标记录，但设备排序变化后下标不稳定。计划改为稳定设备 ID：
+
+```ts
+expandedDeviceId = mac || `${ip}:${agent_port}`
+```
+
+展开后的视觉关系调整为：
+
+- 父设备卡片保持原始尺寸、完整透明度，不再使用 `opacity: 0.82` 或 `transform: scale(0.95)` 削弱主体。
+- 子内容放入父卡片下方的缩进工作区，使用垂直树线、`└─` 分支或等价树状连接符建立从属关系。
+- 子工作区包含“命令”和“性能”两个模块；空间紧张时使用“性能 / 命令”分段切换，避免展开后页面过长。
+- 子卡片使用较浅的表面色、较细边框和较小圆角，不使用强于父卡片的独立阴影。
+- 父卡片继续承载名称、在线状态、IP、唤醒、关机等主操作；性能数据和命令属于展开后的派生内容。
+- 展开、收起和列表重排均按稳定设备 ID 保持状态，避免设备排序变化导致展开对象错位。
+
+#### 远程命令配置
+
+命令定义由 `wol-agent` 本地配置维护，App 只获取可展示信息并提交 `command_id`，不提交程序路径、参数或 Shell 文本。
+
+建议配置格式：
+
+```toml
+[[commands]]
+id = "network-diag"
+label = "网络诊断"
+description = "采集 DNS、路由和网络连通性信息"
+program = "C:\\Tools\\diag.exe"
+args = ["--quick"]
+timeout_secs = 120
+risk = "normal"
+duration_hint = "约 30 秒"
+cancelable = true
+```
+
+约束如下：
+
+| 项目 | 规则 |
+|------|------|
+| 命令来源 | `wol-agent` 本地 allowlist，不由 App 动态写入 |
+| 执行方式 | 使用明确的 `program + args` 直接启动，不启用 `shell=true` |
+| App 请求 | 仅发送 `command_id` 和幂等 `request_id` |
+| 命令信息 | App 不展示、也不接收真实 `program` 和 `args` |
+| 风险等级 | 至少区分普通和高风险；高风险命令使用更强的二次确认 |
+| 并发限制 | 默认每个命令同时只允许一个活动运行 |
+| 超时 | 每个命令独立配置；超时后终止完整进程树 |
+| 取消 | 仅 `cancelable = true` 的命令显示取消入口 |
+
+#### 长时命令与结果模型
+
+命令不能通过一次同步 HTTP 请求等待全部结果。采用“提交、返回运行 ID、增量读取、可重连”的异步模型：
+
+```text
+POST command-runs
+  → 立即返回 run_id
+  → wol-agent 异步启动命令
+  → App 轮询运行状态和输出游标
+  → succeeded / failed / timed_out / canceled / interrupted
+```
+
+建议命令 API：
+
+```http
+GET  /api/v1/commands
+POST /api/v1/command-runs
+GET  /api/v1/command-runs?active=true
+GET  /api/v1/command-runs/{run_id}
+GET  /api/v1/command-runs/{run_id}/output?after_seq=0
+POST /api/v1/command-runs/{run_id}/cancel
+```
+
+提交请求示例：
+
+```json
+{
+  "command_id": "network-diag",
+  "request_id": "3c259c3c-5cb1-4d32-a48d-72e6f221a4f4"
+}
+```
+
+运行状态：
+
+| 状态 | 含义 |
+|------|------|
+| `queued` | 已接收，等待执行 |
+| `running` | 命令正在执行 |
+| `succeeded` | 正常结束且退出码为 0 |
+| `failed` | 启动失败或退出码非 0 |
+| `timed_out` | 超过命令配置的执行时限 |
+| `canceled` | 用户主动取消 |
+| `interrupted` | `wol-agent` 重启导致未完成运行无法恢复 |
+| `unknown` | 状态无法可靠确认 |
+
+输出采用序列号游标增量读取，避免长命令或大结果一次性占用内存和网络：
+
+```json
+{
+  "next_seq": 20,
+  "eof": false,
+  "chunks": [
+    { "seq": 18, "stream": "stdout", "text": "..." },
+    { "seq": 19, "stream": "stderr", "text": "..." }
+  ]
+}
+```
+
+运行详情至少返回：
+
+- 命令展示名称和风险等级。
+- `queued_at`、`started_at`、`finished_at`、运行时长。
+- 当前状态、退出码、超时原因或错误信息。
+- stdout/stderr 增量输出及各自序号。
+- `eof`、输出截断标记和下一次读取游标。
+- 是否允许取消、是否已取消。
+
+第一版支持文本和 JSON 结果；文件、二进制结果和结果文件下载暂不纳入。App 需限制单次显示结果大小并标记截断，完整原始输出的持久化策略在实施前另行确认。
+
+生命周期规则：
+
+- App 退出、切后台或网络中断时，`wol-agent` 不终止命令。
+- App 重新打开后先读取 `active=true` 的运行列表，再按 `run_id` 重新接入未结束结果。
+- `wol-agent` 重启时，第一版将未能确认结束的旧运行标记为 `interrupted`，不自动重试，避免重复执行高风险命令。
+- 跨 `wol-agent` 重启保留运行日志和结果可在后续阶段实现，不在第一版承诺。
+- 取消操作必须终止完整进程树：Windows 使用 Job Object 或等价机制，Unix 使用进程组。
+- 超时和取消必须写入最终状态、退出信息和时间戳。
+
+#### App 交互设计
+
+**命令列表**
+
+- 命令以列表展示，每项包含图标、名称、简述、预计时长和风险标记。
+- 不显示真实程序路径、命令行参数或凭据。
+- 正在运行的命令显示运行状态、已用时和进入结果页入口。
+- 同一命令已有活动运行时，不重复发起，改为查看当前运行。
+
+**执行确认**
+
+- 点击命令后显示二次确认 Dialog。
+- Dialog 展示命令名称、用途、目标设备、预计时长、超时时间、风险说明和不可逆影响。
+- 普通命令需要明确点击“确认执行”；高风险命令增加额外确认动作或输入确认。
+- 确认提交后立即进入运行视图，不等待命令完成。
+
+**运行与结果视图**
+
+- 显示排队、运行、超时、取消、成功、失败、中断等状态。
+- 显示开始时间、已用时、退出码和错误原因。
+- stdout/stderr 分流展示，可按流筛选；日志滚动时提供暂停自动滚动和复制能力。
+- 通过 `after_seq` 增量拉取结果，断线恢复后继续从游标读取。
+- 可取消命令仅在执行中显示取消入口；取消前需要再次确认。
+- 输出过长或过旧时显示截断提示，不让 WebView 无限制加载。
+
+#### 安全要求
+
+远程命令执行属于高风险能力，完成认证和授权前不得对外启用命令 API：
+
+- 命令 API 必须使用每台设备独立的命令凭据或令牌，不能继续复用当前无认证 HTTP 接口。
+- `wol-agent` 每次执行前都按 `command_id` 重新校验本地 allowlist。
+- App 不参与拼接命令行，不接受服务器返回的真实 `program`/`args`。
+- `request_id` 提供幂等保护，网络重试不得重复启动命令。
+- 记录命令 ID、目标设备、发起时间、状态、退出码和调用方标识，避免记录敏感输出或凭据。
+- 限制请求频率、单命令并发数、运行时长和输出总量。
+- 不允许通过参数、环境变量或工作目录注入 Shell 文本。
+- 现有 `/api/v1/status`、`/api/v1/stats`、`/api/v1/shutdown` 的认证兼容策略需在实施时明确；不能因新增命令接口扩大原有接口风险。
+
+#### 实施改造点
+
+| 层级 | 计划改动 |
+|------|----------|
+| Tauri HTTP Bridge | 扩展 `httpPost` 为支持 method、JSON body、headers、timeout，并返回 HTTP status 和响应体 |
+| `easytier-gui/src/composables/backend.ts` | 增加命令列表、提交运行、查询运行、增量输出和取消接口封装 |
+| `wol-agent` | 增加命令 allowlist、异步运行管理器、状态/输出缓存、超时、进程树取消和认证 |
+| `easytier-gui/src/pages/home.vue` | 使用稳定 ID 重构展开状态，增加树状子工作区、命令列表、确认 Dialog、运行和结果视图 |
+| `docs/project.md` | 记录最终实现状态、配置格式、API 和安全边界 |
+
+当前 `httpPost` 只能提交 URL、代理和超时，不支持 JSON body、请求头、响应状态码，因此 Tauri HTTP Bridge 是命令功能的前置改造。
+
+#### 实施顺序
+
+1. 扩展 Tauri HTTP Bridge，支持带 body/header 的通用请求和非 2xx 响应读取。
+2. 在 `wol-agent` 实现认证、命令 allowlist、异步运行器、状态机、输出游标、超时和进程树取消。
+3. 重构电脑页展开状态和父子卡片层级，不改变现有 WOL/性能数据流。
+4. 增加命令列表、二次确认、活动运行恢复和结果查看器。
+5. 补充配置示例、API 文档、失败场景和验收记录。
+6. 分阶段验证普通命令、长时命令、取消、超时、App 重启恢复、网络重连、Agent 重启和输出截断。
+
+#### 验收标准
+
+- 设备列表排序变化不会导致展开状态跳到其他设备。
+- 父卡片视觉权重明显高于子模块，展开区域与父设备的从属关系清晰。
+- App 只能执行预先配置的命令，不能提交任意程序或 Shell。
+- 提交长时命令后立即返回 `run_id`，关闭或切换 App 不影响命令继续执行。
+- App 重新打开后能够找到活动运行并继续读取结果。
+- stdout/stderr 可区分、按序增量读取，断线后不会重复返回已读结果。
+- 超时、失败、取消和中断具有明确终态，不重复执行命令。
+- 取消操作能清理完整子进程树，不遗留后台进程。
+- 未完成认证和授权设计前，命令接口不对外启用。
+
+#### 实施前需确认的边界
+
+以下内容不默认扩展，实施前需要单独确认：
+
+- 是否要求命令运行日志跨 `wol-agent` 重启长期持久化。
+- 是否需要导出或下载完整命令结果文件。
+- 是否需要多命令并发、定时命令、命令参数输入或命令分组。
+- 是否将现有 WOL 状态、关机和统计接口一并迁移到认证体系。
 
 ### 组网页面
 
@@ -612,7 +832,14 @@ Glassmorphism + Material You 混合风格，自定义 CSS 变量体系。
 
 ### Toast
 
-自定义 Material snackbar（替代 PrimeVue `useToast`）：底部居中胶囊，2.5s 自动消失，滑入动画。
+自定义 Material snackbar（替代 PrimeVue `useToast`）：底部居中胶囊，滑入动画。
+
+- 按 `info / progress / success / error` 四种状态显示不同颜色和指示器。
+- 普通提示默认 2.5 秒；上传下载的开始、进度、完成和失败使用独立时长。
+- 上传/下载提示显示文件名、传输方向、文件大小、进度百分比、耗时和错误摘要。
+- 全部提示接入应用中英文语言配置，切换语言后即时使用对应文案。
+- Android 原生下载结果通过 WebView 事件回传到应用 Toast，不再显示硬编码英文提示。
+
 
 ## 重难点技术方案
 
@@ -713,6 +940,46 @@ refreshLuciIframe (JS)
 - HTTP 代理的路径追踪必须区分页面导航和资源请求，仅靠 URL 模式不可靠（不同 Web 应用的路径规范不同），响应 `Content-Type` 是更通用的判断依据
 - 刷新类操作应先隐藏当前内容（显示加载态），等新资源就绪后再展示，避免残留旧 URL 指向已销毁的代理
 - Rust 侧 proxy 生命周期管理应与 JS 侧的显式控制（`luciProxyStop` → `luciProxyStart`）保持一致的双向确认模式
+
+
+### 6. 路由器 WebView 文件上传/下载（已实施）
+
+路由器 iframe 不依赖 LuCI 页面自行保存文件，而是由 App 的流式反向代理和平台文件能力共同完成传输。
+
+**Rust LuCI 代理**
+
+- 上传请求体使用 `Incoming::into_data_stream()` 流式转发，不再一次性读入内存。
+- 下载响应使用 `bytes_stream()` 流式返回，不再通过 `resp.bytes()` 缓冲整个文件。
+- 移除 3 秒总超时；改为连接超时、发送响应头超时和单块 60 秒空闲超时。
+- 保留 `Content-Length`、`Content-Type`、`Content-Disposition`、`Content-Range` 等传输相关响应头。
+- 移除会阻止 iframe 加载的 `X-Frame-Options`、CSP 和跨源隔离响应头，并将路由器绝对跳转地址重写回本地代理路径。
+- 本地 LuCI Listener 只启动一次，并维护多个按 `router_id` 区分的路由器上下文；切换路由器只更新活动上下文和 iframe URL，不再执行 `start/stop`。
+- 路由器身份使用稳定 `router_id`，每个上下文独立保存登录 Cookie、LAN/ET 客户端、`last_path` 和下载缓存。
+- 刷新、切换网络路径或重连时复用同一个本地 Listener，避免 WebView origin 随机变化。
+- 上传、下载按 500ms 或 1MiB 发出 `router-transfer` 进度事件，并在开始、完成、失败时发出终态事件。
+- 非幂等上传失败后不自动重试；登录过期导致的上传需要用户重新提交。
+
+**Android**
+
+- `MainActivity` 注册 `DownloadListener`，不再依赖 Wry Android 缺失的下载回调。
+- 下载响应先由 Rust 代理写入应用缓存，再通过内部 `/__easytier_download__` 回放接口交给 Android 保存；这样即使原下载由 POST 表单产生，也不会被错误地重新提交为 GET。
+- `127.0.0.1` 本地 LuCI 代理下载由 App 进程流式写入 MediaStore Downloads，避免系统 DownloadManager 无法访问应用 loopback 服务。
+- 外部 HTTP/HTTPS 下载仍交给系统 `DownloadManager`，保存到公共 Downloads 并显示系统下载通知。
+- 文件上传由加固版 `WebChromeClient` 处理，支持单选、多选、MIME/扩展名过滤，并保证选择取消或异常时正确回调 WebView。
+- 相机采集等特殊文件选择仍委托给 Wry 原客户端。
+
+**桌面端**
+
+- Windows WebView2、macOS WKWebView、Linux WebKitGTK 使用 Wry 自带下载能力，下载到系统默认 Downloads 目录。
+- 大文件是否成功主要由流式 LuCI 代理保证；桌面端暂不额外弹出保存位置对话框。
+- macOS 下载完成事件可能不返回最终路径，这是 Wry/WebKit API 限制。
+
+**边界**
+
+- HTTP/HTTPS 文件是第一支持范围。
+- `blob:`、JavaScript 动态生成文件、断点续传和自定义保存目录暂不保证。
+- Android 公共 Downloads 写入失败时回退到应用外部 Downloads 目录，并保留下载通知。
+
 
 ## 配置规范
 

@@ -178,10 +178,10 @@ export async function tcpPing(host: string, port: number) {
 }
 
 export async function luciProxyStart(
-  routerIp: string, username: string, password: string, socks5Proxy: string | null,
+  routerId: string, routerIp: string, username: string, password: string, socks5Proxy: string | null,
 ) {
   return await invoke<string>('luci_proxy_start', {
-    routerIp, username, password, socks5Proxy,
+    routerId, routerIp, username, password, socks5Proxy,
   })
 }
 
@@ -189,6 +189,6 @@ export async function luciProxyStop() {
   return await invoke<void>('luci_proxy_stop')
 }
 
-export async function luciGetLastPath() {
-  return await invoke<string>('luci_get_last_path')
+export async function luciGetLastPath(routerId?: string) {
+  return await invoke<string>('luci_get_last_path', { routerId: routerId || null })
 }
