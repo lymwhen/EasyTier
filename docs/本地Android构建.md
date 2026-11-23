@@ -35,6 +35,16 @@ cd /mnt/d/projects/projectsalpha/EasyTier
 
 Linux NDK 不要直接解压到 NTFS 目录。NDK 中存在 8 组仅大小写不同的头文件，NTFS 默认无法同时保存；因此 D 目录保留原始 ZIP，`SdkLinux/ndk/.../linux-x86_64` 指向 ext4/home 下的解压缓存。
 
+普通 Ubuntu shell 通常找不到 `java` 和 `pnpm`；执行手动步骤前先加载环境并做快速检查：
+
+```bash
+source /mnt/d/tools/EasyTierLinux/env.sh
+command -v pnpm cargo java
+test -x /mnt/d/tools/EasyTierLinux/build-android-arm64.sh
+```
+
+`build-android-arm64.sh` 内部也会加载同一个 `env.sh`，因此一键脚本不需要依赖当前 shell 是否预先执行过 `source`；但 Vite、Cargo 和 Gradle 必须保持同一环境变量快照。
+
 ### 一键构建
 
 代码没有依赖清单变化时，直接执行：
@@ -63,12 +73,61 @@ INSTALL_DEPS=1 /mnt/d/tools/EasyTierLinux/build-android-arm64.sh
 # 前端依赖没有变化，跳过 plugin/frontend-lib 构建
 SKIP_FRONTEND_DEPS=1 /mnt/d/tools/EasyTierLinux/build-android-arm64.sh
 
-# 仅重新打包，且 Rust 与前端产物均未变化
+# 跳过 Cargo；仅在 Rust 与前端产物均未变化时使用
 SKIP_RUST=1 /mnt/d/tools/EasyTierLinux/build-android-arm64.sh
 
 # 清理 Android 构建缓存后再构建
 CLEAN_ANDROID=1 /mnt/d/tools/EasyTierLinux/build-android-arm64.sh
 ```
+
+### 如何选择快速构建
+
+| 变更范围 | 推荐命令 | 构建行为 |
+|------|------|------|
+| 仅 `easytier-gui` 的 Vue/TS/CSS | `SKIP_FRONTEND_DEPS=1 /mnt/d/tools/EasyTierLinux/build-android-arm64.sh` | 仍执行 Vite、Cargo 和 Gradle |
+| `tauri-plugin-vpnservice`、`frontend-lib` 或 lockfile 变化 | 不设置 `SKIP_FRONTEND_DEPS` | 构建前端依赖，再执行 Vite、Cargo 和 Gradle |
+| 仅 Rust Native 变化 | `SKIP_FRONTEND_DEPS=1 /mnt/d/tools/EasyTierLinux/build-android-arm64.sh` | 跳过前端依赖，重新编译 Rust 并打包 |
+| 仅 Android Kotlin/Manifest 变化，且前端与 Rust 产物不变 | `SKIP_FRONTEND_DEPS=1 SKIP_RUST=1 /mnt/d/tools/EasyTierLinux/build-android-arm64.sh` | 不编译前端依赖和 Rust；仍执行 Vite 资源同步、JNI 校验与 Gradle 打包 |
+
+> ⚠️ **前端修改不能设置 `SKIP_RUST=1`。** Tauri 会把 `easytier-gui/dist/` 嵌入 `libapp_lib.so`；只运行 Vite 和 Gradle 会导致 APK 仍携带旧的 Native 内嵌资源。`SKIP_FRONTEND_DEPS=1` 只跳过 plugin/frontend-lib，不会跳过 `easytier-gui` 的 Vite 构建。
+
+### 构建结果与修改验收
+
+一键脚本成功时应同时出现以下关键输出：
+
+```text
+bridge=22 native=22 missing=[] extra=[]
+Android JNI bridge matches libapp_lib.so
+BUILD SUCCESSFUL
+APK: /mnt/f/tmp/apk/app-arm64-release-YYYYMMDDHHMM.apk
+<sha256>  /mnt/f/tmp/apk/app-arm64-release-YYYYMMDDHHMM.apk
+```
+
+脚本已经自动执行 `apksigner verify`；出现 `APK:` 和 SHA-256 表示签名校验通过。仅看到 Vite 构建成功不代表最终 APK 已更新，还必须看到 Cargo、JNI 校验和 Gradle 成功。
+
+如果需要确认某项前端修改确实进入 APK，应使用修改产生的唯一字符串进行检查。Ubuntu 环境可能没有 `unzip`，使用 Python 标准库即可：
+
+```bash
+APK=/mnt/f/tmp/apk/app-arm64-release-YYYYMMDDHHMM.apk
+MARKER=本次修改引入的唯一字符串
+python3 - "$APK" "$MARKER" <<'PY'
+import sys
+import zipfile
+
+apk, marker = sys.argv[1], sys.argv[2].encode()
+with zipfile.ZipFile(apk) as zf:
+    hits = [
+        name for name in zf.namelist()
+        if name.startswith("assets/frontend/") and marker in zf.read(name)
+    ]
+
+print(f"marker={marker.decode()}")
+print(f"hits={hits}")
+assert hits, "修改未出现在 APK 的 assets/frontend 中"
+PY
+```
+
+验证后恢复临时测试内容，并重新执行快速构建，确认最终 APK 不再包含测试标记。常规修改也可以比较修改前后的 APK SHA-256，并检查 APK 内 `assets/frontend/` 与 `app/src/main/assets/frontend/`、`libapp_lib.so` 与 `jniLibs/arm64-v8a/libapp_lib.so` 是否逐文件一致。
 
 ### 手动构建步骤
 
@@ -187,13 +246,23 @@ cp "$ROOT/easytier-gui/src-tauri/gen/android/app/build/outputs/apk/arm64/release
 
 ### Ubuntu/WSL 构建耗时参考
 
-| 场景 | 预计耗时 |
-|------|----------|
-| 无变更，只重新打包 | 数分钟 |
-| 仅 Android Kotlin/Manifest 变更，`SKIP_RUST=1` | 约 2–4 分钟 |
-| 仅 Rust Native 变更 | Rust 增量编译 + Gradle 打包 |
-| 前端变更 | Vite 构建 + Gradle 打包 |
-| 全新环境、冷缓存 | 主要耗时在 Cargo/Gradle 下载和首次编译 |
+以下为 2026-11-23 在当前 WSL、缓存已存在环境中的实测值；NTFS/D 盘上的 Vite 与 Cargo 阶段明显慢于文档后半部分的 Windows 参考值：
+
+| 场景 | 命令 | 实测耗时 |
+|------|------|------|
+| 完整一键构建，包含 plugin/frontend-lib | 默认命令 | 约 13 分 45 秒 |
+| 仅 `easytier-gui` 前端修改 | `SKIP_FRONTEND_DEPS=1` | 约 6 分 53 秒 |
+| 其中 Vite | — | 约 2 分 25 秒 |
+| 其中 Cargo `easytier-gui` 增量/重链 | — | 约 2 分 29 秒 |
+| 其中 Gradle | — | 约 47–67 秒 |
+| 全新环境、冷缓存 | 默认命令 | 主要耗时在 Cargo/Gradle 下载和首次编译 |
+
+预期成功但不需要中断构建的常见输出：
+
+- Browserslist `caniuse-lite is 6 months old`
+- Android Gradle Plugin 8.3.2 对 `compileSdk = 36` 的兼容性提示
+- Rust 的 unused import / dead code 警告
+- `lintVital` 阶段的 Kotlin metadata `2.1.0` 与 `1.9.0` 不匹配日志；只要最后为 `BUILD SUCCESSFUL` 即不阻断构建
 
 缓存已经配置在 `/mnt/d/tools`、`/mnt/f/tmp/gradle-tmp` 和 Cargo/Rust 缓存目录。正常增量构建不要再重新下载工具链。
 
