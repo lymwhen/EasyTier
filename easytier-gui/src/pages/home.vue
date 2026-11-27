@@ -2658,7 +2658,7 @@ onUnmounted(() => {
       </header>
       <div v-if="showDebug && wolDebug && sortedWol.length" class="px-4 py-1 text-xs opacity-60" style="color:var(--md-secondary);font-family:monospace;word-break:break-all;position:absolute;top:calc(var(--safe-top) + 56px);left:0;right:0;z-index:5">{{ wolDebug }}</div>
       <div class="md-scroll-view">
-        <div class="md-scroll-content">
+        <div class="md-scroll-content" :class="{ 'pc-content-center': !sortedWol.length }">
         <!-- WOL Hero Card -->
         <div v-if="sortedWol.length" class="md-card md-hero md-hero-purple">
           <div class="md-hero-head">
@@ -2690,7 +2690,7 @@ onUnmounted(() => {
         <div v-if="!sortedWol.length" class="pc-empty-state">
           <div class="md-empty">
             <div class="md-empty-ico" aria-hidden="true">
-              <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="3"/><path d="M7 9h10"/><path d="M7 13h6"/></svg>
+              <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="3"/><path d="M7 9h10"/><path d="M7 13h6"/></svg>
             </div>
             <div class="md-empty-text">{{ tt('emptyWol') }}</div>
           </div>
@@ -3208,7 +3208,7 @@ onUnmounted(() => {
       <div v-if="!networks.length && !netRunning && !netConnecting" class="md-scroll-view" style="display:flex;align-items:center;justify-content:center">
         <div class="md-empty">
           <div class="md-empty-ico" aria-hidden="true">
-            <svg width="34" height="34" viewBox="-4 -4 32 32" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/></svg>
+            <svg width="44" height="44" viewBox="-4 -4 32 32" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/></svg>
           </div>
           <div class="md-empty-text">{{ tt('emptyNet') }}</div>
         </div>
@@ -3436,7 +3436,7 @@ onUnmounted(() => {
       <div class="md-iframe-area">
         <div v-if="!luciRouters.length" class="md-empty">
           <div class="md-empty-ico" aria-hidden="true">
-            <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="m14.6 9.4-1.7 4.7-4.7 1.7 1.7-4.7 4.7-1.7Z"/></svg>
+            <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="m15.2 8.8-1.7 4.7-4.7 1.7 1.7-4.7 4.7-1.7Z"/></svg>
           </div>
           <div class="md-empty-text">{{ tt('emptyRouter') }}</div>
         </div>
@@ -3588,7 +3588,7 @@ onUnmounted(() => {
         <span class="md-tab-label">{{ tt('wol') }}</span>
       </button>
       <button class="md-tab" :class="{ 'md-tab-active': activeTab === 'luci' }" @click="switchTab('luci')" :aria-current="activeTab === 'luci' ? 'page' : 'false'">
-        <span class="md-tab-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="m14.6 9.4-1.7 4.7-4.7 1.7 1.7-4.7 4.7-1.7Z"/></svg></span>
+        <span class="md-tab-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="m15.2 8.8-1.7 4.7-4.7 1.7 1.7-4.7 4.7-1.7Z"/></svg></span>
         <span class="md-tab-label">{{ tt('routers') }}</span>
       </button>
       <button class="md-tab" :class="{ 'md-tab-active': activeTab === 'net' }" @click="switchTab('net')" :aria-current="activeTab === 'net' ? 'page' : 'false'">
@@ -4757,6 +4757,14 @@ html[data-theme="dark"] .md-hero-metric {
   justify-content: center;
   color: var(--pc-on-surface-var);
 }
+/* Vertically center the empty state within the viewport when no PCs exist */
+.pc-page .md-scroll-content.pc-content-center {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  box-sizing: border-box;
+  min-height: 100dvh;
+}
 
 /* Unified Material You empty state for PC / Router / Network tabs */
 .md-empty {
@@ -4772,10 +4780,10 @@ html[data-theme="dark"] .md-hero-metric {
 .md-empty-ico {
   display: grid;
   place-items: center;
-  width: 64px;
-  height: 64px;
+  width: 80px;
+  height: 80px;
   flex: none;
-  border-radius: 20px;
+  border-radius: 24px;
   background: var(--n3-secondary-container);
   color: var(--n3-on-secondary-container);
 }

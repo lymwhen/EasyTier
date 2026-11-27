@@ -893,10 +893,11 @@ Glassmorphism + Material You 混合风格，自定义 CSS 变量体系。
 
 **三页统一空状态**（`md-empty`）：
 
-- `64px` 圆角 `20px` 方形图标容器，secondary-container 底 + on-secondary-container 图标色，与组网设备列表 `40px / 12px` 圆角头像同源等比
-- 图标复用底部 Tab 栏矢量图（电脑 = 圆角屏、路由器 = 圆环 + 路由、组网 = 层叠），`34px`、stroke 2，禁止 emoji
+- `80px` 圆角 `24px` 方形图标容器，secondary-container 底 + on-secondary-container 图标色，与组网设备列表 `40px / 12px` 圆角头像同色系
+- 图标复用底部 Tab 栏矢量图（电脑 = 圆角屏、路由器 = 圆环 + 路由、组网 = 层叠），`44px`、stroke 2，禁止 emoji；路由器图标中心菱形已修正为圆心正居中（顶点整体右移 0.6 / 上移 0.6，tab 栏与空状态共用同一路径）
 - 下方单行引导文案：电脑「添加电脑以开始」、路由器「配置路由器以开始」、组网「配置组网以开始」（英文对应 Add a PC / Configure a router / Configure a network to get started），`15px / 500`，on-surface-variant 色
 - 复用页面进入淡入动画（`.md-page.page-active .md-empty`）
+- 电脑页空态通过 `pc-content-center` 修饰类将滚动内容撑满 `100dvh` 并 flex 居中，使图标与文案在标题栏与 Tab 栏之间的可见区内垂直居中
 
 **网络设备/服务器卡片**（n3 ListItem）：
 
