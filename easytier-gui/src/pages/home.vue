@@ -74,8 +74,7 @@ const T: Record<string, [string, string]> = {
   channel: ['Channel', '通道'],
   refresh: ['Refresh', '刷新'],
   editConfig: ['Edit config', '编辑配置'],
-  noWolDevices: ['No PC devices', '无电脑设备'],
-  tapToAdd: ['Tap ✏️ to add devices via TOML config', '点击 ✏️ 通过 TOML 配置添加设备'],
+  emptyWol: ['Add a PC to get started', '添加电脑以开始'],
   online: ['Online', '在线'],
   offline: ['Offline', '离线'],
   routerOffline: ['Router Offline', '路由器离线'],
@@ -98,8 +97,7 @@ const T: Record<string, [string, string]> = {
   addNetwork: ['Add Network', '添加网络'],
   unnamed: ['Unnamed', '未命名'],
   noNetwork: ['No Network', '无网络'],
-  noNetworks: ['No networks configured', '未配置网络'],
-  tapToSwitch: ['Tap ⚡ to switch and add networks', '点击 ⚡ 切换并添加网络'],
+  emptyNet: ['Configure a network to get started', '配置组网以开始'],
   connect: ['Connect', '连接'],
   disconnect: ['Disconnect', '断开'],
   servers: ['Servers', '服务器'],
@@ -142,7 +140,7 @@ const T: Record<string, [string, string]> = {
   netTab: ['Network', '组网'],
   luciTab: ['Router', '路由器'],
   routers: ['Routers', '路由器'],
-  noRouters: ['No routers configured', '未配置路由器'],
+  emptyRouter: ['Configure a router to get started', '配置路由器以开始'],
   editRouter: ['Edit Router', '编辑路由器'],
   editRoutersToml: ['Edit routers.toml', '编辑 routers.toml'],
   connectingRouter: ['Connecting...', '连接中...'],
@@ -2209,9 +2207,10 @@ function saveLuciConfig() {
   showLuciEditor.value = false
   showSnack(tt('configSaved'))
   const cur = luciRouters.value[luciIdx.value] || luciRouters.value[0]
-  if (cur && luciIdx.value >= 0) {
-    luciIdx.value = luciRouters.value.findIndex(r => r.ip === cur.ip)
-    startLuciProxy(cur)
+  if (cur) {
+    const idx = luciRouters.value.findIndex(r => r.ip === cur.ip)
+    luciIdx.value = idx >= 0 ? idx : 0
+    startLuciProxy(luciRouters.value[luciIdx.value])
   }
 }
 
@@ -2689,10 +2688,11 @@ onUnmounted(() => {
         </div>
 
         <div v-if="!sortedWol.length" class="pc-empty-state">
-          <div class="flex flex-col items-center gap-3">
-            <svg width="48" height="48" viewBox="0 0 1024 1024" fill="none" stroke="var(--md-muted)" stroke-width="20"><path d="M864 752H624v64h136c12.8 0 24 11.2 24 24s-11.2 24-24 24h-480c-12.8 0-24-11.2-24-24s11.2-24 24-24H400v-64H160c-17.6 0-32-14.4-32-32V192c0-17.6 14.4-32 32-32h704c17.6 0 32 14.4 32 32v528c0 17.6-14.4 32-32 32z m-16-544H176v464h672V208z m-48 416H224V256h576v368z"/></svg>
-            <div class="text-base md-text-muted">{{ tt('noWolDevices') }}</div>
-            <div class="text-sm text-center px-4 md-text-muted">{{ tt('tapToAdd') }}</div>
+          <div class="md-empty">
+            <div class="md-empty-ico" aria-hidden="true">
+              <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="3"/><path d="M7 9h10"/><path d="M7 13h6"/></svg>
+            </div>
+            <div class="md-empty-text">{{ tt('emptyWol') }}</div>
           </div>
         </div>
         <div v-if="sortedWol.length" class="pc-list-head">
@@ -3206,10 +3206,11 @@ onUnmounted(() => {
 
       <!-- No networks configured -->
       <div v-if="!networks.length && !netRunning && !netConnecting" class="md-scroll-view" style="display:flex;align-items:center;justify-content:center">
-        <div class="flex flex-col items-center gap-3 opacity-50">
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="1.2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
-           <div class="text-base md-text-muted">{{ tt('noNetworks') }}</div>
-          <div class="text-sm text-center px-4 md-text-muted">{{ tt('tapToSwitch') }}</div>
+        <div class="md-empty">
+          <div class="md-empty-ico" aria-hidden="true">
+            <svg width="34" height="34" viewBox="-4 -4 32 32" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/></svg>
+          </div>
+          <div class="md-empty-text">{{ tt('emptyNet') }}</div>
         </div>
       </div>
 
@@ -3405,7 +3406,7 @@ onUnmounted(() => {
     </div>
 
     <!-- ==================== Router Tab ==================== -->
-    <div v-show="activeTab === 'luci'" class="md-page" :class="{ 'page-active': activeTab === 'luci' }">
+    <div v-show="activeTab === 'luci'" class="md-page md-page-bg" :class="{ 'page-active': activeTab === 'luci' }">
       <header class="md-hdr">
         <span class="md-hdr-title">{{ currentLuciRouter?.ip || tt('routers') }}</span>
         <span v-if="currentLuciRouter && getWolPathType() === 'tunnel'" class="md-chip">{{ tt('etLan') }}</span>
@@ -3414,7 +3415,7 @@ onUnmounted(() => {
         <button v-if="proxyUrl" class="md-hdr-btn md-hdr-btn-glass" @click="refreshLuciIframe" :title="tt('refresh')">
           <svg width="20" height="20" viewBox="0 0 1024 1024" fill="currentColor"><path d="M128 170.666667l92.330667 92.330666A382.378667 382.378667 0 0 1 512 128c211.754667 0 384 172.288 384 384h-85.333333c0-164.693333-134.016-298.666667-298.666667-298.666667a297.557333 297.557333 0 0 0-231.125333 110.208L384 426.666667H128V170.666667z m768 682.666666v-256h-256l103.125333 103.125334A297.514667 297.514667 0 0 1 512 810.666667c-164.650667 0-298.666667-134.016-298.666667-298.666667H128c0 211.754667 172.245333 384 384 384a382.378667 382.378667 0 0 0 291.669333-134.997333L896 853.333333z"/></svg>
         </button>
-        <div v-if="luciRouters.length" style="position:relative">
+        <div style="position:relative">
           <button class="md-hdr-btn md-hdr-btn-glass md-switch-btn" @click.stop="showLuciMenu = !showLuciMenu" :title="tt('switchNetwork')">
             <svg width="20" height="20" viewBox="0 0 1024 1024" fill="currentColor"><path d="M900.4 424.87c19.47 0 37.03-11.73 44.49-29.73 7.46-17.98 3.33-38.7-10.43-52.48L713.97 122.19c-7.3-7.3-19.12-7.3-26.42 0l-41.69 41.69c-7.3 7.3-7.3 19.13 0 26.42l138.28 138.27H86.32c-10.19 0-18.46 8.26-18.46 18.46v59.39c0 10.19 8.26 18.46 18.46 18.46H900.4zM937.65 598.72H123.8c-19.47 0-37.03 11.73-44.49 29.73-7.46 17.98-3.33 38.7 10.43 52.48l220.49 220.48c7.3 7.3 19.12 7.3 26.42 0l41.69-41.69c7.3-7.3 7.3-19.13 0-26.42L240.06 695.02h697.59c10.32 0 18.68-8.37 18.68-18.68v-58.93c0-10.32-8.36-18.69-18.68-18.69z"/></svg>
           </button>
@@ -3423,7 +3424,7 @@ onUnmounted(() => {
               <svg width="18" height="18" viewBox="0 0 24 24" fill="var(--md-primary)"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
               <span style="color:var(--md-primary);font-weight:500">{{ tt('editRouter') }}</span>
             </div>
-            <div class="md-sw-divider" />
+            <div v-if="luciRouters.length" class="md-sw-divider" />
             <div v-for="(r, i) in luciRouters" :key="r.ip" class="md-sw-item" @click="switchLuciRouter(i)">
               <span v-if="i === luciIdx" class="md-sw-check">&#10003;</span>
               <span v-else style="width:18px;display:inline-block" />
@@ -3433,10 +3434,11 @@ onUnmounted(() => {
       </div>
       </header>
       <div class="md-iframe-area">
-        <div v-if="!luciRouters.length" class="flex flex-col items-center justify-center h-full gap-3 opacity-50">
-          <svg width="48" height="48" viewBox="0 0 1024 1024" fill="none" stroke="var(--muted)" stroke-width="20"><path d="M881.777778 597.333333h-56.888889V199.111111c0-17.066667-11.377778-28.444444-28.444445-28.444444s-28.444444 11.377778-28.444444 28.444444v398.222222h-227.555556V199.111111c0-17.066667-11.377778-28.444444-28.444444-28.444444s-28.444444 11.377778-28.444444 28.444444v398.222222H256V199.111111c0-17.066667-11.377778-28.444444-28.444444-28.444444s-28.444444 11.377778-28.444445 28.444444v398.222222H142.222222c-31.288889 0-56.888889 25.6-56.888889 56.888889v142.222222c0 31.288889 25.6 56.888889 56.888889 56.888889h739.555556c31.288889 0 56.888889-25.6 56.888889-56.888889v-142.222222c0-31.288889-25.6-56.888889-56.888889-56.888889z"/></svg>
-          <div class="text-base md-text-muted">{{ tt('noRouters') }}</div>
-          <div class="text-sm text-center px-4 md-text-muted">{{ tt('tapToAdd') }}</div>
+        <div v-if="!luciRouters.length" class="md-empty">
+          <div class="md-empty-ico" aria-hidden="true">
+            <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="m14.6 9.4-1.7 4.7-4.7 1.7 1.7-4.7 4.7-1.7Z"/></svg>
+          </div>
+          <div class="md-empty-text">{{ tt('emptyRouter') }}</div>
         </div>
         <iframe v-else-if="luciIframeSrc" :src="luciIframeSrc" :key="luciIframeKey" class="luci-iframe" />
         <div v-else class="flex flex-col items-center justify-center h-full gap-3">
@@ -4100,7 +4102,7 @@ html[data-theme="dark"] {
   background: var(--bg);
 }
 .md-page { position:absolute; inset:0; }
-/* Net & settings pages reuse the computer page background (light #f9f9ff / dark #000) */
+/* Net, router & settings pages reuse the computer page background (light #f9f9ff / dark #000) */
 .md-page-bg { background: var(--pc-bg); }
 
 .md-dialog {
@@ -4754,6 +4756,34 @@ html[data-theme="dark"] .md-hero-metric {
   align-items: center;
   justify-content: center;
   color: var(--pc-on-surface-var);
+}
+
+/* Unified Material You empty state for PC / Router / Network tabs */
+.md-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 24px;
+  text-align: center;
+}
+.md-iframe-area .md-empty { height: 100%; }
+.md-empty-ico {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  flex: none;
+  border-radius: 20px;
+  background: var(--n3-secondary-container);
+  color: var(--n3-on-secondary-container);
+}
+.md-empty-text {
+  font-size: 15px;
+  line-height: 22px;
+  font-weight: 500;
+  color: var(--n3-on-surface-var);
 }
 
 .pc-head.sl {
@@ -5824,6 +5854,7 @@ html[data-theme="dark"] .pc-risk-high {
 .md-page.page-active .md-settings-card,
 .md-page.page-active .md-traffic-card,
 .md-page.page-active .net-peer-card,
+.md-page.page-active .md-empty,
 .md-page.page-active .pc-card {
   animation: pc-card-in .35s ease-out both;
   animation-delay: calc(var(--card-i, 0) * 60ms);

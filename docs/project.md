@@ -20,7 +20,7 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 
 | 文件 | 变更 | 必要性 |
 |------|------|--------|
-| `easytier-gui/src/pages/home.vue` | **[新增]** WOL/网络/路由器/设置四个 Tab 主界面；电脑卡片稳定 ID、居中的展开工作区、路由器传输状态提示；v2.7.1 适配：启动时先加载配置再做 RPC 初始化（try/catch 容错），Android 分支调用 `bootstrapAndroidStorageKeepLocal`，`safeLastNetworkId` 兜底 | 必要 — 项目核心 |
+| `easytier-gui/src/pages/home.vue` | **[新增]** WOL/网络/路由器/设置四个 Tab 主界面；电脑卡片稳定 ID、居中的展开工作区、路由器传输状态提示；v2.7.1 适配：启动时先加载配置再做 RPC 初始化（try/catch 容错），Android 分支调用 `bootstrapAndroidStorageKeepLocal`，`safeLastNetworkId` 兜底；三页统一 Material You 空状态（md-empty）、路由器页底色沿用电脑页 | 必要 — 项目核心 |
 | `easytier-gui/src/composables/android_compat.ts` | **[新增]** Fork 适配层：复用上游 `bootstrapAndroidManagement` 完成 native 加密存储迁移与状态注册后，恢复 localStorage 明文键，维持 fork 以 localStorage 为配置真源的模型 | 必要 — v2.7.1 起 Android 的 `init_rpc_connection`/`loadLastNetworkInstanceId` 依赖该存储初始化，否则启动链抛错致配置不显示 |
 | `easytier-gui/src/App.vue` | 主题初始化 + 窗口标题 + Toast + RouterView（Splash 已移除） | 必要 — 初始化流程 |
 | `easytier-gui/src/composables/theme.ts` | `Theme` 收敛为浅色/深色，保留自动/浅色/深色切换解析；深色统一使用纯黑主题 | 必要 — 主题切换逻辑 |
@@ -95,7 +95,7 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 
 <table>
 <tr><th>模块</th><th>功能项</th><th>平台支持情况</th></tr>
-<tr><td rowspan="12"><b>整体UI</b></td><td>现有玻璃标题栏/Tab 栏 + n3 Material You 内容风格 — 标题栏和底部 Tab 保留玻璃模糊材质；底部导航采用 n3 的图标胶囊、文字排布和 active 状态；总览卡使用 n3 28px 圆角、三段统计卡和粉/绿/蓝渐变（深色下渐变整体压暗一档、更接近纯黑）；按钮与标签统一使用 n3 tonal container 色；深色模式下所有列表项（电脑页设备卡、设置页列表项、组网流量图卡、网络设备/服务器卡片）统一使用组网页设备列表项背景 #1c1f24，电脑列表展开区子卡片保持纯黑；浅色模式下组网页与设置页整页底色沿用电脑页背景（--pc-bg，#f9f9ff）；双主题系统（浅色/深色，深色统一使用纯黑背景）</td><td>全平台</td></tr>
+<tr><td rowspan="12"><b>整体UI</b></td><td>现有玻璃标题栏/Tab 栏 + n3 Material You 内容风格 — 标题栏和底部 Tab 保留玻璃模糊材质；底部导航采用 n3 的图标胶囊、文字排布和 active 状态；总览卡使用 n3 28px 圆角、三段统计卡和粉/绿/蓝渐变（深色下渐变整体压暗一档、更接近纯黑）；按钮与标签统一使用 n3 tonal container 色；深色模式下所有列表项（电脑页设备卡、设置页列表项、组网流量图卡、网络设备/服务器卡片）统一使用组网页设备列表项背景 #1c1f24，电脑列表展开区子卡片保持纯黑；浅色模式下组网页、路由器页与设置页整页底色沿用电脑页背景（--pc-bg，#f9f9ff）；电脑/路由器/组网三页无配置时统一显示 Material You 空状态（secondary-container 圆角方形图标 + tab 栏矢量图标 + 单行引导文案，无 emoji）；双主题系统（浅色/深色，深色统一使用纯黑背景）</td><td>全平台</td></tr>
 <tr><td>底部 Tab 导航栏（电脑 / 路由器 / 组网 / 设置），默认首页可配置（localStorage 持久化）</td><td>全平台</td></tr>
 <tr><td>App 图标更换为圆润 Lucide layers 风格网络层叠图标，PNG 按 Android 官方 108dp 画布尺寸降采样（14.7MB → 1.2MB）；Splash 页面已移除，路由 redirect 直接跳转 `/home`</td><td>全平台</td></tr>
 <tr><td>全部操作图标统一更换 — 标题栏编辑/刷新/切换、底部 Tab、唤醒铃铛面型图标、关机电源面型图标、Connect 链式连接、断开断链 SVG</td><td>全平台</td></tr>
@@ -584,7 +584,7 @@ interface HttpRequestResult {
 
 **标题栏**：未连接时显示网络名称 + 磨砂玻璃编辑按钮 + 切换按钮；已连接时标题切换为"组网" + 红色断开按钮。
 
-**未连接态**：中央大 Connect 按钮（accent 蓝色背景；深色模式改用设置页关于按钮同款 tonal 底色 `--n3-primary-container`）。无网络配置时显示空状态提示（图标 + "未配置网络" + "点击 ⚡ 切换并添加网络"），不显示 Connect 按钮。
+**未连接态**：中央大 Connect 按钮（accent 蓝色背景；深色模式改用设置页关于按钮同款 tonal 底色 `--n3-primary-container`）。无网络配置时显示统一空状态（圆角方形图标壳 + tab 栏组网图标 + "配置组网以开始"），不显示 Connect 按钮。
 
 **连接中**：按钮背景色减淡过渡（0.4s），文字保持白色（深色模式文字/图标取 `--n3-on-primary-container`），涟漪同步换成 tonal 色，spinner 替代链接图标。
 
@@ -681,7 +681,7 @@ Tauri IPC (luci_proxy_start)
 
 #### 多路由器管理
 
-支持配置多个路由器，通过 TOML 格式编辑。标题栏右侧「切换」按钮弹出菜单（与组网切换网络同款）：
+支持配置多个路由器，通过 TOML 格式编辑。标题栏右侧「切换」按钮弹出菜单（与组网切换网络同款；未配置任何路由器时该按钮仍可见，以便添加第一台）：
 
 - **添加路由器**：蓝色 "+" 入口，打开编辑 Dialog
 - **切换路由器**：点击列表项，`switchLuciRouter(i)` 停止旧代理 → 启动新代理 → iframe 重新加载
@@ -692,7 +692,7 @@ Tauri IPC (luci_proxy_start)
 
 ```
 Tab 切换到 LuCI:
-  → 无路由器配置: 显示空状态（"未配置路由器"）
+  → 无路由器配置: 显示统一空状态（tab 栏路由器图标 + "配置路由器以开始"）；标题栏切换按钮无路由器时也显示，菜单内仅"编辑路由器"入口，保存第一台后自动启动代理
   → 有配置但未启动: 自动调用 startLuciProxy(第一个路由器)
     → 加载中: 显示旋转动画 + "连接中..."
     → 成功: 显示 iframe（全屏 100%×100%）
@@ -890,6 +890,13 @@ Glassmorphism + Material You 混合风格，自定义 CSS 变量体系。
 | **标签/胶囊** | `md-chip` / `md-rt` | n3 primary/good/tertiary/secondary container，`8px` 圆角，无内边框 | 信息展示（NAT/路径/状态/P2P/协议） |
 
 区分要点：按钮和标签都使用 n3 tonal container，均无内边框；按钮用于触发操作并带按压缩放，标签只用于信息展示。
+
+**三页统一空状态**（`md-empty`）：
+
+- `64px` 圆角 `20px` 方形图标容器，secondary-container 底 + on-secondary-container 图标色，与组网设备列表 `40px / 12px` 圆角头像同源等比
+- 图标复用底部 Tab 栏矢量图（电脑 = 圆角屏、路由器 = 圆环 + 路由、组网 = 层叠），`34px`、stroke 2，禁止 emoji
+- 下方单行引导文案：电脑「添加电脑以开始」、路由器「配置路由器以开始」、组网「配置组网以开始」（英文对应 Add a PC / Configure a router / Configure a network to get started），`15px / 500`，on-surface-variant 色
+- 复用页面进入淡入动画（`.md-page.page-active .md-empty`）
 
 **网络设备/服务器卡片**（n3 ListItem）：
 
