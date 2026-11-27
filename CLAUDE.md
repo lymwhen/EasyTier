@@ -26,8 +26,9 @@ All project documentation is in `docs/` directory:
 | Path | Role |
 |------|------|
 | `easytier-gui/src/pages/home.vue` | **Main dev target** — WOL / Network / Settings tabs |
-| `easytier-gui/src/composables/backend.ts` | Tauri IPC wrappers (`httpGet`, `httpPost`, `tcpPing`, etc.) |
-| `easytier-gui/src-tauri/src/lib.rs` | Rust Tauri commands (`http_get`, `http_post`, `tcp_ping`) |
+| `easytier-gui/src/composables/backend.ts` | Tauri IPC wrappers (`httpGet`, `httpPost`, `httpRequest`, `httpCancel`, `tcpPing`, etc.) |
+| `easytier-gui/src/composables/computer_commands.ts` | PC remote command API client (`execute`/`status`/`tasks`/`stop`, Bearer auth; per-device commands persisted inline in devices.toml `[[device]] commands = [...]`, token from `command_token`) |
+| `easytier-gui/src-tauri/src/lib.rs` | Rust Tauri commands (`http_get`, `http_post`, `http_request` + `http_cancel`, `tcp_ping`) — `http_request` accepts `requestId`, in-flight requests can be aborted via `http_cancel` |
 | `easytier-gui/src-tauri/Cargo.toml` | Rust deps (reqwest with `socks` feature) |
 | `easytier-gui/src-tauri/gen/android/.../MainActivity.kt` | Android activity (theme bridge for status bar) |
 | `easytier-gui/src/composables/mobile_vpn.ts` | VPN service setup (routes, `disallowedApplications`) |

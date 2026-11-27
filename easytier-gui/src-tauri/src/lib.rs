@@ -713,8 +713,59 @@ struct HttpRequestResponse {
     body: String,
 }
 
+/// Registry of in-flight cancellable HTTP requests, keyed by client-supplied
+/// request id. Dropping the reqwest future aborts the underlying connection.
+static HTTP_REQUEST_CANCELS: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>>,
+> = std::sync::OnceLock::new();
+
+fn http_cancel_registry()
+-> &'static std::sync::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>> {
+    HTTP_REQUEST_CANCELS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+#[tauri::command]
+async fn http_cancel(request_id: String) -> bool {
+    let sender = http_cancel_registry()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&request_id);
+    match sender {
+        Some(sender) => sender.send(()).is_ok(),
+        None => false,
+    }
+}
+
 #[tauri::command]
 async fn http_request(
+    method: String,
+    url: String,
+    proxy: Option<String>,
+    timeout_secs: Option<u64>,
+    headers: Option<std::collections::HashMap<String, String>>,
+    body: Option<String>,
+    request_id: Option<String>,
+) -> Result<HttpRequestResponse, String> {
+    let Some(id) = request_id.filter(|value| !value.trim().is_empty()) else {
+        return perform_http_request(method, url, proxy, timeout_secs, headers, body).await;
+    };
+    let (sender, receiver) = tokio::sync::oneshot::channel::<()>();
+    http_cancel_registry()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(id.clone(), sender);
+    let result = tokio::select! {
+        outcome = perform_http_request(method, url, proxy, timeout_secs, headers, body) => outcome,
+        _ = receiver => Err("HTTP request canceled".to_string()),
+    };
+    http_cancel_registry()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&id);
+    result
+}
+
+async fn perform_http_request(
     method: String,
     url: String,
     proxy: Option<String>,
@@ -2356,6 +2407,7 @@ pub fn run_gui() -> std::process::ExitCode {
             http_get,
             http_post,
             http_request,
+            http_cancel,
             tcp_ping,
             luci_proxy_start,
             luci_proxy_stop,

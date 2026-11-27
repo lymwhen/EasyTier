@@ -1,9 +1,10 @@
+import type { Api } from 'easytier-frontend-lib'
+import type { GetNetworkMetasResponse } from 'node_modules/easytier-frontend-lib/dist/modules/api'
+import type { ManagementStatus, OperationOutcome } from './management_status'
 import { invoke } from '@tauri-apps/api/core'
 import { type } from '@tauri-apps/plugin-os'
-import { Api, NetworkTypes } from 'easytier-frontend-lib'
-import { GetNetworkMetasResponse } from 'node_modules/easytier-frontend-lib/dist/modules/api'
+import { NetworkTypes } from 'easytier-frontend-lib'
 import { type ConfigSource, normalizeConfigSource } from './config_source'
-import type { OperationOutcome, ManagementStatus } from './management_status'
 
 type NetworkConfig = NetworkTypes.NetworkConfig
 type ValidateConfigResponse = Api.ValidateConfigResponse
@@ -16,7 +17,7 @@ interface ServiceOptions {
   config_server?: string
 }
 
-export type ServiceStatus = "Running" | "Stopped" | "NotInstalled"
+export type ServiceStatus = 'Running' | 'Stopped' | 'NotInstalled'
 
 interface StoredGuiConfig {
   config: NetworkConfig
@@ -198,6 +199,7 @@ export interface HttpRequestOptions {
   timeoutSecs?: number
   headers?: Record<string, string>
   body?: string
+  requestId?: string
 }
 
 export interface HttpRequestResult {
@@ -214,7 +216,13 @@ export async function httpRequest(options: HttpRequestOptions): Promise<HttpRequ
     timeoutSecs: options.timeoutSecs ?? 10,
     headers: options.headers || null,
     body: options.body ?? null,
+    requestId: options.requestId ?? null,
   })
+}
+
+// Aborts an in-flight httpRequest that was started with the given requestId.
+export async function httpCancel(requestId: string): Promise<boolean> {
+  return await invoke<boolean>('http_cancel', { requestId })
 }
 
 export async function tcpPing(host: string, port: number) {
@@ -222,10 +230,18 @@ export async function tcpPing(host: string, port: number) {
 }
 
 export async function luciProxyStart(
-  routerId: string, routerIp: string, username: string, password: string, socks5Proxy: string | null,
+  routerId: string,
+  routerIp: string,
+  username: string,
+  password: string,
+  socks5Proxy: string | null,
 ) {
   return await invoke<string>('luci_proxy_start', {
-    routerId, routerIp, username, password, socks5Proxy,
+    routerId,
+    routerIp,
+    username,
+    password,
+    socks5Proxy,
   })
 }
 
