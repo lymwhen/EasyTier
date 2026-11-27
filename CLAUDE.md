@@ -111,6 +111,12 @@ Router first (hostname matches `/route|wrt|路由|home|家/i`), then by IP. Serv
 - **Windows 多行正文**：先写入临时文件再 `git commit -F <文件>`，直接传多行字符串会被 shell 截断
 - **推送前**检查 `git log -1 --format=%B` 确认格式正确
 
+### 提交与推送授权（单次有效）
+
+- **默认禁止 `git commit` / `git push`**：除非用户明确要求提交或推送，一律不得执行；代码改完并本地验证后停下汇报，等用户指示
+- 用户要求推送时，**默认不持续跟踪 GitHub Actions 执行结果**，除非用户明确要求观察
+- 用户对提交 / 推送 / 观察 CI 的授权**默认仅对当次操作有效**，不代表后续同样允许，每轮都需重新获得要求或确认
+
 ## Tag Release
 
 ### 版本号格式
