@@ -19,6 +19,7 @@ declare global {
   const applyWolRouterSuccess: typeof import('./composables/wol_status')['applyWolRouterSuccess']
   const applyWolSuccess: typeof import('./composables/wol_status')['applyWolSuccess']
   const bootstrapAndroidManagement: typeof import('./composables/android_management')['bootstrapAndroidManagement']
+  const bootstrapAndroidStorageKeepLocal: typeof import('./composables/android_compat')['bootstrapAndroidStorageKeepLocal']
   const cancelCommandRun: typeof import('./composables/computer_commands')['cancelCommandRun']
   const clearVpnPortalClients: typeof import('./composables/backend')['clearVpnPortalClients']
   const collectNetworkInfo: typeof import('./composables/backend')['collectNetworkInfo']
@@ -196,6 +197,7 @@ declare module 'vue' {
     readonly applyWolRouterSuccess: UnwrapRef<typeof import('./composables/wol_status')['applyWolRouterSuccess']>
     readonly applyWolSuccess: UnwrapRef<typeof import('./composables/wol_status')['applyWolSuccess']>
     readonly bootstrapAndroidManagement: UnwrapRef<typeof import('./composables/android_management')['bootstrapAndroidManagement']>
+    readonly bootstrapAndroidStorageKeepLocal: UnwrapRef<typeof import('./composables/android_compat')['bootstrapAndroidStorageKeepLocal']>
     readonly cancelCommandRun: UnwrapRef<typeof import('./composables/computer_commands')['cancelCommandRun']>
     readonly clearVpnPortalClients: UnwrapRef<typeof import('./composables/backend')['clearVpnPortalClients']>
     readonly collectNetworkInfo: UnwrapRef<typeof import('./composables/backend')['collectNetworkInfo']>

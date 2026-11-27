@@ -20,6 +20,7 @@ import {
 } from '~/composables/computer_commands'
 import { initMobileVpnService } from '~/composables/mobile_vpn'
 import { listenGlobalEvents } from '~/composables/event'
+import { bootstrapAndroidStorageKeepLocal } from '~/composables/android_compat'
 import { type } from '@tauri-apps/plugin-os'
 import { loadLastNetworkInstanceId, saveLastNetworkInstanceId } from '~/composables/config'
 import { Utils, I18nUtils } from 'easytier-frontend-lib'
@@ -1704,7 +1705,8 @@ let netPeriod: Utils.PeriodicTask | null = null
 const showDeleteConfirm = ref(false)
 const deleteTargetIdx = ref(-1)
 
-function loadNetworks() { const raw = localStorage.getItem('networkList'); const list: StoredNet[] = JSON.parse(raw || '[]').filter((e: any) => e.config?.instance_id); networks.value = list; const lastId = loadLastNetworkInstanceId(); let idx = list.findIndex(e => e.config.instance_id === lastId); if (idx < 0 && list.length > 0) idx = 0; netIndex.value = idx }
+function safeLastNetworkId(): string | null { try { return loadLastNetworkInstanceId() } catch { return localStorage.getItem('last_network_instance_id') } }
+function loadNetworks() { const raw = localStorage.getItem('networkList'); const list: StoredNet[] = JSON.parse(raw || '[]').filter((e: any) => e.config?.instance_id); networks.value = list; const lastId = safeLastNetworkId(); let idx = list.findIndex(e => e.config.instance_id === lastId); if (idx < 0 && list.length > 0) idx = 0; netIndex.value = idx }
 const currentNet = computed(() => netIndex.value >= 0 ? networks.value[netIndex.value] : null)
 const netInstId = computed(() => currentNet.value?.config?.instance_id || '')
 const netDiscovering = computed(() => netRunning.value && !netPeers.value.length && !netServers.value.length && netConnectTime.value > 0 && Date.now() - netConnectTime.value < 12000)
@@ -2591,15 +2593,19 @@ onMounted(async () => {
 
   if (type() === 'android') {
     try { await initMobileVpnService() } catch { /* */ }
+    // Fork 适配层：迁移配置到 native 安全存储并注册状态，但保留 localStorage 键
+    // （init_rpc_connection 等命令在 v2.7.1 的 Android 分支依赖该存储已初始化）
+    try { await bootstrapAndroidStorageKeepLocal() } catch (e: any) { console.error('bootstrap android storage failed', e) }
   }
   cleanupFns.push(await listenGlobalEvents())
   cleanupFns.push(await listen<RouterTransferPayload>('router-transfer', ({ payload }) => handleRouterTransfer(payload)))
   window.addEventListener('easytier-native-transfer', onNativeTransferEvent)
-  await initRpcConnection(true)
 
+  // 配置展示只依赖 localStorage，先于 RPC 初始化加载，避免后端异常导致列表空白
   loadWolConfig(); checkAllWolStatus(); wolPeriod = new Utils.PeriodicTask(checkAllWolStatus, WOL_STATUS_POLL_MS); wolPeriod.start()
-  loadNetworks(); if (netInstId.value) refreshNet(); netPeriod = new Utils.PeriodicTask(fetchNetInfo, 3000); netPeriod.start()
-  loadLuciConfig()
+  loadNetworks(); loadLuciConfig()
+  try { await initRpcConnection(true) } catch (e: any) { console.error('init rpc connection failed', e) }
+  if (netInstId.value) refreshNet(); netPeriod = new Utils.PeriodicTask(fetchNetInfo, 3000); netPeriod.start()
   if (activeTab.value === 'luci' && luciRouters.value.length > 0) {
     const lastIp = localStorage.getItem('lastLuciRouterIp')
     const idx = lastIp ? luciRouters.value.findIndex(r => r.ip === lastIp) : -1

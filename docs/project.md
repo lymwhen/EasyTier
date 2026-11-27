@@ -20,7 +20,8 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 
 | 文件 | 变更 | 必要性 |
 |------|------|--------|
-| `easytier-gui/src/pages/home.vue` | **[新增]** WOL/网络/路由器/设置四个 Tab 主界面；电脑卡片稳定 ID、居中的展开工作区、路由器传输状态提示 | 必要 — 项目核心 |
+| `easytier-gui/src/pages/home.vue` | **[新增]** WOL/网络/路由器/设置四个 Tab 主界面；电脑卡片稳定 ID、居中的展开工作区、路由器传输状态提示；v2.7.1 适配：启动时先加载配置再做 RPC 初始化（try/catch 容错），Android 分支调用 `bootstrapAndroidStorageKeepLocal`，`safeLastNetworkId` 兜底 | 必要 — 项目核心 |
+| `easytier-gui/src/composables/android_compat.ts` | **[新增]** Fork 适配层：复用上游 `bootstrapAndroidManagement` 完成 native 加密存储迁移与状态注册后，恢复 localStorage 明文键，维持 fork 以 localStorage 为配置真源的模型 | 必要 — v2.7.1 起 Android 的 `init_rpc_connection`/`loadLastNetworkInstanceId` 依赖该存储初始化，否则启动链抛错致配置不显示 |
 | `easytier-gui/src/App.vue` | 主题初始化 + 窗口标题 + Toast + RouterView（Splash 已移除） | 必要 — 初始化流程 |
 | `easytier-gui/src/composables/theme.ts` | `Theme` 收敛为浅色/深色，保留自动/浅色/深色切换解析；深色统一使用纯黑主题 | 必要 — 主题切换逻辑 |
 | `easytier-gui/src/composables/backend.ts` | 新增 `httpGet`/`httpPost`/`tcpPing`/`luciProxy*` IPC 封装 | 必要 — 前端 HTTP/代理调用 |
