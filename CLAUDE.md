@@ -96,9 +96,20 @@ Router first (hostname matches `/route|wrt|路由|home|家/i`), then by IP. Serv
 
 ## Commit
 
-- **格式**：`type: description`，type = `feat` / `fix` / `docs` / `chore` / `refactor`
+- **格式**：标题行 + 空行 + 分点正文，模板：
+
+```
+{type}: {提交总结}
+
+- {分点描述，每点一行}
+- {分点描述，每点一行}
+```
+
+- **type**：`feat` / `fix` / `build` / `docs` / `chore` / `refactor` 中选一个，后接 `: ` 与单行中文总结
+- **正文**：每点一行 `- ` 分点，内容与 diff 一一对应，避免空泛
 - **禁止**以 `@` 开头，禁止在 commit message 两端使用 `@'...'@` 包裹
-- **推送前**检查 `git log --oneline -1` 确认格式正确
+- **Windows 多行正文**：先写入临时文件再 `git commit -F <文件>`，直接传多行字符串会被 shell 截断
+- **推送前**检查 `git log -1 --format=%B` 确认格式正确
 
 ## Tag Release
 
