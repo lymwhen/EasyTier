@@ -127,8 +127,12 @@ async function open(t, route = '/h', options = {}, configure = () => {}) {
         else if (path.includes('/networks/config/')) result = { instance_id: id(100), network_name: 'Engineering', hostname: 'Amsterdam gateway', networking_method: 'Standalone' };
         await route.fulfill({ json: result });
     });
+    const gatewayReady = state.waitForGateway
+        ? page.waitForResponse(response => response.url().endsWith('/networks/gateway-info')).then(response => response.finished())
+        : undefined;
     await page.goto(`${base}/#${route}`);
     await page.locator('.console-page').waitFor();
+    await gatewayReady;
     return { page, state, context };
 }
 
@@ -237,6 +241,121 @@ test('network creation retains gateway and advanced standalone modes', async t =
     await page.getByRole('dialog').getByRole('button', { name: 'Confirm', exact: true }).click();
     await page.waitForURL('**/networks/created-*');
     assert.equal(state.writes.filter(w => w.path === '/networks').at(-1).payload.settings.networking_method, 'Standalone');
+});
+
+for (const action of ['creation', 'settings']) {
+    test(`network ${action} supports all initial-node protocols and preserves URLs`, async t => {
+        const { page, state } = await open(t, action === 'creation' ? '/h/networks' : '/h/networks/network-1', {}, state => {
+            state.gatewayEnabled = false;
+            state.networks[1].peer_urls = [];
+            state.networks[1].networking_method = 'Standalone';
+        });
+        if (action === 'creation') {
+            await page.getByRole('button', { name: 'Create Network', exact: true }).click();
+            await page.locator('#network-display-name').fill('Peer protocols');
+        } else {
+            await page.getByRole('tab', { name: 'Settings', exact: true }).click();
+        }
+
+        const peers = [
+            'tcp://peers.example:11010',
+            'udp://peers.example:11010',
+            'wg://peers.example:11011',
+            'ws://peers.example:11011/peers',
+            'wss://peers.example:11012/peers',
+            'quic://peers.example:11012',
+            'faketcp://peers.example:11013',
+            'http://peers.example:80/peers',
+            'https://peers.example:443/peers',
+            'txt://peers.example',
+            'srv://_easytier._tcp.peers.example',
+        ];
+        const nodes = page.locator(action === 'creation' ? '#initial-nodes' : '#settings-initial-nodes');
+        for (const peer of peers) {
+            const url = new URL(peer);
+            const protocol = url.protocol.slice(0, -1);
+            await nodes.getByText('Add Initial Node', { exact: true }).click();
+            const row = nodes.locator('.url-input-full').last();
+            await row.locator('.p-autocomplete-dropdown').click();
+            const options = page.locator(`#${await row.getByRole('combobox').getAttribute('aria-controls')}`);
+            await options.getByRole('option', { name: protocol, exact: true }).click();
+            await row.locator('input.grow').first().fill(url.hostname);
+            if (url.pathname) await row.getByPlaceholder('/mypath').fill(url.pathname);
+            assert.equal(await row.getByRole('spinbutton').count(), ['txt', 'srv'].includes(protocol) ? 0 : 1);
+        }
+
+        if (action === 'creation') {
+            await page.getByRole('dialog').getByRole('button', { name: 'Confirm', exact: true }).click();
+            await page.waitForURL('**/networks/created-*');
+        } else {
+            const saved = page.waitForResponse(response => response.request().method() === 'PATCH');
+            await page.getByRole('button', { name: 'Save', exact: true }).click();
+            await saved;
+        }
+        let settings = state.writes.at(-1).payload.settings;
+        assert.equal(settings.networking_method, 'Manual');
+        assert.deepEqual(settings.peer_urls, peers);
+
+        await page.reload();
+        await page.getByRole('tab', { name: 'Settings', exact: true }).click();
+        const saved = page.waitForResponse(response => response.request().method() === 'PATCH');
+        await page.getByRole('button', { name: 'Save', exact: true }).click();
+        await saved;
+        settings = state.writes.at(-1).payload.settings;
+        assert.equal(settings.networking_method, 'Manual');
+        assert.deepEqual(settings.peer_urls, peers);
+    });
+}
+
+for (const [input, expected] of [
+    [' 10.200.0.0 ', '10.200.0.0/24'],
+    [' 10.200.0.0/16 ', '10.200.0.0/16'],
+    ['   ', null],
+]) {
+    for (const gatewayEnabled of [true, false]) {
+        test(`network creation normalizes virtual subnet ${JSON.stringify(input)} with gateway ${gatewayEnabled}`, async t => {
+            const { page, state } = await open(t, '/h/networks', {}, state => {
+                state.gatewayEnabled = gatewayEnabled;
+                state.waitForGateway = true;
+            });
+            await page.getByRole('button', { name: 'Create Network', exact: true }).click();
+            await page.locator('#network-display-name').fill('Subnet test');
+            const subnet = page.locator('#network-cidr');
+            await subnet.fill(input);
+            await subnet.press('Tab');
+            assert.equal(await subnet.inputValue(), expected ?? '');
+            await page.getByRole('dialog').getByRole('button', { name: 'Confirm', exact: true }).click();
+            await page.waitForURL('**/networks/created-*');
+            const settings = state.writes.find(write => write.path === '/networks').payload.settings;
+            assert.equal(settings.virtual_cidr, expected);
+            assert.equal(settings.networking_method, gatewayEnabled ? 'Gateway' : 'Standalone');
+            await page.getByRole('tab', { name: 'Settings', exact: true }).click();
+            assert.equal(await page.locator('#settings-virtual-cidr').inputValue(), expected ?? '');
+        });
+    }
+}
+
+test('network settings normalize virtual subnets and preserve explicit masks and DHCP', async t => {
+    const { page, state } = await open(t, '/h/networks/network-0');
+    await page.getByRole('tab', { name: 'Settings', exact: true }).click();
+    for (const [input, expected] of [
+        [' 10.201.0.0 ', '10.201.0.0/24'],
+        ['10.201.0.0/20', '10.201.0.0/20'],
+        ['   ', null],
+    ]) {
+        const subnet = page.locator('#settings-virtual-cidr');
+        await subnet.fill(input);
+        await subnet.press('Tab');
+        assert.equal(await subnet.inputValue(), expected ?? '');
+        const saved = page.waitForResponse(response => response.url().endsWith('/networks/network-0') && response.request().method() === 'PATCH');
+        await page.getByRole('button', { name: 'Save', exact: true }).click();
+        await saved;
+        assert.equal(state.writes.filter(write => write.method === 'PATCH').at(-1).payload.settings.virtual_cidr, expected);
+        await page.getByText('Config Saved', { exact: true }).waitFor();
+        await page.reload();
+        await page.getByRole('tab', { name: 'Settings', exact: true }).click();
+        assert.equal(await subnet.inputValue(), expected ?? '');
+    }
 });
 
 test('PublicServer settings retain discovery mode when renamed or edited to the gateway URL', async t => {
@@ -562,14 +681,17 @@ test('node detail groups populated peers, routes, connections and ACL stats', as
     const { page } = await open(t, `/h/networks/${id(100)}`, { viewport: { width: 390, height: 844 }, colorScheme: 'dark' }, state => {
         state.networks[0].network_id = id(100);
         state.nodeRoutes = [{ peer_id: 2, hostname: 'Build server', ipv4_addr: { address: { addr: 175005442 }, network_length: 24 }, cost: 1, path_latency: 8, proxy_cidrs: [], version: '2.4.5', next_hop_peer_id: 2 }];
-        state.nodePeers = [{ peer_id: 2, conns: [{ conn_id: 'conn-1', tunnel: { tunnel_type: 'tcp', remote_addr: { url: 'tcp://192.0.2.11:11010' } }, stats: { latency_us: 8000, rx_bytes: 1024, tx_bytes: 2048 }, loss_rate: 0 }] }];
+        state.nodePeers = [{ peer_id: 2, conns: [
+            { conn_id: 'conn-1', tunnel: { tunnel_type: 'tcp', remote_addr: { url: 'tcp://192.0.2.11:11010' } }, stats: { latency_us: 8000, rx_bytes: 1024, tx_bytes: 2048 } },
+            { conn_id: 'conn-2', tunnel: { tunnel_type: 'udp', remote_addr: { url: 'udp://192.0.2.11:11010' } }, stats: { latency_us: 9000 }, loss_rate: 0.125 },
+        ] }];
         state.nodeAclStats = [{ rule: { name: 'Allow build server' }, stat: { packet_count: 42, byte_count: 4096 } }];
     });
     await page.locator('.mobile-list').getByRole('button', { name: 'Node Detail' }).click();
     const drawer = page.locator('.console-node-drawer');
     await drawer.locator('.node-drawer-mobile-peer').getByText('Build server').waitFor();
     await page.waitForFunction(() => Math.abs(document.querySelector('.console-node-drawer').getBoundingClientRect().right - innerWidth) < 1);
-    assert.deepEqual(await drawer.locator('.node-drawer-metric strong').allTextContents().then(values => values.map(s => s.trim())), ['Running', '1', '1', '1']);
+    assert.deepEqual(await drawer.locator('.node-drawer-metric strong').allTextContents().then(values => values.map(s => s.trim())), ['Running', '1', '1', '2']);
     assert.equal(await drawer.getByRole('tab').count(), 2);
     const drawerWidth = await drawer.evaluate(el => ({ drawer: el.getBoundingClientRect().width, viewport: innerWidth }));
     assert.ok(drawerWidth.drawer <= drawerWidth.viewport + 1, JSON.stringify(drawerWidth));
@@ -580,6 +702,8 @@ test('node detail groups populated peers, routes, connections and ACL stats', as
     await drawer.locator('details').filter({ hasText: 'Routes' }).locator('summary').click();
     await drawer.getByText('10.110.95.2/24').first().waitFor();
     await drawer.locator('details').filter({ hasText: 'Connections' }).locator('summary').click();
+    await drawer.getByRole('cell', { name: '0.0%', exact: true }).waitFor();
+    await drawer.getByRole('cell', { name: '12.5%', exact: true }).waitFor();
     await drawer.locator('details').filter({ hasText: 'ACL Stats' }).locator('summary').click();
     await drawer.getByRole('cell', { name: 'Allow build server' }).waitFor();
 });

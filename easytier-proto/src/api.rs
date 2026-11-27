@@ -88,6 +88,23 @@ pub mod instance {
         }
     }
 
+    impl From<crate::core_peer::peer::PeerConnFecStats> for PeerConnFecStats {
+        fn from(value: crate::core_peer::peer::PeerConnFecStats) -> Self {
+            Self {
+                active: value.active,
+                tx_sources: value.tx_sources,
+                tx_repairs: value.tx_repairs,
+                tx_source_bytes: value.tx_source_bytes,
+                tx_repair_bytes: value.tx_repair_bytes,
+                rx_sources: value.rx_sources,
+                rx_repairs: value.rx_repairs,
+                recovered: value.recovered,
+                duplicates: value.duplicates,
+                invalid_packets: value.invalid_packets,
+            }
+        }
+    }
+
     impl From<crate::core_peer::peer::PeerConnInfo> for PeerConnInfo {
         fn from(value: crate::core_peer::peer::PeerConnInfo) -> Self {
             Self {
@@ -97,6 +114,7 @@ pub mod instance {
                 features: value.features,
                 tunnel: value.tunnel,
                 stats: value.stats.map(Into::into),
+                fec: value.fec.map(Into::into),
                 loss_rate: value.loss_rate,
                 is_client: value.is_client,
                 network_name: value.network_name,
@@ -539,5 +557,72 @@ mod tests {
         };
 
         assert_eq!(pair.get_loss_rate(), Some(0.0));
+    }
+
+    #[cfg(feature = "json-rpc")]
+    #[test]
+    fn peer_route_pair_json_omits_zero_loss_rate_and_preserves_nonzero_loss_rate() {
+        let pair = PeerRoutePair {
+            peer: Some(PeerInfo {
+                conns: vec![
+                    PeerConnInfo {
+                        conn_id: "zero-loss".to_owned(),
+                        loss_rate: 0.0,
+                        ..Default::default()
+                    },
+                    PeerConnInfo {
+                        conn_id: "nonzero-loss".to_owned(),
+                        loss_rate: 0.25,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let json = serde_json::to_value(pair).unwrap();
+        let conns = json["peer"]["conns"].as_array().unwrap();
+        assert!(!conns[0].as_object().unwrap().contains_key("loss_rate"));
+        assert_eq!(conns[1]["loss_rate"], serde_json::json!(0.25));
+    }
+
+    #[cfg(feature = "json-rpc")]
+    #[test]
+    fn peer_route_pair_json_stun_info_uses_enum_names_and_omits_unknown_nat() {
+        use super::instance::Route;
+        use crate::proto::common::{NatType, StunInfo};
+
+        let known = PeerRoutePair {
+            route: Some(Route {
+                stun_info: Some(StunInfo {
+                    udp_nat_type: NatType::FullCone as i32,
+                    tcp_nat_type: NatType::NoPat as i32,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let unknown = PeerRoutePair {
+            route: Some(Route {
+                stun_info: Some(StunInfo::default()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let known_json = serde_json::to_value(known).unwrap();
+        assert_eq!(
+            known_json["route"]["stun_info"]["udp_nat_type"],
+            serde_json::json!("FullCone")
+        );
+        assert_eq!(
+            known_json["route"]["stun_info"]["tcp_nat_type"],
+            serde_json::json!("NoPAT")
+        );
+
+        let unknown_json = serde_json::to_value(unknown).unwrap();
+        assert_eq!(unknown_json["route"]["stun_info"], serde_json::json!({}));
     }
 }

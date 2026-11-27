@@ -120,7 +120,7 @@ Router first (hostname matches `/route|wrt|路由|home|家/i`), then by IP. Serv
 
 - **上游版本号**：跟随 `package.json` 中的 `pkg.version`（当前 `2.6.4`）
 - **定制化版本号**：`c1`、`c2`、`c3`... 依次递增
-- **上游升级时**：定制化版本号重置为 `c1`（如上游升至 `2.7.0`，则下个 tag 为 `v2.7.0-c1`）
+- **上游升级时**：定制化版本号重置为 `c1`（如上游升至 `2.7.1`，则下个 tag 为 `v2.7.1-c1`）
 
 ### Tag Message 规范
 必须包含分类变更列表，格式如下：

@@ -10,12 +10,16 @@ pub mod api_input;
     target_os = "unknown"
 ))]
 mod browser;
+mod dhcp;
+pub mod dns;
 mod encryption;
 pub mod gateway;
 pub mod peers;
 pub mod runtime;
 pub mod toml;
 
+pub use dhcp::DhcpConfig;
+pub(crate) use dhcp::valid_ipv6_subnet;
 pub use encryption::EncryptionAlgorithm;
 
 pub(crate) const DEFAULT_UDP_STUN_SERVERS: &[&str] = &[
@@ -47,7 +51,8 @@ use std::{
 
 use anyhow::Context as _;
 use base64::{Engine as _, prelude::BASE64_STANDARD};
-use easytier_proto::{common as common_pb, core_config as pb};
+use easytier_proto::{CollectionExt, common as common_pb, core_config as pb};
+use optionize::Optionizable;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -280,6 +285,8 @@ pub struct ForeignNetworkConfig {
     pub cidrs: Vec<IpPrefix>,
 }
 
+#[optionize::optionized]
+#[optionize(object = pb::PeerPolicyConfig)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PeerPolicyConfig {
     pub p2p_enabled: bool,
@@ -414,21 +421,9 @@ impl TryFrom<pb::RouteConfig> for RouteConfig {
         Ok(Self {
             ipv4: value.ipv4.map(TryInto::try_into).transpose()?,
             ipv6: value.ipv6.map(TryInto::try_into).transpose()?,
-            advertised_routes: value
-                .advertised_routes
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<_, _>>()?,
-            proxy_networks: value
-                .proxy_networks
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<_, _>>()?,
-            foreign_networks: value
-                .foreign_networks
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<_, _>>()?,
+            advertised_routes: value.advertised_routes.try_convert()?,
+            proxy_networks: value.proxy_networks.try_convert()?,
+            foreign_networks: value.foreign_networks.try_convert()?,
         })
     }
 }
@@ -438,13 +433,9 @@ impl From<RouteConfig> for pb::RouteConfig {
         Self {
             ipv4: value.ipv4.map(Into::into),
             ipv6: value.ipv6.map(Into::into),
-            advertised_routes: value
-                .advertised_routes
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-            proxy_networks: value.proxy_networks.into_iter().map(Into::into).collect(),
-            foreign_networks: value.foreign_networks.into_iter().map(Into::into).collect(),
+            advertised_routes: value.advertised_routes.convert(),
+            proxy_networks: value.proxy_networks.convert(),
+            foreign_networks: value.foreign_networks.convert(),
         }
     }
 }
@@ -461,6 +452,14 @@ impl TryFrom<pb::IpPrefix> for IpPrefix {
         let prefix_len = u8::try_from(value.prefix_len)
             .map_err(|_| invalid_prefix_for_address(address, value.prefix_len))?;
         Self::new(address, prefix_len)
+    }
+}
+
+impl<'m> TryFrom<&'m pb::IpPrefix> for IpPrefix {
+    type Error = ConfigError;
+
+    fn try_from(value: &'m pb::IpPrefix) -> Result<Self, Self::Error> {
+        (*value).try_into()
     }
 }
 
@@ -487,6 +486,14 @@ impl TryFrom<pb::ProxyNetworkConfig> for ProxyNetworkConfig {
     }
 }
 
+impl<'m> TryFrom<&'m pb::ProxyNetworkConfig> for ProxyNetworkConfig {
+    type Error = ConfigError;
+
+    fn try_from(value: &'m pb::ProxyNetworkConfig) -> Result<Self, Self::Error> {
+        (*value).try_into()
+    }
+}
+
 impl From<ProxyNetworkConfig> for pb::ProxyNetworkConfig {
     fn from(value: ProxyNetworkConfig) -> Self {
         Self {
@@ -502,12 +509,16 @@ impl TryFrom<pb::ForeignNetworkConfig> for ForeignNetworkConfig {
     fn try_from(value: pb::ForeignNetworkConfig) -> Result<Self, Self::Error> {
         Ok(Self {
             name: value.name,
-            cidrs: value
-                .cidrs
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<_, _>>()?,
+            cidrs: value.cidrs.try_convert()?,
         })
+    }
+}
+
+impl<'m> TryFrom<&'m pb::ForeignNetworkConfig> for ForeignNetworkConfig {
+    type Error = ConfigError;
+
+    fn try_from(value: &'m pb::ForeignNetworkConfig) -> Result<Self, Self::Error> {
+        value.clone().try_into()
     }
 }
 
@@ -515,35 +526,22 @@ impl From<ForeignNetworkConfig> for pb::ForeignNetworkConfig {
     fn from(value: ForeignNetworkConfig) -> Self {
         Self {
             name: value.name,
-            cidrs: value.cidrs.into_iter().map(Into::into).collect(),
+            cidrs: value.cidrs.convert(),
         }
     }
 }
 
 impl From<pb::PeerPolicyConfig> for PeerPolicyConfig {
     fn from(value: pb::PeerPolicyConfig) -> Self {
-        let default = Self::default();
-        Self {
-            p2p_enabled: value.p2p_enabled.unwrap_or(default.p2p_enabled),
-            relay_peer_rpc: value.relay_peer_rpc.unwrap_or(default.relay_peer_rpc),
-            relay_data: value.relay_data.unwrap_or(default.relay_data),
-            latency_first: value.latency_first.unwrap_or(default.latency_first),
-            encryption_required: value
-                .encryption_required
-                .unwrap_or(default.encryption_required),
-        }
+        let mut config = Self::default();
+        config.load(value);
+        config
     }
 }
 
 impl From<PeerPolicyConfig> for pb::PeerPolicyConfig {
     fn from(value: PeerPolicyConfig) -> Self {
-        Self {
-            p2p_enabled: Some(value.p2p_enabled),
-            relay_peer_rpc: Some(value.relay_peer_rpc),
-            relay_data: Some(value.relay_data),
-            latency_first: Some(value.latency_first),
-            encryption_required: Some(value.encryption_required),
-        }
+        value.downgrade()
     }
 }
 

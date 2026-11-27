@@ -15,7 +15,9 @@ const protocWrapper = require.resolve('@protobuf-ts/protoc/protoc.js')
 const protobufTsPluginRoot = dirname(require.resolve('@protobuf-ts/plugin/package.json'))
 
 const protoFiles = [
+  'annotations.proto',
   'common.proto',
+  'core_config.proto',
   'acl.proto',
   'api_instance.proto',
   'api_manage.proto',

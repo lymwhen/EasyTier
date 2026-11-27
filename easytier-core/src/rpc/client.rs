@@ -7,13 +7,14 @@ use std::{
 use atomic_shim::AtomicI64;
 use bytes::Bytes;
 use dashmap::DashMap;
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use prost::Message;
 use tokio::{sync::mpsc, task::JoinSet};
 
 use crate::{
     config::PeerId,
     foundation::{
+        small_map_shard_amount,
         stats::{ArcRpcMetrics, RpcMetricLabels, RpcMetricsProvider},
         time::timeout,
     },
@@ -109,8 +110,8 @@ impl Client {
         Self {
             mpsc: Mutex::new(MpscTunnel::new(ring_a, None)),
             transport: Mutex::new(MpscTunnel::new(ring_b, None)),
-            inflight_requests: Arc::new(DashMap::new()),
-            peer_info: Arc::new(DashMap::new()),
+            inflight_requests: Arc::new(DashMap::with_shard_amount(small_map_shard_amount())),
+            peer_info: Arc::new(DashMap::with_shard_amount(small_map_shard_amount())),
             tasks: Mutex::new(JoinSet::new()),
             metrics: None,
         }
@@ -158,7 +159,15 @@ impl Client {
             }
         });
 
-        let mut rx = self.mpsc.lock().unwrap().get_stream();
+        let mut rx = self
+            .mpsc
+            .lock()
+            .unwrap()
+            .get_stream()
+            .map_ok(|packet| {
+                futures::stream::iter(packet.into_batch().map(Ok::<_, crate::tunnel::TunnelError>))
+            })
+            .try_flatten();
         let inflight_requests = self.inflight_requests.clone();
         tasks.spawn(async move {
             while let Some(packet) = rx.next().await {
@@ -245,9 +254,9 @@ impl Client {
                 packets: Vec<crate::packet::ZCPacket>,
                 rx: &mut RpcPacketReceiver,
             ) -> Result<RpcPacket> {
-                for packet in packets {
-                    self.zc_packet_sender.send(packet).await?;
-                }
+                self.zc_packet_sender
+                    .send(crate::packet::ZCPacket::batch(packets))
+                    .await?;
 
                 Ok(rx.recv().await.ok_or(TunnelError::Shutdown)?)
             }

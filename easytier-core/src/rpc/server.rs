@@ -8,12 +8,13 @@ use std::{
 
 use bytes::Bytes;
 use dashmap::DashMap;
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use prost::Message;
 use tokio::task::JoinSet;
 
 use crate::{
     foundation::{
+        small_map_shard_amount,
         stats::{ArcRpcMetrics, RpcMetricLabels, RpcMetricsProvider},
         task::reap_joinset_background,
     },
@@ -77,7 +78,7 @@ impl Server {
             tasks: Arc::new(Mutex::new(JoinSet::new())),
             handler_tasks: Arc::new(Mutex::new(JoinSet::new())),
             stopped: Arc::new(AtomicBool::new(false)),
-            packet_mergers: Arc::new(DashMap::new()),
+            packet_mergers: Arc::new(DashMap::with_shard_amount(small_map_shard_amount())),
             metrics: None,
         }
     }
@@ -137,7 +138,14 @@ impl Server {
         let stopped = self.stopped.clone();
         self.tasks.lock().unwrap().spawn(async move {
             let mut mpsc = mpsc;
-            let mut rx = mpsc.get_stream();
+            let mut rx = mpsc
+                .get_stream()
+                .map_ok(|packet| {
+                    futures::stream::iter(
+                        packet.into_batch().map(Ok::<_, crate::tunnel::TunnelError>),
+                    )
+                })
+                .try_flatten();
 
             while let Some(packet) = rx.next().await {
                 let packet = match packet {
@@ -300,10 +308,8 @@ impl Server {
                 accepted_algo: accepted_compression_algo().into(),
             },
         });
-        for packet in packets {
-            if let Err(err) = sender.send(packet).await {
-                tracing::error!(?err, "Failed to send response packet");
-            }
+        if let Err(err) = sender.send(crate::packet::ZCPacket::batch(packets)).await {
+            tracing::error!(?err, "Failed to send response packet");
         }
     }
 

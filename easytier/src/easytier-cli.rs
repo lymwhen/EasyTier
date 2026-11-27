@@ -24,6 +24,7 @@ use easytier_core::connectivity::stun::StunInfoProvider as _;
 use humansize::format_size;
 use rust_i18n::t;
 use service_manager::*;
+use sha2::{Digest as _, Sha256};
 use tabled::settings::{Modify, Remove, Style, Width, location::ByColumnName, object::Columns};
 use terminal_size::{Width as TerminalWidth, terminal_size};
 use unicode_width::UnicodeWidthStr;
@@ -37,13 +38,13 @@ use easytier::{
         acl::{Acl, AclStats},
         api::{
             config::{
-                AclPatch, ConfigPatchAction, ConfigRpc, ConfigRpcClientFactory,
+                AclPatch, ConfigPatchAction, ConfigRpc, ConfigRpcClientFactory, GetConfigRequest,
                 InstanceConfigPatch, PatchConfigRequest, PortForwardPatch, StringPatch, UrlPatch,
                 VpnPortalClientPatch,
             },
             instance::{
                 AclManageRpc, AclManageRpcClientFactory, Connector, ConnectorManageRpc,
-                ConnectorManageRpcClientFactory, CredentialManageRpc,
+                ConnectorManageRpcClientFactory, CredentialInfo, CredentialManageRpc,
                 CredentialManageRpcClientFactory, DumpRouteRequest, ForeignNetworkEntryPb,
                 GenerateCredentialRequest, GetAclStatsRequest, GetPrometheusStatsRequest,
                 GetStatsRequest, GetVpnPortalInfoRequest, GetWhitelistRequest,
@@ -53,8 +54,8 @@ use easytier::{
                 ListPeerResponse, ListPortForwardRequest, ListPortForwardResponse,
                 ListPublicIpv6InfoRequest, ListPublicIpv6InfoResponse, ListRouteRequest,
                 ListRouteResponse, MappedListener, MappedListenerManageRpc,
-                MappedListenerManageRpcClientFactory, MetricSnapshot, NodeInfo, PeerManageRpc,
-                PeerManageRpcClientFactory, PortForwardManageRpc,
+                MappedListenerManageRpcClientFactory, MetricSnapshot, NodeInfo, PeerInfo,
+                PeerManageRpc, PeerManageRpcClientFactory, PortForwardManageRpc,
                 PortForwardManageRpcClientFactory, RevokeCredentialRequest, Route as ApiRoute,
                 ShowNodeInfoRequest, StatsRpc, StatsRpcClientFactory, TcpProxyEntryState,
                 TcpProxyEntryTransportType, TcpProxyRpc, TcpProxyRpcClientFactory,
@@ -73,7 +74,10 @@ use easytier::{
             },
         },
         common::{NatType, PortForwardConfigPb, SocketType},
-        peer_rpc::{GetGlobalPeerMapRequest, PeerCenterRpc, PeerCenterRpcClientFactory},
+        peer_rpc::{
+            GetGlobalPeerMapRequest, PeerCenterRpc, PeerCenterRpcClientFactory, PeerIdentityType,
+            SecureAuthLevel,
+        },
         rpc::standalone::{RuntimeRpcClient, runtime_rpc_client},
         rpc_types::{controller::BaseController, error::Error as RpcError},
     },
@@ -138,6 +142,8 @@ enum SubCommand {
     VpnPortal(VpnPortalArgs),
     #[command(about = "inspect self easytier-core status")]
     Node(NodeArgs),
+    #[command(about = "inspect and update saved DNS configuration")]
+    Dns(DnsArgs),
     #[command(about = "manage easytier-core as a system service")]
     Service(ServiceArgs),
     #[command(about = "show tcp/kcp proxy status")]
@@ -301,6 +307,37 @@ enum NodeSubCommand {
     Info,
     #[command(about = "show node config")]
     Config,
+}
+
+#[derive(Args, Debug)]
+struct DnsArgs {
+    #[command(subcommand)]
+    sub_command: DnsSubCommand,
+}
+
+#[derive(Subcommand, Debug)]
+enum DnsSubCommand {
+    /// Show this instance's saved DNS configuration.
+    Show,
+    /// Patch DNS from a file containing only [dns] and [[dns.zone]].
+    Set {
+        #[arg(long)]
+        file: PathBuf,
+    },
+    /// Clear this instance's static records, preserving its default domain.
+    Clear,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DnsFile {
+    dns: easytier_proto::core_config::DnsConfigRaw,
+}
+
+fn parse_dns_file(contents: &str) -> Result<easytier_proto::core_config::DnsConfigRaw, Error> {
+    let file: DnsFile = toml::from_str(contents)
+        .context("expected a DNS-only TOML file containing [dns] and/or [[dns.zone]]")?;
+    Ok(file.dns)
 }
 
 #[derive(Args, Debug)]
@@ -483,6 +520,11 @@ enum CredentialSubCommand {
     },
     /// List all active credentials
     List,
+    /// Show credentials and their currently authenticated direct peers
+    ///
+    /// Run on a node storing the credentials. Relayed users are not included;
+    /// an empty peer list does not mean the credential is unused elsewhere.
+    Peers,
 }
 
 #[derive(Args, Debug)]
@@ -625,9 +667,398 @@ fn parse_vpn_portal_client_cidr(value: &str) -> anyhow::Result<cidr::Ipv4Inet> {
         .map_err(|error| anyhow::anyhow!("invalid client virtual IPv4 CIDR ({value}): {error}"))
 }
 
+#[derive(Debug, serde::Serialize)]
+struct CredentialPeersData {
+    credentials: Vec<CredentialPeersEntry>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct CredentialPeersEntry {
+    credential_id: String,
+    peers: Vec<CredentialPeerNode>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+struct CredentialPeerNode {
+    peer_id: u32,
+    ipv4: Option<String>,
+    ipv6: Option<String>,
+    hostname: String,
+}
+
+fn build_credential_peers(
+    credentials: Vec<CredentialInfo>,
+    peers: Vec<PeerInfo>,
+    routes: Vec<ApiRoute>,
+) -> CredentialPeersData {
+    let routes = routes
+        .into_iter()
+        .map(|route| (route.peer_id, route))
+        .collect::<HashMap<_, _>>();
+    let mut peers_by_fingerprint = HashMap::<String, BTreeMap<u32, CredentialPeerNode>>::new();
+    for peer in peers {
+        for conn in &peer.conns {
+            if conn.is_closed
+                || conn.peer_identity_type != PeerIdentityType::Credential as i32
+                || !matches!(
+                    SecureAuthLevel::try_from(conn.secure_auth_level),
+                    Ok(SecureAuthLevel::PeerVerified | SecureAuthLevel::NetworkSecretConfirmed)
+                )
+                || conn.noise_remote_static_pubkey.len() != 32
+            {
+                continue;
+            }
+            // Match the SHA-256 fingerprint returned by ListCredentials. Only
+            // authenticated remote connection keys identify credential users;
+            // route advertisements alone do not establish this association.
+            let fingerprint = Sha256::digest(&conn.noise_remote_static_pubkey)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            let route = routes.get(&peer.peer_id);
+            peers_by_fingerprint
+                .entry(fingerprint)
+                .or_default()
+                .entry(peer.peer_id)
+                .or_insert_with(|| CredentialPeerNode {
+                    peer_id: peer.peer_id,
+                    ipv4: route
+                        .and_then(|route| route.ipv4_addr)
+                        .and_then(|inet| inet.address)
+                        .map(|address| address.to_string()),
+                    ipv6: route
+                        .and_then(|route| route.ipv6_addr)
+                        .and_then(|inet| inet.address)
+                        .map(|address| address.to_string()),
+                    hostname: route
+                        .map(|route| route.hostname.clone())
+                        .unwrap_or_default(),
+                });
+        }
+    }
+    let mut credentials = credentials
+        .into_iter()
+        .map(|credential| CredentialPeersEntry {
+            peers: peers_by_fingerprint
+                .get(&credential.public_key_fingerprint)
+                .map(|peers| peers.values().cloned().collect())
+                .unwrap_or_default(),
+            credential_id: credential.credential_id,
+        })
+        .collect::<Vec<_>>();
+    credentials.sort_by(|a, b| a.credential_id.cmp(&b.credential_id));
+    CredentialPeersData { credentials }
+}
+
+fn format_credential_peers(data: &CredentialPeersData) -> String {
+    if data.credentials.is_empty() {
+        return "No active credentials".to_owned();
+    }
+    let mut builder = tabled::builder::Builder::default();
+    builder.push_record(["Credential ID", "Peer ID", "IPv4", "IPv6", "Hostname"]);
+    for credential in &data.credentials {
+        if credential.peers.is_empty() {
+            builder.push_record([&credential.credential_id, "no direct peers", "-", "-", "-"]);
+        }
+        for peer in &credential.peers {
+            builder.push_record([
+                &credential.credential_id,
+                &peer.peer_id.to_string(),
+                peer.ipv4.as_deref().unwrap_or("-"),
+                peer.ipv6.as_deref().unwrap_or("-"),
+                &peer.hostname,
+            ]);
+        }
+    }
+    builder.build().with(Style::rounded()).to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use easytier::proto::api::instance::PeerConnInfo;
+
+    #[test]
+    fn dns_commands_parse_and_files_preserve_clear_semantics() {
+        let cli = Cli::try_parse_from([
+            "easytier-cli",
+            "--instance-name",
+            "mesh",
+            "dns",
+            "set",
+            "--file",
+            "dns.toml",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.sub_command,
+            SubCommand::Dns(DnsArgs {
+                sub_command: DnsSubCommand::Set { .. }
+            })
+        ));
+        let patch = parse_dns_file("[dns]\ndomain = 'mesh.test'\n").unwrap();
+        assert_eq!(patch.domain.as_deref(), Some("mesh.test"));
+        assert!(patch.zone.is_none());
+        let patch = parse_dns_file("[dns]\nzone = []\n").unwrap();
+        assert!(patch.zone.unwrap().items.is_empty());
+        let patch = parse_dns_file(
+            r#"[[dns.zone]]
+origin = "records.test"
+records = [
+    { name = "nas", type = "A", value = "192.0.2.10" },
+    { name = "info", type = "TXT", value = '"literal ; \" \\" "tail"' },
+]
+"#,
+        )
+        .unwrap();
+        easytier_core::config::dns::compile_dns(&patch).unwrap();
+        let records = patch.zone.unwrap().items.remove(0).records.unwrap().items;
+        assert_eq!(
+            records[0].r#type,
+            easytier_proto::core_config::DnsRecordType::A as i32
+        );
+        assert_eq!(
+            records[1].value.as_deref(),
+            Some(r#""literal ; \" \\" "tail""#)
+        );
+        assert!(parse_dns_file("hostname = 'unrelated'\n[dns]\nzone = []").is_err());
+        assert!(parse_dns_file("").is_err());
+    }
+
+    const CREDENTIAL_FINGERPRINT: &str =
+        "4bb06f8e4e3a7715d201d573d0aa423762e55dabd61a2c02278fa56cc6d294e0";
+
+    fn credential(id: &str) -> CredentialInfo {
+        CredentialInfo {
+            credential_id: id.to_owned(),
+            public_key_fingerprint: CREDENTIAL_FINGERPRINT.to_owned(),
+            ..Default::default()
+        }
+    }
+
+    fn credential_peer(peer_id: u32) -> PeerInfo {
+        PeerInfo {
+            peer_id,
+            conns: vec![PeerConnInfo {
+                peer_id,
+                noise_remote_static_pubkey: vec![7; 32],
+                peer_identity_type: PeerIdentityType::Credential as i32,
+                secure_auth_level: SecureAuthLevel::PeerVerified as i32,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    fn credential_route(peer_id: u32, ipv4: &str) -> ApiRoute {
+        ApiRoute {
+            peer_id,
+            ipv4_addr: Some(ipv4.parse().unwrap()),
+            ipv6_addr: Some("fd00::2/64".parse().unwrap()),
+            hostname: format!("peer-{peer_id}"),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn credential_peers_command_parses_without_changing_list() {
+        let cli = Cli::try_parse_from([
+            "easytier-cli",
+            "-n",
+            "network",
+            "-o",
+            "json",
+            "credential",
+            "peers",
+        ])
+        .unwrap();
+        assert_eq!(cli.instance_select.name.as_deref(), Some("network"));
+        assert_eq!(cli.output_format, OutputFormat::Json);
+        assert!(matches!(
+            cli.sub_command,
+            SubCommand::Credential(CredentialArgs {
+                sub_command: CredentialSubCommand::Peers,
+            })
+        ));
+        let cli = Cli::try_parse_from(["easytier-cli", "credential", "list"]).unwrap();
+        assert!(matches!(
+            cli.sub_command,
+            SubCommand::Credential(CredentialArgs {
+                sub_command: CredentialSubCommand::List,
+            })
+        ));
+    }
+
+    #[test]
+    fn credential_peers_matches_remote_fingerprint_and_virtual_addresses() {
+        let data = build_credential_peers(
+            vec![credential("user")],
+            vec![credential_peer(42)],
+            vec![credential_route(42, "10.252.9.2/24")],
+        );
+        let peer = &data.credentials[0].peers[0];
+        assert_eq!(peer.peer_id, 42);
+        assert_eq!(peer.ipv4.as_deref(), Some("10.252.9.2"));
+        assert_eq!(peer.ipv6.as_deref(), Some("fd00::2"));
+        assert_eq!(peer.hostname, "peer-42");
+        let json = serde_json::to_value(&data).unwrap();
+        assert_eq!(json["credentials"][0]["credential_id"], "user");
+        assert_eq!(json["credentials"][0]["peers"][0]["peer_id"], 42);
+        assert_eq!(json["credentials"][0]["peers"][0]["ipv4"], "10.252.9.2");
+        let json = json.to_string();
+        assert!(!json.contains("secret"));
+        assert!(!json.contains("pubkey"));
+        assert!(!json.contains("fingerprint"));
+        let table = format_credential_peers(&data);
+        assert!(table.contains("10.252.9.2"));
+        assert!(table.contains("fd00::2"));
+        assert!(table.contains("peer-42"));
+    }
+
+    #[test]
+    fn credential_peers_supports_reuse_and_deduplicates_connections() {
+        let mut peer = credential_peer(9);
+        peer.conns.push(peer.conns[0].clone());
+        let data = build_credential_peers(
+            vec![credential("user")],
+            vec![peer, credential_peer(2)],
+            vec![
+                credential_route(9, "10.252.9.9/24"),
+                credential_route(2, "10.252.9.2/24"),
+            ],
+        );
+        let peers = &data.credentials[0].peers;
+        assert_eq!(peers.len(), 2);
+        assert_eq!(peers[0].peer_id, 2);
+        assert_eq!(peers[1].peer_id, 9);
+    }
+
+    #[test]
+    fn credential_peers_ignores_closed_unverified_and_noncredential_connections() {
+        let original = credential_peer(42);
+        let mut variants = Vec::new();
+        let mut closed = original.clone();
+        closed.conns[0].is_closed = true;
+        variants.push(closed);
+        for identity in [PeerIdentityType::Admin, PeerIdentityType::SharedNode] {
+            let mut peer = original.clone();
+            peer.conns[0].peer_identity_type = identity as i32;
+            variants.push(peer);
+        }
+        for auth in [
+            SecureAuthLevel::None as i32,
+            SecureAuthLevel::EncryptedUnauthenticated as i32,
+            999,
+        ] {
+            let mut peer = original.clone();
+            peer.conns[0].secure_auth_level = auth;
+            variants.push(peer);
+        }
+        for key in [Vec::new(), vec![7; 31], vec![7; 33], vec![8; 32]] {
+            let mut peer = original.clone();
+            peer.conns[0].noise_remote_static_pubkey = key;
+            // A matching local key must not associate a different remote key.
+            peer.conns[0].noise_local_static_pubkey = vec![7; 32];
+            variants.push(peer);
+        }
+        for peer in variants {
+            let data = build_credential_peers(
+                vec![credential("user")],
+                vec![peer],
+                vec![credential_route(42, "10.252.9.2/24")],
+            );
+            assert!(data.credentials[0].peers.is_empty());
+        }
+    }
+
+    #[test]
+    fn credential_peers_keeps_unmatched_credentials_without_claiming_global_offline_status() {
+        let mut legacy = credential("legacy");
+        legacy.public_key_fingerprint.clear();
+        let data = build_credential_peers(
+            vec![credential("user"), legacy],
+            Vec::new(),
+            // A route without an authenticated direct connection is not a match.
+            vec![credential_route(42, "10.252.9.2/24")],
+        );
+        assert_eq!(data.credentials[0].credential_id, "legacy");
+        assert_eq!(data.credentials[1].credential_id, "user");
+        assert!(data.credentials.iter().all(|entry| entry.peers.is_empty()));
+        assert_eq!(
+            serde_json::to_value(&data).unwrap()["credentials"][0]["peers"],
+            serde_json::json!([])
+        );
+        let table = format_credential_peers(&data);
+        assert!(table.contains("no direct peers"));
+        assert!(!table.contains("offline"));
+    }
+
+    #[test]
+    fn credential_peers_does_not_attribute_relayed_nodes_to_the_next_hop() {
+        let mut relayed = credential_route(42, "10.252.9.42/24");
+        relayed.next_hop_peer_id = 7;
+        let mut legacy = credential("legacy");
+        legacy.public_key_fingerprint.clear();
+        let data = build_credential_peers(
+            vec![credential("user"), legacy],
+            vec![credential_peer(7)],
+            vec![credential_route(7, "10.252.9.7/24"), relayed],
+        );
+        assert!(data.credentials[0].peers.is_empty());
+        let peers = &data.credentials[1].peers;
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].peer_id, 7);
+        assert_eq!(peers[0].ipv4.as_deref(), Some("10.252.9.7"));
+    }
+
+    #[test]
+    fn credential_peers_keeps_connected_nodes_with_missing_route_addresses() {
+        for routes in [
+            Vec::new(),
+            vec![ApiRoute {
+                peer_id: 42,
+                ipv4_addr: Some(Default::default()),
+                ipv6_addr: Some(Default::default()),
+                ..Default::default()
+            }],
+        ] {
+            let data =
+                build_credential_peers(vec![credential("user")], vec![credential_peer(42)], routes);
+            let peer = &data.credentials[0].peers[0];
+            assert_eq!(peer.peer_id, 42);
+            assert!(peer.ipv4.is_none());
+            assert!(peer.ipv6.is_none());
+            assert_eq!(peer.hostname, "");
+            assert_eq!(
+                serde_json::to_value(&data).unwrap()["credentials"][0]["peers"][0]["ipv4"],
+                serde_json::Value::Null
+            );
+        }
+    }
+
+    #[test]
+    fn credential_peers_does_not_associate_another_credentials_key() {
+        let mut other = credential("other");
+        other.public_key_fingerprint = "0".repeat(64);
+        let data = build_credential_peers(
+            vec![other, credential("user")],
+            vec![credential_peer(42)],
+            vec![credential_route(42, "10.252.9.2/24")],
+        );
+        assert!(data.credentials[0].peers.is_empty());
+        assert_eq!(data.credentials[1].peers.len(), 1);
+    }
+
+    #[test]
+    fn credential_peers_handles_an_empty_credential_list() {
+        let data = build_credential_peers(
+            Vec::new(),
+            vec![credential_peer(42)],
+            vec![credential_route(42, "10.252.9.2/24")],
+        );
+        assert!(data.credentials.is_empty());
+        assert_eq!(format_credential_peers(&data), "No active credentials");
+    }
 
     #[test]
     fn missing_web_client_service_matches_raw_service_name() {
@@ -2760,6 +3191,30 @@ impl<'a> CommandHandler<'a> {
         })
     }
 
+    async fn handle_credential_peers(&self) -> Result<(), Error> {
+        let results = self
+            .collect_instance_results(|handler| {
+                Box::pin(async move {
+                    let credentials = handler.fetch_credential_list().await?;
+                    let peers = handler.list_peers().await?;
+                    let routes = handler.list_routes().await?;
+                    Ok(build_credential_peers(
+                        credentials.credentials,
+                        peers.peer_infos,
+                        routes.routes,
+                    ))
+                })
+            })
+            .await?;
+        if *self.output_format == OutputFormat::Json {
+            return self.print_json_results(results);
+        }
+        self.print_results(&results, |data| {
+            println!("{}", format_credential_peers(data));
+            Ok(())
+        })
+    }
+
     async fn handle_peer_center(&self) -> Result<(), Error> {
         let results = self
             .collect_instance_results(|handler| Box::pin(handler.fetch_peer_center_rows()))
@@ -2928,6 +3383,98 @@ impl<'a> CommandHandler<'a> {
             }
             Ok(())
         })
+    }
+
+    async fn fetch_dns_config(&self) -> Result<serde_json::Value, Error> {
+        let response = self
+            .get_config_client()
+            .await?
+            .get_config(
+                BaseController::default(),
+                GetConfigRequest {
+                    instance: Some(self.instance_selector.clone()),
+                },
+            )
+            .await?;
+        Ok(serde_json::json!({
+            "dns": response.config.and_then(|config| config.dns),
+        }))
+    }
+
+    async fn handle_dns_show(&self) -> Result<(), Error> {
+        let results = self
+            .collect_instance_results(|handler| Box::pin(handler.fetch_dns_config()))
+            .await?;
+        if *self.output_format == OutputFormat::Json {
+            return self.print_json_results(results);
+        }
+        self.print_results(&results, |state| {
+            println!("{}", serde_json::to_string_pretty(state)?);
+            Ok(())
+        })
+    }
+
+    async fn apply_dns_patch(
+        &self,
+        dns: easytier_proto::core_config::DnsConfigRaw,
+    ) -> Result<(), Error> {
+        let client = self.get_config_client().await?;
+        client
+            .patch_config(
+                BaseController::default(),
+                PatchConfigRequest {
+                    instance: Some(self.instance_selector.clone()),
+                    patch: Some(InstanceConfigPatch {
+                        dns: Some(dns.clone()),
+                        ..Default::default()
+                    }),
+                },
+            )
+            .await?;
+        let saved = client
+            .get_config(
+                BaseController::default(),
+                GetConfigRequest {
+                    instance: Some(self.instance_selector.clone()),
+                },
+            )
+            .await?
+            .config
+            .and_then(|config| config.dns)
+            .unwrap_or_default();
+        anyhow::ensure!(
+            (dns.domain.is_none() || dns.domain == saved.domain)
+                && (dns.zone.is_none() || dns.zone == saved.zone),
+            "core did not retain the requested DNS patch; check its version and configuration"
+        );
+        Ok(())
+    }
+
+    async fn handle_dns_patch(
+        &self,
+        dns: easytier_proto::core_config::DnsConfigRaw,
+    ) -> Result<(), Error> {
+        // DNS writes require one instance to avoid a partially successful fanout.
+        if let Some(targets) = self.fanout_targets().await? {
+            anyhow::ensure!(
+                targets.len() == 1,
+                "DNS updates require one instance; specify --instance-id or --instance-name"
+            );
+            self.scoped_to_instance(&targets[0])
+                .apply_dns_patch(dns)
+                .await?;
+        } else {
+            self.apply_dns_patch(dns).await?;
+        }
+        if *self.output_format == OutputFormat::Json {
+            println!(
+                "{}",
+                serde_json::json!({ "saved": true, "requires_restart": true })
+            );
+        } else {
+            println!("DNS configuration saved; restart the instance to apply DNS changes.");
+        }
+        Ok(())
     }
 
     async fn handle_node(&self, sub_command: Option<&NodeSubCommand>) -> Result<(), Error> {
@@ -3458,6 +4005,23 @@ async fn main() -> Result<(), Error> {
         SubCommand::Node(sub_cmd) => {
             handler.handle_node(sub_cmd.sub_command.as_ref()).await?;
         }
+        SubCommand::Dns(args) => match &args.sub_command {
+            DnsSubCommand::Show => handler.handle_dns_show().await?,
+            DnsSubCommand::Set { file } => {
+                let contents = std::fs::read_to_string(file).with_context(|| {
+                    format!("failed to read DNS configuration {}", file.display())
+                })?;
+                handler.handle_dns_patch(parse_dns_file(&contents)?).await?;
+            }
+            DnsSubCommand::Clear => {
+                handler
+                    .handle_dns_patch(easytier_proto::core_config::DnsConfigRaw {
+                        zone: Some(Default::default()),
+                        domain: None,
+                    })
+                    .await?;
+            }
+        },
         SubCommand::Service(service_args) => {
             let service = Service::new(service_args.name)?;
             match service_args.sub_command {
@@ -3685,6 +4249,9 @@ async fn main() -> Result<(), Error> {
             }
             CredentialSubCommand::List => {
                 handler.handle_credential_list().await?;
+            }
+            CredentialSubCommand::Peers => {
+                handler.handle_credential_peers().await?;
             }
         },
         SubCommand::GenAutocomplete { shell } => {

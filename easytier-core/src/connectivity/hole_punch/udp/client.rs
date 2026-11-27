@@ -16,7 +16,7 @@ use crate::{
     config::PeerId,
     connectivity::stun::StunInfoProvider,
     packet::{HOLE_PUNCH_PACKET_BODY_LEN, new_hole_punch_packet},
-    socket::udp::{UdpBindOptions, VirtualUdpSocketFactory},
+    socket::udp::{UdpBindOptions, VirtualUdpSocket},
 };
 
 use super::{
@@ -41,12 +41,11 @@ const DST_PORT_OFFSET: u16 = 20;
 const REMOTE_WAIT_TIME_MS: u64 = 5000;
 
 pub fn apply_peer_easy_sym_port_offset(base_port: u16, peer_is_incremental: bool) -> u16 {
-    let port = if peer_is_incremental {
-        (base_port as u32).saturating_add(DST_PORT_OFFSET as u32)
+    if peer_is_incremental {
+        base_port.saturating_add(DST_PORT_OFFSET)
     } else {
-        (base_port as u32).saturating_sub(DST_PORT_OFFSET as u32)
-    };
-    port as u16
+        base_port.saturating_sub(DST_PORT_OFFSET).max(1)
+    }
 }
 
 #[tracing::instrument(skip(runtime, signaling), fields(dst_peer_id), err)]
@@ -62,17 +61,29 @@ where
     tracing::info!(?dst_peer_id, "start hole punching");
     let tid = rand::random();
 
-    let udp_array = UdpSocketArray::new_with_context(1, runtime.clone(), runtime.socket_context());
-
     let resp = signaling
         .select_punch_listener(
             dst_peer_id,
             SelectPunchListener {
                 force_new: false,
                 prefer_port_mapping: true,
+                transaction_id: Some(tid),
             },
         )
         .await?;
+    if resp
+        .transaction_id
+        .is_some_and(|registered| registered != tid)
+    {
+        return Err(UdpHolePunchSignalError::RemoteRejected(
+            "listener registered a different hole-punch transaction".into(),
+        )
+        .into());
+    }
+    tracing::debug!(
+        source_observation_registered = resp.transaction_id == Some(tid),
+        "selected hole-punch listener"
+    );
     let remote_mapped_addr = resp.listener_mapped_addr;
 
     let local_socket = UdpHolePunchRuntime::bind_udp(
@@ -96,14 +107,12 @@ where
         "hole punch got remote listener"
     );
 
-    udp_array.add_new_socket(local_socket).await?;
-    udp_array.add_intreast_tid(tid);
     let punch_packet = new_hole_punch_packet(tid, HOLE_PUNCH_PACKET_BODY_LEN).into_bytes();
 
-    send_from_local(&udp_array, &punch_packet, remote_mapped_addr).await?;
+    send_from_local(local_socket.as_ref(), &punch_packet, remote_mapped_addr).await?;
 
     let signaling_for_task = signaling.clone();
-    let punch_task = AbortOnDropHandle::new(tokio::spawn(async move {
+    let _punch_task = AbortOnDropHandle::new(tokio::spawn(async move {
         if let Err(e) = signaling_for_task
             .send_punch_packet_cone(
                 dst_peer_id,
@@ -122,33 +131,27 @@ where
         }
     }));
 
-    let mut finish_time: Option<Instant> = None;
-    while finish_time.is_none() || finish_time.as_ref().unwrap().elapsed().as_millis() < 1000 {
-        crate::foundation::time::sleep(std::time::Duration::from_millis(200)).await;
-
-        if finish_time.is_none() && punch_task.is_finished() {
-            finish_time = Some(Instant::now());
-        }
-
-        let Some(socket) = udp_array.try_fetch_punched_socket(tid) else {
-            tracing::debug!("no punched socket found, send some more hole punch packets");
-            send_from_local(&udp_array, &punch_packet, remote_mapped_addr).await?;
-            continue;
-        };
-
-        tracing::debug!(?socket, ?tid, "punched socket found, try connect with it");
-
-        for _ in 0..2 {
-            match runtime
-                .connect_with_socket(socket.socket.clone(), remote_mapped_addr)
-                .await
-            {
-                Ok(socket) => {
-                    tracing::info!(?socket, "hole punched");
-                    return Ok(Some(socket));
+    // The session layer owns receive while connecting. A reachable listener can
+    // reply to SYN's actual source even when the STUN candidate differs.
+    for _ in 0..2 {
+        let connect = runtime.connect_with_socket(local_socket.clone(), remote_mapped_addr);
+        tokio::pin!(connect);
+        loop {
+            tokio::select! {
+                result = &mut connect => {
+                    match result {
+                        Ok(socket) => {
+                            tracing::info!(?socket, "hole punched");
+                            return Ok(Some(socket));
+                        }
+                        Err(e) => {
+                            tracing::error!(?e, "failed to connect with socket");
+                            break;
+                        }
+                    }
                 }
-                Err(e) => {
-                    tracing::error!(?e, "failed to connect with socket");
+                _ = crate::foundation::time::sleep(std::time::Duration::from_millis(200)) => {
+                    send_from_local(local_socket.as_ref(), &punch_packet, remote_mapped_addr).await?;
                 }
             }
         }
@@ -157,17 +160,20 @@ where
     Ok(None)
 }
 
-async fn send_from_local<R>(
-    udp_array: &UdpSocketArray<R>,
+async fn send_from_local<S>(
+    socket: &S,
     punch_packet: &[u8],
     remote_mapped_addr: SocketAddr,
 ) -> UdpHolePunchClientResult<()>
 where
-    R: VirtualUdpSocketFactory,
+    S: VirtualUdpSocket,
 {
-    udp_array
-        .send_with_all(punch_packet, remote_mapped_addr)
-        .await?;
+    for _ in 0..3 {
+        socket
+            .send_to(punch_packet, remote_mapped_addr)
+            .await
+            .map_err(anyhow::Error::from)?;
+    }
     Ok(())
 }
 
@@ -206,24 +212,19 @@ where
     }
 
     async fn prepare_udp_array(&self) -> anyhow::Result<Arc<UdpSocketArray<R>>> {
-        let rlocked = self.udp_array.read().await;
-        if let Some(udp_array) = rlocked.clone() {
-            return Ok(udp_array);
-        }
-
-        drop(rlocked);
         let mut wlocked = self.udp_array.write().await;
-        if let Some(udp_array) = wlocked.clone() {
-            return Ok(udp_array);
-        }
-
-        let udp_array = Arc::new(UdpSocketArray::new_with_context(
-            UDP_ARRAY_SIZE_FOR_HARD_SYM,
-            self.runtime.clone(),
-            self.runtime.socket_context(),
-        ));
+        let udp_array = wlocked
+            .get_or_insert_with(|| {
+                Arc::new(UdpSocketArray::new_with_context(
+                    UDP_ARRAY_SIZE_FOR_HARD_SYM,
+                    self.runtime.clone(),
+                    self.runtime.socket_context(),
+                ))
+            })
+            .clone();
+        // Successful candidates leave the array even if transport admission fails.
+        // Refill only those slots so other candidates retain their NAT mappings.
         udp_array.start().await?;
-        wlocked.replace(udp_array.clone());
         Ok(udp_array)
     }
 
@@ -353,6 +354,7 @@ where
                 SelectPunchListener {
                     force_new: false,
                     prefer_port_mapping: true,
+                    transaction_id: None,
                 },
             )
             .await?;
@@ -505,11 +507,10 @@ where
                 SendPunchPacketBothEasySym {
                     transaction_id: tid,
                     public_ip: my_public_ip,
-                    dst_port_num: if me_is_incremental {
-                        cur_mapped_addr.port().saturating_add(DST_PORT_OFFSET)
-                    } else {
-                        cur_mapped_addr.port().saturating_sub(DST_PORT_OFFSET)
-                    } as u32,
+                    dst_port_num: apply_peer_easy_sym_port_offset(
+                        cur_mapped_addr.port(),
+                        me_is_incremental,
+                    ) as u32,
                     udp_socket_count: UDP_ARRAY_SIZE_FOR_BOTH_EASY_SYM as u32,
                     wait_time_ms: REMOTE_WAIT_TIME_MS as u32,
                 },
@@ -526,6 +527,7 @@ where
             .ok_or(anyhow::anyhow!("remote_mapped_addr is required"))?;
 
         let now = Instant::now();
+        let punch_packet = new_hole_punch_packet(tid, HOLE_PUNCH_PACKET_BODY_LEN).into_bytes();
         remote_mapped_addr.set_port(apply_peer_easy_sym_port_offset(
             remote_mapped_addr.port(),
             peer_is_incremental,
@@ -538,10 +540,7 @@ where
 
         while now.elapsed().as_millis() < (REMOTE_WAIT_TIME_MS + 1000).into() {
             udp_array
-                .send_with_all(
-                    &new_hole_punch_packet(tid, HOLE_PUNCH_PACKET_BODY_LEN).into_bytes(),
-                    remote_mapped_addr,
-                )
+                .send_with_all(&punch_packet, remote_mapped_addr)
                 .await?;
 
             crate::foundation::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -563,17 +562,25 @@ where
             );
 
             for _ in 0..2 {
-                match self
+                // The peer may still be receiving raw HolePunch packets. Keep
+                // probing this candidate until it switches to a session listener.
+                send_from_local(socket.socket.as_ref(), &punch_packet, remote_mapped_addr).await?;
+                let connect = self
                     .runtime
-                    .connect_with_socket(socket.socket.clone(), remote_mapped_addr)
-                    .await
-                {
-                    Ok(socket) => {
-                        return Ok(Some(socket));
-                    }
-                    Err(e) => {
-                        tracing::error!(?e, "failed to connect with socket");
-                        continue;
+                    .connect_with_socket(socket.socket.clone(), remote_mapped_addr);
+                tokio::pin!(connect);
+                loop {
+                    tokio::select! {
+                        result = &mut connect => {
+                            match result {
+                                Ok(socket) => return Ok(Some(socket)),
+                                Err(e) => tracing::error!(?e, "failed to connect with socket"),
+                            }
+                            break;
+                        }
+                        _ = crate::foundation::time::sleep(std::time::Duration::from_millis(200)) => {
+                            send_from_local(socket.socket.as_ref(), &punch_packet, remote_mapped_addr).await?;
+                        }
                     }
                 }
             }
@@ -614,6 +621,11 @@ mod tests {
 
     struct MockSocket {
         local_addr: SocketAddr,
+        incoming: std::sync::Mutex<std::collections::VecDeque<(Vec<u8>, SocketAddr)>>,
+        incoming_notify: tokio::sync::Notify,
+        sent: std::sync::Mutex<Vec<(Vec<u8>, SocketAddr)>>,
+        drop_syn_packets: AtomicUsize,
+        required_punch_packets: AtomicUsize,
     }
 
     #[async_trait]
@@ -622,12 +634,48 @@ mod tests {
             Ok(self.local_addr)
         }
 
-        async fn send_to(&self, _data: &[u8], _addr: SocketAddr) -> io::Result<usize> {
-            Ok(0)
+        async fn send_to(&self, data: &[u8], addr: SocketAddr) -> io::Result<usize> {
+            self.sent.lock().unwrap().push((data.to_vec(), addr));
+            if crate::packet::hole_punch_packet_tid(data, HOLE_PUNCH_PACKET_BODY_LEN).is_some()
+                && self.required_punch_packets.load(Ordering::Relaxed) != 0
+            {
+                self.required_punch_packets.fetch_sub(1, Ordering::Relaxed);
+                self.incoming
+                    .lock()
+                    .unwrap()
+                    .push_back((data.to_vec(), addr));
+                self.incoming_notify.notify_one();
+            }
+            if data.len() == 16 && data[4] == crate::packet::UdpPacketType::Syn as u8 {
+                if self.required_punch_packets.load(Ordering::Relaxed) != 0 {
+                    return Ok(data.len());
+                }
+                if self.drop_syn_packets.load(Ordering::Relaxed) != 0 {
+                    self.drop_syn_packets.fetch_sub(1, Ordering::Relaxed);
+                    return Ok(data.len());
+                }
+                let conn_id = u32::from_le_bytes(data[..4].try_into().unwrap());
+                let magic = u64::from_le_bytes(data[8..].try_into().unwrap());
+                self.incoming.lock().unwrap().push_back((
+                    crate::socket::udp::new_sack_packet(conn_id, magic)
+                        .into_bytes()
+                        .to_vec(),
+                    addr,
+                ));
+                self.incoming_notify.notify_one();
+            }
+            Ok(data.len())
         }
 
-        async fn recv_from(&self, _buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
-            std::future::pending().await
+        async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
+            loop {
+                if let Some((data, addr)) = self.incoming.lock().unwrap().pop_front() {
+                    let len = data.len().min(buf.len());
+                    buf[..len].copy_from_slice(&data[..len]);
+                    return Ok((len, addr));
+                }
+                self.incoming_notify.notified().await;
+            }
         }
     }
 
@@ -635,6 +683,9 @@ mod tests {
         bind_count: AtomicUsize,
         resolve_count: AtomicUsize,
         bind_options: tokio::sync::Mutex<Vec<UdpBindOptions>>,
+        sockets: std::sync::Mutex<Vec<std::sync::Weak<MockSocket>>>,
+        drop_syn_packets: usize,
+        required_punch_packets: usize,
     }
 
     impl MockRuntime {
@@ -643,6 +694,9 @@ mod tests {
                 bind_count: AtomicUsize::new(0),
                 resolve_count: AtomicUsize::new(0),
                 bind_options: tokio::sync::Mutex::new(Vec::new()),
+                sockets: std::sync::Mutex::new(Vec::new()),
+                drop_syn_packets: 0,
+                required_punch_packets: 0,
             }
         }
     }
@@ -654,18 +708,26 @@ mod tests {
         async fn bind_udp(&self, options: UdpBindOptions) -> anyhow::Result<Arc<Self::Socket>> {
             self.bind_options.lock().await.push(options);
             let bind_idx = self.bind_count.fetch_add(1, Ordering::Relaxed);
-            Ok(Arc::new(MockSocket {
+            let socket = Arc::new(MockSocket {
                 local_addr: SocketAddr::from(([127, 0, 0, 1], 10000 + bind_idx as u16)),
-            }))
+                incoming: std::sync::Mutex::new(std::collections::VecDeque::new()),
+                incoming_notify: tokio::sync::Notify::new(),
+                sent: std::sync::Mutex::new(Vec::new()),
+                drop_syn_packets: AtomicUsize::new(self.drop_syn_packets),
+                required_punch_packets: AtomicUsize::new(self.required_punch_packets),
+            });
+            self.sockets.lock().unwrap().push(Arc::downgrade(&socket));
+            Ok(socket)
         }
 
         async fn resolve_udp_public_addr(
             &self,
-            _socket: Arc<Self::Socket>,
+            socket: Arc<Self::Socket>,
         ) -> anyhow::Result<super::super::UdpResolvedPublicAddr> {
+            assert_eq!(socket.local_addr()?.port(), 10000);
             self.resolve_count.fetch_add(1, Ordering::Relaxed);
             Ok(super::super::UdpResolvedPublicAddr {
-                mapped_addr: SocketAddr::from(([203, 0, 113, 1], 10000)),
+                mapped_addr: SocketAddr::from(([203, 0, 113, 1], 40000)),
                 port_mapping_lease: None,
             })
         }
@@ -686,10 +748,12 @@ mod tests {
 
         async fn connect_with_socket(
             &self,
-            _socket: Arc<Self::Socket>,
-            _remote: SocketAddr,
+            socket: Arc<Self::Socket>,
+            remote: SocketAddr,
         ) -> anyhow::Result<UdpPunchSocket> {
-            unimplemented!("not used by cone client tests")
+            let layer = Arc::new(crate::socket::udp::UdpSessionLayer::new(socket));
+            let session = layer.connect(remote).await?;
+            Ok(UdpPunchSocket::new(session, remote, layer))
         }
     }
 
@@ -797,6 +861,8 @@ mod tests {
     }
 
     struct RecordingSignaling {
+        listener_requests: tokio::sync::Mutex<Vec<SelectPunchListener>>,
+        confirm_transaction_id: bool,
         easy_requests: tokio::sync::Mutex<Vec<SendPunchPacketEasySym>>,
         hard_requests: tokio::sync::Mutex<Vec<SendPunchPacketHardSym>>,
         both_requests: tokio::sync::Mutex<Vec<SendPunchPacketBothEasySym>>,
@@ -804,9 +870,100 @@ mod tests {
         next_port_index: u32,
     }
 
+    #[tokio::test]
+    async fn cone_connects_without_reverse_hole_punch_and_retries_dropped_syn() {
+        for (drop_syn_packets, confirm_transaction_id) in
+            [(0, true), (1, true), (0, false), (1, false)]
+        {
+            let mut runtime = MockRuntime::new();
+            runtime.drop_syn_packets = drop_syn_packets;
+            let runtime = Arc::new(runtime);
+            let mut signaling = RecordingSignaling::new(0);
+            signaling.confirm_transaction_id = confirm_transaction_id;
+            let signaling = Arc::new(signaling);
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                punch_cone_to_cone(runtime.clone(), signaling.clone(), 2),
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+            assert_eq!(runtime.bind_count.load(Ordering::Relaxed), 1);
+            assert_eq!(runtime.resolve_count.load(Ordering::Relaxed), 1);
+            let tid = signaling.listener_requests.lock().await[0]
+                .transaction_id
+                .unwrap();
+            let socket = runtime.sockets.lock().unwrap()[0].upgrade().unwrap();
+            let sent = socket.sent.lock().unwrap();
+            let syns = sent
+                .iter()
+                .filter(|(packet, _)| packet[4] == crate::packet::UdpPacketType::Syn as u8)
+                .count();
+            assert_eq!(syns, drop_syn_packets + 1);
+            assert!(sent.iter().any(|(packet, _)| {
+                crate::packet::hole_punch_packet_tid(packet, HOLE_PUNCH_PACKET_BODY_LEN)
+                    == Some(tid)
+            }));
+            assert!(
+                sent.iter()
+                    .all(|(_, addr)| *addr == SocketAddr::from(([127, 0, 0, 1], 30000)))
+            );
+            drop(sent);
+            drop(result);
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelling_cone_connect_releases_socket_and_receive_task() {
+        let mut runtime = MockRuntime::new();
+        runtime.drop_syn_packets = usize::MAX;
+        let runtime = Arc::new(runtime);
+        let task_runtime = runtime.clone();
+        let task = tokio::spawn(async move {
+            punch_cone_to_cone(task_runtime, Arc::new(RecordingSignaling::new(0)), 2).await
+        });
+        let socket = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                let socket = runtime
+                    .sockets
+                    .lock()
+                    .unwrap()
+                    .first()
+                    .and_then(std::sync::Weak::upgrade);
+                if let Some(socket) = socket
+                    && socket
+                        .sent
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .any(|(packet, _)| packet[4] == crate::packet::UdpPacketType::Syn as u8)
+                {
+                    break socket;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let weak = Arc::downgrade(&socket);
+        drop(socket);
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while weak.upgrade().is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
     impl RecordingSignaling {
         fn new(next_port_index: u32) -> Self {
             Self {
+                listener_requests: tokio::sync::Mutex::new(Vec::new()),
+                confirm_transaction_id: true,
                 easy_requests: tokio::sync::Mutex::new(Vec::new()),
                 hard_requests: tokio::sync::Mutex::new(Vec::new()),
                 both_requests: tokio::sync::Mutex::new(Vec::new()),
@@ -832,10 +989,16 @@ mod tests {
         async fn select_punch_listener(
             &self,
             _dst_peer_id: PeerId,
-            _request: SelectPunchListener,
+            request: SelectPunchListener,
         ) -> Result<super::super::SelectPunchListenerResponse, UdpHolePunchSignalError> {
+            let transaction_id = self
+                .confirm_transaction_id
+                .then_some(request.transaction_id)
+                .flatten();
+            self.listener_requests.lock().await.push(request);
             Ok(super::super::SelectPunchListenerResponse {
                 listener_mapped_addr: SocketAddr::from(([127, 0, 0, 1], 30000)),
+                transaction_id,
             })
         }
 
@@ -910,6 +1073,18 @@ mod tests {
         let hard_requests = signaling.hard_requests.lock().await;
         assert_eq!(hard_requests.len(), 1);
         assert_eq!(last_port_idx, 42);
+        drop(hard_requests);
+        drop(easy_requests);
+
+        client
+            .do_hole_punching(2, 4, &mut last_port_idx, NatType::SymmetricEasyInc.into())
+            .await
+            .unwrap();
+        assert_eq!(stun.port_mapping_count.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            runtime.bind_count.load(Ordering::Relaxed),
+            UDP_ARRAY_SIZE_FOR_HARD_SYM
+        );
     }
 
     #[tokio::test]
@@ -944,9 +1119,104 @@ mod tests {
     }
 
     #[test]
-    fn both_easy_sym_port_offset_preserves_old_proto_cast_semantics() {
-        assert_eq!(apply_peer_easy_sym_port_offset(65530, true), 14);
-        assert_eq!(apply_peer_easy_sym_port_offset(10, false), 0);
+    fn both_easy_sym_port_offset_stays_in_valid_port_range() {
+        for (base, incremental, expected) in [
+            (10000, true, 10020),
+            (10000, false, 9980),
+            (65516, true, 65535),
+            (65530, true, 65535),
+            (65535, true, 65535),
+            (20, false, 1),
+            (10, false, 1),
+            (1, false, 1),
+        ] {
+            assert_eq!(apply_peer_easy_sym_port_offset(base, incremental), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn sym_to_cone_replenishes_candidates_after_connected_socket_is_dropped() {
+        let runtime = Arc::new(MockRuntime::new());
+        let client = UdpSymToConePunchClient::new(
+            runtime.clone(),
+            Arc::new(RecordingSignaling::new(0)),
+            Arc::new(MockStunInfoProvider::default()),
+        );
+        let array = client.prepare_udp_array().await.unwrap();
+        let remote = SocketAddr::from(([203, 0, 113, 1], 30000));
+
+        for tid in 0..=UDP_ARRAY_SIZE_FOR_HARD_SYM as u32 {
+            array.add_interest_tid(tid);
+            let socket = runtime
+                .sockets
+                .lock()
+                .unwrap()
+                .last()
+                .unwrap()
+                .upgrade()
+                .unwrap();
+            socket.incoming.lock().unwrap().push_back((
+                new_hole_punch_packet(tid, HOLE_PUNCH_PACKET_BODY_LEN)
+                    .into_bytes()
+                    .to_vec(),
+                remote,
+            ));
+            socket.incoming_notify.notify_one();
+            drop(socket);
+            let punched = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+                loop {
+                    if let Some(socket) = array.try_fetch_punched_socket(tid) {
+                        break socket;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            array.remove_interest_tid(tid);
+            let connected = runtime
+                .connect_with_socket(punched.socket, remote)
+                .await
+                .unwrap();
+            // Model a successful UDP handshake followed by failed peer admission.
+            drop(connected);
+
+            assert!(Arc::ptr_eq(
+                &array,
+                &client.prepare_udp_array().await.unwrap()
+            ));
+            assert_eq!(
+                runtime.bind_count.load(Ordering::Relaxed),
+                UDP_ARRAY_SIZE_FOR_HARD_SYM + tid as usize + 1,
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn both_easy_sym_keeps_probing_hit_until_remote_listener_is_ready() {
+        let mut runtime = MockRuntime::new();
+        // Initial probes produce a reverse hit, but the remote raw receiver
+        // needs more probes before it can accept SYN as a session listener.
+        runtime.required_punch_packets = 6;
+        let runtime = Arc::new(runtime);
+        let client = UdpBothEasySymPunchClient::new(
+            runtime,
+            Arc::new(RecordingSignaling::new(0)),
+            Arc::new(MockStunInfoProvider::default()),
+        );
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            client.do_hole_punching(
+                2,
+                NatType::SymmetricEasyInc.into(),
+                NatType::SymmetricEasyInc.into(),
+                &mut false,
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(result.is_some());
     }
 
     #[tokio::test]

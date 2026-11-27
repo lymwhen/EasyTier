@@ -12,9 +12,9 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 
 ## 相对上游变更清单
 
-> 以下为 `HEAD` 相对 `upstream/releases/v2.7.0` 的全部文件级变更及必要性说明。
+> 以下为 `HEAD` 相对 `upstream/releases/v2.7.1` 的全部文件级变更及必要性说明。
 > 每次对上游文件进行新增/修改后，**必须**同步更新此表格。
-> 当前跟进上游：`upstream/releases/v2.7.0`（`8b7f1f01`，tag `v2.7.0`）。
+> 当前跟进上游：`upstream/releases/v2.7.1`（`0d9c52b1`，tag `v2.7.1`）。
 
 ### 核心功能变更（必要）
 
@@ -24,7 +24,7 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 | `easytier-gui/src/App.vue` | 主题初始化 + 窗口标题 + Toast + RouterView（Splash 已移除） | 必要 — 初始化流程 |
 | `easytier-gui/src/composables/theme.ts` | `Theme` 收敛为浅色/深色，保留自动/浅色/深色切换解析；深色统一使用纯黑主题 | 必要 — 主题切换逻辑 |
 | `easytier-gui/src/composables/backend.ts` | 新增 `httpGet`/`httpPost`/`tcpPing`/`luciProxy*` IPC 封装 | 必要 — 前端 HTTP/代理调用 |
-| `easytier-gui/src/composables/event.ts` | `onSaveConfigs` 改为合并本地网络配置，避免覆盖用户配置；接入上游 `normalizeConfigSource` | 必要 — 修复配置覆盖 |
+| `easytier-gui/src/composables/event.ts` | `onSaveConfigs` 改为合并本地网络配置，避免覆盖用户配置；接入上游 `normalizeConfigSource`；v2.7.1 合并时叠加上游 android 早退守卫并保留上游新增 `VPN_SERVICE_CONFIG_CHANGED` 事件 | 必要 — 修复配置覆盖 |
 | `easytier-gui/src-tauri/src/lib.rs` | 新增 `http_get`/`http_post`/`tcp_ping` 命令 + LuCI 流式反向代理、文件传输进度事件、长传输超时控制 | 必要 — 后端 HTTP/代理支持 |
 | `easytier-gui/src-tauri/Cargo.toml` | 新增 `reqwest(socks,stream)`/`hyper`/`http-body-util`/`hyper-util`/`bytes`/`futures-util` + `tauri-plugin-opener`/`tauri-plugin-positioner` 依赖 | 必要 — Rust 侧流式 HTTP 客户端 + 代理服务器 + 跨平台浏览器/托盘定位 |
 | `easytier-gui/index.html` | viewport 添加 `maximum-scale=1.0, user-scalable=no` | 必要 — 禁用 Android 双指缩放 |
@@ -78,7 +78,7 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 
 ### 已同步至上游（无差异）
 
-以下文件此前与上游存在差异，已在 `16b7d7e` 合并 `upstream/main` 后归零：
+以下文件此前与上游存在差异，已在 `16b7d7e` 合并 `upstream/main` 及 v2.7.1 合并后归零：
 
 | 文件 | 说明 |
 |------|------|
@@ -86,6 +86,7 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 | `.github/workflows/Dockerfile` | HEALTHCHECK 跟随上游恢复 |
 | `easytier-gui/.../BuildTask.kt` | 文件末尾空行移除，与上游一致 |
 | `easytier-contrib/easytier-ohrs/Cargo.lock` | kcp-sys rev 跟随上游同步 |
+| `.github/workflows/test.yml` | fork 曾将 check/pre-test 的 `pnpm` 安装置 false；上游 v2.7.1 重构为 `full_build` 动态开关后效果等价，已完全跟随上游 |
 
 ## 功能清单（相对上游新增/优化）
 
@@ -894,7 +895,7 @@ Glassmorphism + Material You 混合风格，自定义 CSS 变量体系。
 ```
 第一行: [头像] [名称 · IPv4]                  [延迟]
 第二行:        [流量]              [P2P] [TCP] [NAT]
-展开:          [版本]                         [v2.7.0]
+展开:          [版本]                         [v2.7.1]
 ```
 
 - 左侧图标桌面/移动均为 `40px` 圆角头像；网络设备使用路由器图标，服务器使用服务器图标
@@ -902,7 +903,7 @@ Glassmorphism + Material You 混合风格，自定义 CSS 变量体系。
 - 网络设备 IPv4 紧随第一行名称，中间用 `·` 分隔（小圆点两侧间距 4px）；名称保持 `15px / 500`、IP 保持 `12px` 次要色，横向空间不足时仅缩略名称（ellipsis）；第二行只显示上下行流量，与右侧标签同行垂直居中，布局与服务器列表项一致
 - 除 `40px` 图标外，组网列表项字号整体小于 n3 默认稿：名称 `15px`、延迟/行内 IP `12px`、流量与标签 `11px`，流量使用粗体
 - 右侧：P2P/Relay、协议摘要、NAT 标签按 n3 chip 样式展示；协议过长时压缩，窄屏不覆盖左侧流量
-- 版本号只在展开区显示，格式为 `v2.7.0`（小写 v 前缀）
+- 版本号只在展开区显示，格式为 `v2.7.1`（小写 v 前缀）
 - 协议摘要提取公共前缀：空间足够时 `TXT-TCP, TXT-UDP` → `TXT:TCP/UDP`；右侧空间不足时压缩为 `TXT:2` / `TXT:3`
 - 卡片无 hover；点击整卡或聚焦后按 Enter/Space 展开
 - 展开区只显示版本号，不显示协议全文

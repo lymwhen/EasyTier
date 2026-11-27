@@ -8,6 +8,9 @@ import {
   type VpnPortalClientConfig,
   type VpnPortalConfig,
 } from '../generated/proto/api_manage'
+import { ScalarType } from '@protobuf-ts/runtime'
+import { DnsRecordType, type DnsRecordRaw } from '../generated/proto/core_config'
+import type { FlagMeta } from '../generated/proto/annotations'
 import {
   VpnPortalClientState,
   VpnPortalInfo as VpnPortalInfoPb,
@@ -27,15 +30,43 @@ import {
 } from '../generated/proto/acl'
 import {
   CompressionAlgoPb,
+  Flags as FlagsPb,
   NatType,
   type PeerFeatureFlag,
+  type Ipv6Inet,
   type SecureModeConfig,
 } from '../generated/proto/common'
 import { prepareNetworkConfigForProtoJson } from './networkCompat'
 
-export { AclAction, AclChainType, AclProtocol, CompressionAlgoPb, NatType, NetworkingMethod }
+export { AclAction, AclChainType, AclProtocol, CompressionAlgoPb, DnsRecordType, NatType, NetworkingMethod }
 export { VpnPortalClientState }
 export type { Acl, AclChain, AclRule, AclV1, GroupIdentity, GroupInfo, NetworkPeerConfig, PeerFeatureFlag, PortForwardConfig, SecureModeConfig, VpnPortalClientConfig, VpnPortalClientInfo, VpnPortalConfig, VpnPortalInfo }
+
+export const PEER_PROTOCOLS: { [proto: string]: number } = {
+  tcp: 11010,
+  udp: 11010,
+  wg: 11011,
+  ws: 11011,
+  wss: 11012,
+  quic: 11012,
+  faketcp: 11013,
+  http: 80,
+  https: 443,
+  txt: 0,
+  srv: 0,
+}
+
+// Configuration JSON uses transparent repeated wrappers, as Rust Serde does.
+// Derive the value types from the protocol schema rather than copying fields.
+type ConfigJson<T> = T extends { items: Array<infer Item> }
+  ? ConfigJson<Item>[]
+  : T extends DnsRecordRaw
+    ? ConfigJson<Omit<T, 'type'>>
+      & { type: DnsRecordType | keyof typeof DnsRecordType }
+    : T extends object ? { [Key in keyof T]: ConfigJson<T[Key]> } : T
+
+export type DnsConfig = ConfigJson<NonNullable<ProtoNetworkConfig['dns']>>
+export type DnsRecord = ConfigJson<DnsRecordRaw>
 
 export type NetworkConfig = Omit<
   ProtoNetworkConfig,
@@ -43,8 +74,10 @@ export type NetworkConfig = Omit<
   | 'instance_recv_bps_limit'
   | 'mtu'
   | 'networking_method'
+  | 'dns'
 > & {
   instance_id: string
+  dns?: DnsConfig
   mtu: number | null
   instance_recv_bps_limit: number | string | null
   networking_method: NetworkingMethod | string
@@ -87,9 +120,72 @@ function emptyAcl(): Acl {
   }
 }
 
+/** A flag of `common.Flags` that carries an annotation. */
+interface AnnotatedFlag {
+  /** The name the management API uses for the flag. */
+  field: string
+  /** Whether the schema types the flag as a boolean. */
+  boolean: boolean
+  meta: FlagMeta
+}
+
+const annotatedFlags: AnnotatedFlag[] = FlagsPb.fields.flatMap((flag) => {
+  const meta = flag.options?.['easytier.flag'] as FlagMeta | undefined
+  if (!meta) return []
+
+  return [{
+    field: meta.api?.field ?? flag.name,
+    boolean: flag.kind === 'scalar' && flag.T === ScalarType.BOOL,
+    meta,
+  }]
+})
+
+/** The value a flag's annotation declares, as the flag itself is typed. */
+function declaredValue(flag: AnnotatedFlag): boolean {
+  const declared = flag.meta.default === 'true'
+
+  return flag.meta.api?.negate ? !declared : declared
+}
+
+/**
+ * The value a flag runs with when the configuration does not state one, so a
+ * form shows what an unset flag means instead of showing it as off.
+ */
+export function defaultFlagValue(field: keyof NetworkConfig): boolean {
+  const flag = annotatedFlags.find((flag) => flag.field === field)
+
+  return flag ? declaredValue(flag) : false
+}
+
+/** The flags the management API carries, so a form's value reaches the backend. */
+export function apiCarries(field: string): boolean {
+  return NetworkConfigPb.fields.some((declared) => declared.name === field)
+}
+
+/**
+ * The flags a config form offers as checkboxes, in schema order: every boolean
+ * flag the message declares that the management API carries, less the deprecated ones.
+ */
+export function formFlags(): { field: keyof NetworkConfig; help: string }[] {
+  return annotatedFlags
+    .filter((flag) => flag.boolean && !flag.meta.deprecated && apiCarries(flag.field))
+    .map((flag) => ({ field: flag.field as keyof NetworkConfig, help: `${flag.field}_help` }))
+}
+
+/** The value the schema declares for every boolean flag, by form field. */
+function newFlagValues(): Record<string, boolean> {
+  const values: Record<string, boolean> = {}
+  for (const flag of annotatedFlags) {
+    if (flag.boolean) values[flag.field] = declaredValue(flag)
+  }
+
+  return values
+}
+
 export function DEFAULT_NETWORK_CONFIG(): NetworkConfig {
   return {
     ...NetworkConfigPb.create(),
+    dns: undefined,
 
     instance_id: uuidv4(),
 
@@ -113,32 +209,10 @@ export function DEFAULT_NETWORK_CONFIG(): NetworkConfig {
       'udp://0.0.0.0:11010',
       'wg://0.0.0.0:11011',
     ],
-    latency_first: false,
+    ...newFlagValues(),
     dev_name: '',
 
-    use_smoltcp: false,
-    disable_ipv6: false,
     ipv6_public_addr_auto: false,
-    enable_kcp_proxy: false,
-    disable_kcp_input: false,
-    enable_quic_proxy: false,
-    disable_quic_input: false,
-    disable_p2p: false,
-    p2p_only: false,
-    lazy_p2p: false,
-    bind_device: true,
-    no_tun: false,
-    enable_exit_node: false,
-    relay_all_peer_rpc: false,
-    need_p2p: false,
-    multi_thread: true,
-    proxy_forward_by_system: false,
-    disable_encryption: false,
-    disable_tcp_hole_punching: false,
-    disable_udp_hole_punching: false,
-    disable_upnp: false,
-    enable_udp_broadcast_relay: false,
-    disable_sym_hole_punching: false,
     enable_relay_network_whitelist: false,
     relay_network_whitelist: [],
     enable_manual_routes: false,
@@ -149,8 +223,6 @@ export function DEFAULT_NETWORK_CONFIG(): NetworkConfig {
     mtu: null,
     instance_recv_bps_limit: null,
     mapped_listeners: [],
-    enable_magic_dns: false,
-    enable_private_mode: false,
     port_forwards: [],
     acl: emptyAcl(),
   }
@@ -303,9 +375,11 @@ function applyNetworkingMethod(
 }
 
 export function normalizeNetworkConfig(config: NetworkConfig): NetworkConfig {
-  const normalized = NetworkConfigPb.fromJson(prepareNetworkConfigForProtoJson(config) as any, {
+  const { dns, ...protoConfig } = prepareNetworkConfigForProtoJson(config)
+  const normalized = NetworkConfigPb.fromJson(protoConfig as any, {
     ignoreUnknownFields: true,
   }) as unknown as NetworkConfig
+  normalized.dns = dns
 
   applyNetworkingMethod(normalized, { fillPeerUrlsFromPeers: true })
   normalized.mtu = normalizeNumberForInput(normalized.mtu)
@@ -340,7 +414,8 @@ export function normalizeNetworkConfig(config: NetworkConfig): NetworkConfig {
 }
 
 export function toBackendNetworkConfig(config: NetworkConfig): NetworkConfig {
-  const backend = NetworkConfigPb.fromJson(prepareNetworkConfigForProtoJson(config) as any, {
+  const { dns, ...protoConfig } = prepareNetworkConfigForProtoJson(config)
+  const backend = NetworkConfigPb.fromJson(protoConfig as any, {
     ignoreUnknownFields: true,
   })
 
@@ -360,9 +435,11 @@ export function toBackendNetworkConfig(config: NetworkConfig): NetworkConfig {
     backend.secure_mode = { enabled: true, local_private_key: credentialSecret }
   }
 
-  return NetworkConfigPb.toJson(backend, {
+  const result = NetworkConfigPb.toJson(backend, {
     useProtoFieldName: true,
   }) as unknown as NetworkConfig
+  if (dns !== undefined) result.dns = dns
+  return result
 }
 
 export function normalizeVpnPortalInfo(info: unknown): VpnPortalInfo {
@@ -411,6 +488,7 @@ export interface Url {
 
 export interface NodeInfo {
   virtual_ipv4: Ipv4Inet,
+  virtual_ipv6?: Ipv6Inet,
   hostname: string
   version: string
   ips: {
@@ -437,9 +515,9 @@ export interface NodeInfo {
 }
 
 export interface StunInfo {
-  udp_nat_type: number
-  tcp_nat_type: number
-  last_update_time: number
+  udp_nat_type?: number | string
+  tcp_nat_type?: number | string
+  last_update_time?: number | string
 }
 
 export interface Route {
@@ -540,6 +618,8 @@ export enum EventType {
   VpnPortalClientConnected = 'VpnPortalClientConnected', // string, string
   VpnPortalClientDisconnected = 'VpnPortalClientDisconnected', // string, string, string
 
+  DhcpIpv6Changed = 'DhcpIpv6Changed',
+  DhcpIpv6Conflicted = 'DhcpIpv6Conflicted',
   DhcpIpv4Changed = 'DhcpIpv4Changed', // ipv4 | null, ipv4 | null
   DhcpIpv4Conflicted = 'DhcpIpv4Conflicted', // ipv4 | null
 

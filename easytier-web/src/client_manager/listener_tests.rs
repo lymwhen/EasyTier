@@ -1,11 +1,44 @@
 use super::*;
 
 use easytier::proto::rpc::standalone::{
-    RuntimeRpcListener, runtime_rpc_dialer, runtime_rpc_listener,
+    RuntimeRpcListener, runtime_rpc_dialer, runtime_rpc_listener, runtime_udp_tunnel_listener,
 };
 use easytier_core::connectivity::protocol::raw::TunnelDialer;
 use std::sync::atomic::AtomicUsize;
 use tokio::{io::AsyncReadExt, net::TcpStream, sync::Notify, time::timeout};
+
+#[derive(Debug)]
+struct FailingListener {
+    inner: RuntimeRpcListener,
+    attempts: Arc<std::sync::Mutex<Vec<tokio::time::Instant>>>,
+    errors_remaining: usize,
+    error_kind: std::io::ErrorKind,
+}
+
+#[async_trait::async_trait]
+impl SocketListener for FailingListener {
+    type Accepted = Box<dyn Tunnel>;
+
+    async fn listen(&mut self) -> anyhow::Result<()> {
+        self.inner.listen().await
+    }
+
+    async fn accept(&mut self) -> anyhow::Result<Self::Accepted> {
+        self.attempts
+            .lock()
+            .unwrap()
+            .push(tokio::time::Instant::now());
+        if self.errors_remaining > 0 {
+            self.errors_remaining -= 1;
+            return Err(std::io::Error::from(self.error_kind).into());
+        }
+        self.inner.accept().await
+    }
+
+    fn local_url(&self) -> url::Url {
+        self.inner.local_url()
+    }
+}
 
 #[derive(Debug)]
 struct TestListener {
@@ -59,6 +92,66 @@ async fn manager() -> ClientManager {
             None, None, None, None, None,
         )),
     )
+}
+
+#[tokio::test]
+async fn accept_errors_rebind_listener_with_fixed_delay() {
+    for error_kind in [std::io::ErrorKind::OutOfMemory, std::io::ErrorKind::Other] {
+        let mut manager = manager().await;
+        let attempts = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let url = manager
+            .add_listener(FailingListener {
+                inner: runtime_rpc_listener("127.0.0.1:0".parse().unwrap()),
+                attempts: attempts.clone(),
+                errors_remaining: 2,
+                error_kind,
+            })
+            .await
+            .unwrap();
+        wait_until(|| attempts.lock().unwrap().len() >= 3).await;
+        assert!(manager.is_running());
+
+        let client = runtime_rpc_dialer(url).connect().await.unwrap();
+        let _client = timeout(
+            Duration::from_secs(1),
+            web_security::upgrade_client_tunnel(client),
+        )
+        .await
+        .expect("listener did not recover after accept errors")
+        .unwrap();
+        wait_until(|| manager.client_sessions.len() == 1).await;
+        {
+            let attempts = attempts.lock().unwrap();
+            assert!(attempts.len() >= 3);
+            for pair in attempts[..3].windows(2) {
+                assert!(pair[1] - pair[0] >= Duration::from_millis(100));
+            }
+        }
+        assert!(manager.is_running());
+        drop(manager);
+        wait_until(|| Arc::strong_count(&attempts) == 1).await;
+    }
+}
+
+#[tokio::test]
+async fn manager_shutdown_cancels_accept_error_retries() {
+    let mut manager = manager().await;
+    let attempts = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let url = manager
+        .add_listener(FailingListener {
+            inner: runtime_rpc_listener("127.0.0.1:0".parse().unwrap()),
+            attempts: attempts.clone(),
+            errors_remaining: usize::MAX,
+            error_kind: std::io::ErrorKind::Other,
+        })
+        .await
+        .unwrap();
+    wait_until(|| !attempts.lock().unwrap().is_empty()).await;
+    assert!(manager.is_running());
+    drop(manager);
+    wait_until(|| Arc::strong_count(&attempts) == 1).await;
+    let addr = url.socket_addrs(|| None).unwrap()[0];
+    assert!(TcpStream::connect(addr).await.is_err());
 }
 
 #[tokio::test]
@@ -161,4 +254,36 @@ async fn completed_handshake_does_not_cancel_pending_accept() {
     .expect("pending accept was cancelled when the first handshake completed")
     .unwrap();
     wait_until(|| manager.client_sessions.len() == 2).await;
+}
+
+#[tokio::test]
+async fn failed_udp_listener_is_not_counted_as_running() {
+    for bind_addr in ["127.0.0.1:0", "[::1]:0"] {
+        let occupied = tokio::net::UdpSocket::bind(bind_addr).await.unwrap();
+        let addr = occupied.local_addr().unwrap();
+        let mut manager = manager().await;
+        manager
+            .add_listener(runtime_udp_tunnel_listener(
+                format!("udp://{addr}").parse().unwrap(),
+                addr,
+            ))
+            .await
+            .unwrap_err();
+        assert!(!manager.is_running());
+    }
+}
+
+#[tokio::test]
+async fn ephemeral_udp_listener_is_counted_as_running() {
+    let mut manager = manager().await;
+    let local_url = "udp://127.0.0.1:0".parse().unwrap();
+    let bound_url = manager
+        .add_listener(runtime_udp_tunnel_listener(
+            local_url,
+            "127.0.0.1:0".parse().unwrap(),
+        ))
+        .await
+        .unwrap();
+    assert!(bound_url.port().is_some_and(|port| port != 0));
+    assert!(manager.is_running());
 }

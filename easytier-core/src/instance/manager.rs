@@ -387,7 +387,11 @@ where
         let instance_state_changes = self.instance_state_changes.clone();
         runtime.spawn(async move {
             if let Err(error) = instance.start().await {
-                tracing::error!(%error, %instance_id, "instance failed to start");
+                tracing::error!(
+                    error = %format_args!("{error:#}"),
+                    %instance_id,
+                    "instance failed to start"
+                );
             }
             instance_state_changes.mark_changed();
             notifier.notify_one();
@@ -479,9 +483,9 @@ where
     }
 
     pub fn data_plane_runtime_handle(&self, instance_id: &Uuid) -> Option<tokio::runtime::Handle> {
-        self.instance(*instance_id)?;
-        self.runtime_handle
-            .clone()
+        self.instance(*instance_id)?
+            .runtime_handle()
+            .or_else(|| self.runtime_handle.clone())
             .or_else(|| tokio::runtime::Handle::try_current().ok())
     }
 

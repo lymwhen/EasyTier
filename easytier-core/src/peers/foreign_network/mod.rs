@@ -5,13 +5,14 @@ pub(crate) mod client;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
+    collections::HashSet,
     future,
     sync::{Arc, Weak},
     time::SystemTime,
 };
 
-use dashmap::{DashMap, DashSet};
-use easytier_proto::common::FlagsInConfig;
+use dashmap::DashMap;
+use easytier_proto::common::Flags;
 use guarden::defer;
 use tokio::sync::{
     Mutex, RwLock, RwLockReadGuard,
@@ -84,7 +85,7 @@ fn build_foreign_peer_context(
     network: &NetworkIdentity,
     parent_context: &Arc<CorePeerContext>,
     relay_data: bool,
-    mut flags: FlagsInConfig,
+    mut flags: Flags,
 ) -> Arc<CorePeerContext> {
     let parent_context_dyn: ArcPeerContext = parent_context.clone();
     let parent_flags = parent_context_dyn.flags();
@@ -358,7 +359,7 @@ struct ForeignNetworkEntry {
 
     traffic_metrics: Arc<TrafficMetricRecorder>,
     event_handler_started: AtomicBool,
-    indexed_peers: DashSet<PeerId>,
+    indexed_peers: parking_lot::Mutex<HashSet<PeerId>>,
 
     tasks: Mutex<JoinSet<()>>,
 
@@ -372,7 +373,7 @@ impl ForeignNetworkEntry {
         my_peer_id: PeerId,
         rpc_registrar: Arc<dyn ForeignNetworkRpcRegistrar>,
         parent_context: Arc<CorePeerContext>,
-        foreign_context_default_flags: FlagsInConfig,
+        foreign_context_default_flags: Flags,
         relay_data: bool,
         peer_session_store: Arc<PeerSessionStore>,
         pm_packet_sender: PacketRecvChan,
@@ -499,7 +500,7 @@ impl ForeignNetworkEntry {
 
             traffic_metrics,
             event_handler_started: AtomicBool::new(false),
-            indexed_peers: DashSet::new(),
+            indexed_peers: parking_lot::Mutex::new(HashSet::new()),
 
             tasks: Mutex::new(JoinSet::new()),
 
@@ -624,7 +625,7 @@ impl Drop for ForeignNetworkEntry {
 
 struct ForeignNetworkManagerData {
     network_peer_maps: DashMap<String, Arc<ForeignNetworkEntry>>,
-    peer_network_map: DashMap<PeerId, DashSet<String>>,
+    peer_network_map: DashMap<PeerId, HashSet<String>>,
     network_peer_last_update: DashMap<String, SystemTime>,
     global_peer_map: Weak<PeerMap>,
     lock: std::sync::Mutex<()>,
@@ -638,19 +639,21 @@ impl ForeignNetworkManagerData {
     ) {
         let indexed_peers = entry
             .indexed_peers
+            .lock()
             .iter()
-            .map(|peer_id| *peer_id)
+            .copied()
             .collect::<Vec<_>>();
         for peer_id in indexed_peers {
-            self.peer_network_map.remove_if(&peer_id, |_, networks| {
-                networks.remove(network_name);
-                networks.is_empty()
-            });
+            self.peer_network_map
+                .remove_if_mut(&peer_id, |_, networks| {
+                    networks.remove(network_name);
+                    networks.is_empty()
+                });
         }
-        entry.indexed_peers.clear();
+        entry.indexed_peers.lock().clear();
     }
 
-    fn get_peer_network(&self, peer_id: PeerId) -> Option<DashSet<String>> {
+    fn get_peer_network(&self, peer_id: PeerId) -> Option<HashSet<String>> {
         self.peer_network_map.get(&peer_id).map(|v| v.clone())
     }
 
@@ -697,11 +700,12 @@ impl ForeignNetworkManagerData {
             self.remove_entry_from_peer_index_locked(network_name, &expected_entry);
             self.network_peer_last_update.remove(network_name);
         } else {
-            self.peer_network_map.remove_if(&peer_id, |_, networks| {
-                networks.remove(network_name);
-                networks.is_empty()
-            });
-            expected_entry.indexed_peers.remove(&peer_id);
+            self.peer_network_map
+                .remove_if_mut(&peer_id, |_, networks| {
+                    networks.remove(network_name);
+                    networks.is_empty()
+                });
+            expected_entry.indexed_peers.lock().remove(&peer_id);
         }
         shrink_dashmap(&self.peer_network_map, None);
         shrink_dashmap(&self.network_peer_maps, None);
@@ -738,7 +742,7 @@ impl ForeignNetworkManagerData {
             .entry(peer_id)
             .or_default()
             .insert(network_name.clone());
-        expected_entry.indexed_peers.insert(peer_id);
+        expected_entry.indexed_peers.lock().insert(peer_id);
         self.network_peer_last_update
             .insert(network_name.clone(), SystemTime::now());
         true
@@ -803,7 +807,7 @@ impl ForeignNetworkManagerData {
             .remove_if(network_name, |_, entry| {
                 Arc::ptr_eq(entry, &expected_entry)
                     && entry.peer_map.is_empty()
-                    && entry.indexed_peers.is_empty()
+                    && entry.indexed_peers.lock().is_empty()
             })
             .is_some()
         {
@@ -822,7 +826,7 @@ impl ForeignNetworkManagerData {
         relay_data: bool,
         rpc_registrar: Arc<dyn ForeignNetworkRpcRegistrar>,
         parent_context: Arc<CorePeerContext>,
-        foreign_context_default_flags: FlagsInConfig,
+        foreign_context_default_flags: Flags,
         peer_session_store: Arc<PeerSessionStore>,
         pm_packet_sender: &PacketRecvChan,
     ) -> Option<(Arc<ForeignNetworkEntry>, bool)> {
@@ -874,7 +878,7 @@ enum ForeignNetworkManagerState {
 pub(crate) struct ForeignNetworkManager {
     rpc_registrar: Arc<dyn ForeignNetworkRpcRegistrar>,
     parent_context: Arc<CorePeerContext>,
-    foreign_context_default_flags: FlagsInConfig,
+    foreign_context_default_flags: Flags,
     peer_session_store: Arc<PeerSessionStore>,
     packet_sender_to_mgr: PacketRecvChan,
 
@@ -912,7 +916,7 @@ impl ForeignNetworkManager {
     pub fn new(
         rpc_registrar: Arc<dyn ForeignNetworkRpcRegistrar>,
         parent_context: Arc<CorePeerContext>,
-        foreign_context_default_flags: FlagsInConfig,
+        foreign_context_default_flags: Flags,
         peer_session_store: Arc<PeerSessionStore>,
         packet_sender_to_mgr: PacketRecvChan,
         global_peer_map: Weak<PeerMap>,
@@ -1212,6 +1216,23 @@ impl ForeignNetworkManager {
         });
     }
 
+    /// Whether the peer map of `network_name` can route a packet back to
+    /// `peer_id`, using the same gateway lookup the packet router performs.
+    #[doc(hidden)]
+    pub async fn has_gateway_for_peer(&self, network_name: &str, peer_id: PeerId) -> Option<bool> {
+        let item = self
+            .data
+            .network_peer_maps
+            .get(network_name)
+            .map(|v| v.clone())?;
+        Some(
+            item.peer_map
+                .get_gateway_peer_id(peer_id, NextHopPolicy::LeastHop)
+                .await
+                .is_some(),
+        )
+    }
+
     pub async fn list_foreign_network_infos(
         &self,
         include_trusted_keys: bool,
@@ -1300,7 +1321,8 @@ impl ForeignNetworkManager {
                 .peer_manager_header()
                 .map(|hdr| hdr.packet_type)
                 .unwrap_or(0);
-            let msg_len = msg.buf_len() as u64;
+            let msg_len = msg.batch_buf_len() as u64;
+            let packet_count = msg.batch_len() as u64;
             let send_result = entry
                 .peer_map
                 .send_msg(msg, dst_peer_id, NextHopPolicy::LeastHop)
@@ -1308,7 +1330,7 @@ impl ForeignNetworkManager {
             if send_result.is_ok() {
                 entry
                     .traffic_metrics
-                    .record_tx(dst_peer_id, packet_type, msg_len)
+                    .record_tx_batch(dst_peer_id, packet_type, msg_len, packet_count)
                     .await;
             }
             send_result
@@ -1437,8 +1459,9 @@ impl ForeignNetworkPacketRouter {
             counters,
         } = self;
 
-        while let Ok(mut zc_packet) = recv_packet_from_chan(&mut packet_recv).await {
-            let buf_len = zc_packet.buf_len();
+        while let Ok(zc_packet) = recv_packet_from_chan(&mut packet_recv).await {
+            let buf_len = zc_packet.batch_buf_len();
+            let packet_count = zc_packet.batch_len() as u64;
             let Some(hdr) = zc_packet.peer_manager_header() else {
                 tracing::warn!("invalid packet, skip");
                 continue;
@@ -1450,49 +1473,58 @@ impl ForeignNetworkPacketRouter {
             let to_peer_id = hdr.to_peer_id.get();
             let is_local_delivery = to_peer_id == my_node_id;
             let is_locally_originated = from_peer_id == my_node_id;
-            if is_local_delivery && !is_locally_originated {
-                traffic_metrics
-                    .record_rx(from_peer_id, packet_type, buf_len as u64)
-                    .await;
-            }
             if is_local_delivery {
                 if packet_type == PacketType::RelayHandshake as u8
                     || packet_type == PacketType::RelayHandshakeAck as u8
                 {
+                    if !is_locally_originated {
+                        traffic_metrics
+                            .record_rx(from_peer_id, packet_type, buf_len as u64)
+                            .await;
+                    }
                     let _ = relay_peer_map.handle_handshake_packet(zc_packet).await;
                     continue;
                 }
 
-                if relay_peer_map.is_secure_mode_enabled() && hdr.is_encrypted() {
-                    match relay_peer_map.decrypt_if_needed(&mut zc_packet).await {
-                        Ok(true) => {}
-                        Ok(false) => {
-                            tracing::error!("secure session not found");
-                            continue;
-                        }
-                        Err(e) => {
-                            tracing::error!(?e, "secure decrypt failed");
-                            continue;
+                for mut zc_packet in zc_packet.into_batch() {
+                    let buf_len = zc_packet.buf_len();
+                    if !is_locally_originated {
+                        traffic_metrics
+                            .record_rx(from_peer_id, packet_type, buf_len as u64)
+                            .await;
+                    }
+                    let hdr = zc_packet.peer_manager_header().unwrap();
+                    if relay_peer_map.is_secure_mode_enabled() && hdr.is_encrypted() {
+                        match relay_peer_map.decrypt_if_needed(&mut zc_packet).await {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                tracing::error!("secure session not found");
+                                continue;
+                            }
+                            Err(e) => {
+                                tracing::error!(?e, "secure decrypt failed");
+                                continue;
+                            }
                         }
                     }
-                }
 
-                if packet_type == PacketType::TaRpc as u8
-                    || packet_type == PacketType::RpcReq as u8
-                    || packet_type == PacketType::RpcResp as u8
-                {
-                    counters.rx_bytes.add(buf_len as u64);
-                    counters.rx_packets.inc();
-                    rpc_sender.send(zc_packet).unwrap();
-                    continue;
+                    if packet_type == PacketType::TaRpc as u8
+                        || packet_type == PacketType::RpcReq as u8
+                        || packet_type == PacketType::RpcResp as u8
+                    {
+                        counters.rx_bytes.add(buf_len as u64);
+                        counters.rx_packets.inc();
+                        rpc_sender.send(zc_packet).unwrap();
+                        continue;
+                    }
+                    tracing::trace!(
+                        ?packet_type,
+                        ?len,
+                        ?from_peer_id,
+                        ?to_peer_id,
+                        "ignore packet in foreign network"
+                    );
                 }
-                tracing::trace!(
-                    ?packet_type,
-                    ?len,
-                    ?from_peer_id,
-                    ?to_peer_id,
-                    "ignore packet in foreign network"
-                );
             } else {
                 if is_relay_data_packet_type(packet_type) {
                     let disable_relay_data = parent_context.disable_relay_data();
@@ -1517,11 +1549,15 @@ impl ForeignNetworkPacketRouter {
                 match traffic_kind(packet_type) {
                     TrafficKind::Data => {
                         counters.forward_data_bytes.add(buf_len as u64);
-                        counters.forward_data_packets.inc();
+                        counters
+                            .forward_data_packets
+                            .add(zc_packet.batch_len() as u64);
                     }
                     TrafficKind::Control => {
                         counters.forward_control_bytes.add(buf_len as u64);
-                        counters.forward_control_packets.inc();
+                        counters
+                            .forward_control_packets
+                            .add(zc_packet.batch_len() as u64);
                     }
                 }
 
@@ -1542,7 +1578,12 @@ impl ForeignNetworkPacketRouter {
                                 );
                             } else if is_locally_originated {
                                 traffic_metrics
-                                    .record_tx(to_peer_id, packet_type, buf_len as u64)
+                                    .record_tx_batch(
+                                        to_peer_id,
+                                        packet_type,
+                                        buf_len as u64,
+                                        packet_count,
+                                    )
                                     .await;
                             }
                         } else if let Err(e) = peer_map.send_msg_directly(zc_packet, peer_id).await
@@ -1553,7 +1594,12 @@ impl ForeignNetworkPacketRouter {
                             );
                         } else if is_locally_originated {
                             traffic_metrics
-                                .record_tx(to_peer_id, packet_type, buf_len as u64)
+                                .record_tx_batch(
+                                    to_peer_id,
+                                    packet_type,
+                                    buf_len as u64,
+                                    packet_count,
+                                )
                                 .await;
                         }
                     }
@@ -1573,7 +1619,12 @@ impl ForeignNetworkPacketRouter {
                             tracing::error!("send packet to peer with pm failed: {:?}", e);
                         } else if is_locally_originated {
                             traffic_metrics
-                                .record_tx(to_peer_id, packet_type, buf_len as u64)
+                                .record_tx_batch(
+                                    to_peer_id,
+                                    packet_type,
+                                    buf_len as u64,
+                                    packet_count,
+                                )
                                 .await;
                         }
                     }
@@ -1593,7 +1644,7 @@ mod tests {
     };
 
     use dashmap::DashMap;
-    use easytier_proto::common::{FlagsInConfig, PeerFeatureFlag};
+    use easytier_proto::common::{Flags, PeerFeatureFlag};
 
     use super::{
         ForeignNetworkEntry, ForeignNetworkManager, ForeignNetworkManagerData,
@@ -1638,7 +1689,7 @@ mod tests {
             1,
             Arc::new(()),
             parent,
-            FlagsInConfig::default(),
+            Flags::default(),
             true,
             Arc::new(PeerSessionStore::new()),
             packet_sender,
@@ -1669,10 +1720,10 @@ mod tests {
                 .entry(peer_id)
                 .or_default()
                 .insert(network_name.clone());
-            entry.indexed_peers.insert(peer_id);
+            entry.indexed_peers.lock().insert(peer_id);
         }
         data.peer_network_map
-            .get(&20)
+            .get_mut(&20)
             .unwrap()
             .insert(other_network.clone());
 
@@ -1697,11 +1748,11 @@ mod tests {
                 .get(&20)
                 .unwrap()
                 .iter()
-                .map(|network| network.clone())
+                .cloned()
                 .collect::<Vec<_>>(),
             [other_network]
         );
-        assert!(entry.indexed_peers.is_empty());
+        assert!(entry.indexed_peers.lock().is_empty());
         assert!(!data.network_peer_last_update.contains_key(&network_name));
     }
 
@@ -1730,7 +1781,7 @@ mod tests {
                 .entry(peer_id)
                 .or_default()
                 .insert(network_name.clone());
-            current_entry.indexed_peers.insert(peer_id);
+            current_entry.indexed_peers.lock().insert(peer_id);
         }
         assert!(
             data.peer_network_map
@@ -1738,7 +1789,7 @@ mod tests {
                 .unwrap()
                 .contains(&network_name)
         );
-        assert!(current_entry.indexed_peers.contains(&10));
+        assert!(current_entry.indexed_peers.lock().contains(&10));
 
         data.remove_peer(10, &network_name, &Arc::downgrade(&old_entry));
         assert!(
@@ -1759,7 +1810,7 @@ mod tests {
         assert!(!data.network_peer_maps.contains_key(&network_name));
         assert!(!data.peer_network_map.contains_key(&10));
         assert!(!data.peer_network_map.contains_key(&11));
-        assert!(current_entry.indexed_peers.is_empty());
+        assert!(current_entry.indexed_peers.lock().is_empty());
     }
 
     impl ForeignNetworkManager {
@@ -1825,7 +1876,7 @@ mod tests {
 
     struct FeatureContext {
         avoid_relay_data: AtomicBool,
-        flags: FlagsInConfig,
+        flags: Flags,
         hostname: String,
     }
 
@@ -1833,7 +1884,7 @@ mod tests {
         fn new(avoid_relay_data: bool) -> Self {
             Self {
                 avoid_relay_data: AtomicBool::new(avoid_relay_data),
-                flags: FlagsInConfig::default(),
+                flags: Flags::default(),
                 hostname: String::new(),
             }
         }
@@ -1851,7 +1902,7 @@ mod tests {
             }
         }
 
-        fn flags(&self) -> FlagsInConfig {
+        fn flags(&self) -> Flags {
             self.flags.clone()
         }
 
@@ -1873,6 +1924,8 @@ mod tests {
         assert!(check_network_in_relay_whitelist("*", "any-network").is_ok());
         assert!(check_network_in_relay_whitelist("", "net1").is_err());
         assert!(check_network_in_relay_whitelist("net1 net2*", "net3").is_err());
+        assert!(check_network_in_relay_whitelist("net1,net2*", "net1").is_ok());
+        assert!(check_network_in_relay_whitelist("net1, net2*", "net2-west").is_ok());
     }
 
     #[test]
@@ -1943,7 +1996,7 @@ mod tests {
             network_secret: Some("secret".to_owned()),
             network_secret_digest: None,
         };
-        let mut defaults = FlagsInConfig::default();
+        let mut defaults = Flags::default();
         defaults.mtu = 1400;
         defaults.relay_network_whitelist = "baseline".to_owned();
         let foreign = build_foreign_peer_context(&network, &parent, false, defaults);
