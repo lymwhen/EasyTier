@@ -908,6 +908,7 @@ struct RouterTransferEvent {
     error: Option<String>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn router_transfer_event(
     event: &str,
     direction: &str,
@@ -1045,6 +1046,7 @@ async fn cached_download_response(cached: &CachedDownload) -> Result<Response<Pr
     Ok(builder.body(body).unwrap())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn cache_download_response(
     resp: reqwest::Response,
     ctx: &std::sync::Arc<ProxyCtx>,
@@ -1135,14 +1137,14 @@ fn rewrite_location(value: &str, router_ip: &str) -> String {
 }
 
 fn is_download_response(resp: &reqwest::Response) -> bool {
-    if header_value(&resp.headers(), "content-disposition")
+    if header_value(resp.headers(), "content-disposition")
         .map(|value| value.to_ascii_lowercase().contains("attachment"))
         .unwrap_or(false)
     {
         return true;
     }
 
-    let content_type = header_value(&resp.headers(), "content-type")
+    let content_type = header_value(resp.headers(), "content-type")
         .unwrap_or_default()
         .to_ascii_lowercase();
     matches!(
@@ -1177,6 +1179,7 @@ fn full_proxy_body(data: Bytes) -> ProxyBody {
         .boxed_unsync()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn tracked_transfer_stream<S, E>(
     stream: S,
     app: AppHandle,
@@ -1597,9 +1600,9 @@ async fn build_proxy_response(
 ) -> Result<Response<ProxyBody>, hyper::Error> {
     let status =
         StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    let response_content_type = header_value(&resp.headers(), "content-type");
-    let response_length = content_length(&resp.headers());
-    let response_content_disposition = header_value(&resp.headers(), "content-disposition");
+    let response_content_type = header_value(resp.headers(), "content-type");
+    let response_length = content_length(resp.headers());
+    let response_content_disposition = header_value(resp.headers(), "content-disposition");
     let filename = response_content_disposition
         .as_deref()
         .and_then(content_disposition_filename);
@@ -1611,7 +1614,7 @@ async fn build_proxy_response(
         .iter()
         .filter(|(name, _)| {
             let n = name.as_str().to_lowercase();
-            !matches!(
+            !(matches!(
                 n.as_str(),
                 "transfer-encoding"
                     | "connection"
@@ -1628,7 +1631,7 @@ async fn build_proxy_response(
                     | "cross-origin-embedder-policy"
                     | "cross-origin-opener-policy"
                     | "cross-origin-resource-policy"
-            ) && !(response_is_html && n == "content-disposition")
+            ) || response_is_html && n == "content-disposition")
         })
         .map(|(name, value)| (name.clone(), value.clone()))
         .collect();
@@ -1806,14 +1809,13 @@ async fn luci_proxy_start(
     } else {
         "lan"
     };
-    if let Some(handle) = PROXY.lock().unwrap().as_ref() {
-        if let Some(ctx) = handle.state.router(&router_id)
-            && ctx.router_ip == router_ip
-            && *ctx.shared.last_path_type.lock().unwrap() == path_type
-        {
-            *handle.state.active_router_id.lock().unwrap() = router_id;
-            return Ok(format!("http://127.0.0.1:{}", handle.port));
-        }
+    if let Some(handle) = PROXY.lock().unwrap().as_ref()
+        && let Some(ctx) = handle.state.router(&router_id)
+        && ctx.router_ip == router_ip
+        && *ctx.shared.last_path_type.lock().unwrap() == path_type
+    {
+        *handle.state.active_router_id.lock().unwrap() = router_id;
+        return Ok(format!("http://127.0.0.1:{}", handle.port));
     }
 
     let client = build_proxy_client(&socks5_proxy)?;
