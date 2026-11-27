@@ -6,6 +6,49 @@ EasyTier Tauri v2 Android App 本地构建指南，覆盖 Ubuntu/WSL 与 Windows
 
 ---
 
+## Windows 快速构建（当前机器推荐）
+
+Windows 构建不要复用 WSL 生成的 `tauri.settings.gradle`。该文件包含 Linux 绝对路径，会让 Gradle 报“Tauri 子工程没有 variant”。仓库脚本会从 `Cargo.lock` 自动解析版本并重新生成 Windows 路径。
+
+```powershell
+cd D:\projects\projectsAlpha\EasyTier
+.\script\build-android-windows.ps1
+```
+
+常用参数：
+
+| 参数 | 用途 |
+|------|------|
+| `-ValidateOnly` | 只检查 JDK/SDK/NDK/Rust/MinGW、生成 Windows Gradle 设置，约 1 秒 |
+| `-InstallDeps` | 重新执行 Windows `pnpm install --frozen-lockfile` |
+| `-BuildFrontendDeps` | `tauri-plugin-vpnservice` 或 `frontend-lib` 改动时额外构建两个前置包 |
+| `-CleanAndroid` | Gradle 打包前执行 `:app:clean` |
+| `-OutputDir D:\build\apk` | 自定义 APK 输出目录，默认 `F:\tmp\apk` |
+
+脚本固定使用：
+
+- JDK 17：`D:\tools\Java\jdk-17.0.12`
+- Android SDK：`D:\tools\Android\Sdk`
+- NDK：`27.0.12077973`
+- Rust：`stable-x86_64-pc-windows-gnu`
+- MinGW：`C:\Users\lymly\mingw64\mingw64`
+- Cargo registry：`C:\Users\lymly\.cargo`
+
+如果 GNU Android target 缺失，脚本会通过 `rsproxy.cn` 自动安装。脚本最后会完成 APK 签名验证、前端资源哈希校验、Native 库哈希校验并输出 SHA-256。
+
+本次 2026-11-26 冷构建实测：
+
+| 阶段 | 耗时 |
+|------|------|
+| Windows Vite | 1 分 50 秒 |
+| Windows GNU → Android arm64 Cargo（含首次依赖编译/链接） | 10 分 09 秒 |
+| Gradle `assembleArm64Release` | 2 分 19 秒 |
+| 合计 | 约 15 分钟 |
+
+第二次构建通常只需 2–5 分钟。若耗时再次接近 15 分钟，优先检查是否切换了 Rust toolchain、node_modules 是否被另一种操作系统覆盖，或 Rustup 是否在重新下载组件。
+
+---
+
 ## Ubuntu / WSL 快速构建（工具缓存已配置）
 
 当前 Ubuntu/WSL 环境已经安装并缓存 Rust、JDK、Android SDK/NDK、protoc、pnpm 和 Gradle 依赖。重新开始会话时，先加载环境：
@@ -299,60 +342,102 @@ source /mnt/d/tools/EasyTierLinux/env.sh
 
 ## 二、构建命令
 
-### 三步流程
+### Windows 一键流程
 
-**Step 1 — Vite + Cargo（bash，必须同一调用）**
-
-```bash
-export PATH="$HOME/.cargo/bin:$HOME/.npm-global:$PATH"
-cd easytier-gui && pnpm vite build && cd src-tauri && cargo build --lib --release --target aarch64-linux-android --features "tauri/custom-protocol"
-```
-
-**Step 2 — Gradle（必须 PowerShell，不可 bash）**
+正常构建只执行：
 
 ```powershell
-$env:ANDROID_HOME = "D:/tools/Android/Sdk"
-$env:JAVA_HOME = "D:/tools/Java/jdk-17.0.12"
-$env:GRADLE_USER_HOME = "D:/tmp/gradle-tmp"
-Copy-Item -Force "D:\projects\projectsAlpha\EasyTier\target\aarch64-linux-android\release\libapp_lib.so" "D:\projects\projectsAlpha\EasyTier\easytier-gui\src-tauri\gen\android\app\src\main\jniLibs\arm64-v8a\libapp_lib.so"
-Remove-Item -Recurse -Force "D:\projects\projectsAlpha\EasyTier\easytier-gui\src-tauri\gen\android\app\build\intermediates\merged_jni_libs" -ErrorAction SilentlyContinue
-Remove-Item -Recurse -Force "D:\projects\projectsAlpha\EasyTier\easytier-gui\src-tauri\gen\android\app\build\intermediates\merged_native_libs" -ErrorAction SilentlyContinue
-Remove-Item -Recurse -Force "D:\projects\projectsAlpha\EasyTier\easytier-gui\src-tauri\gen\android\app\build\intermediates\stripped_native_libs" -ErrorAction SilentlyContinue
-Set-Location "D:\projects\projectsAlpha\EasyTier\easytier-gui\src-tauri\gen\android"
-.\gradlew.bat assembleArm64Release --no-daemon -x rustBuildArm64Release
+cd D:\projects\projectsAlpha\EasyTier
+.\script\build-android-windows.ps1
 ```
 
-**Step 3 — 复制 APK**
+脚本内部按顺序执行：
 
-APK 文件名添加年月日时分后缀（`yyyyMMddHHmm`），便于区分多次构建产物：
+1. 校验 JDK 17、SDK/NDK、MinGW、protoc、libclang 和 Rust target。
+2. 根据 `Cargo.lock` 定位 Tauri/插件源码，重新生成 Windows `tauri.settings.gradle`。
+3. 构建 `easytier-gui/dist`。
+4. 使用 `stable-x86_64-pc-windows-gnu` 和 NDK 27 交叉编译 `libapp_lib.so`。
+5. 同步 `dist` 到 Android assets，同步 `.so` 到 `jniLibs`，清理三个旧 Native 中间目录。
+6. 使用 JDK 17 通过 `cmd.exe /d /c` 执行 `gradlew.bat assembleArm64Release --no-daemon --exclude-task=rustBuildArm64Release`。PowerShell 7.7+ 直接调用 `.bat` 时可能错误截断参数并报 `Task 's' is ambiguous`，一键脚本已固定通过 `cmd.exe` 调用。
+7. 复制带时间戳的 APK，并验证签名、前端资源和 Native 库哈希。
+
+仅验证环境：
 
 ```powershell
-$ts = Get-Date -Format 'yyyyMMddHHmm'
-Copy-Item -Force "D:\projects\projectsAlpha\EasyTier\easytier-gui\src-tauri\gen\android\app\build\outputs\apk\arm64\release\app-arm64-release.apk" "F:\tmp\app-arm64-release-$ts.apk"
+.\script\build-android-windows.ps1 -ValidateOnly
+```
+
+### Windows 手动排查
+
+只有脚本失败时才需要手工拆分。关键顺序不可变：Vite → Cargo → 同步资源 → Gradle。
+
+```powershell
+$env:JAVA_HOME = 'D:\tools\Java\jdk-17.0.12'
+$env:ANDROID_HOME = 'D:\tools\Android\Sdk'
+$env:NDK_HOME = 'D:\tools\Android\Sdk\ndk\27.0.12077973'
+$env:GRADLE_USER_HOME = 'D:\tmp\gradle-tmp'
+$env:Path = "$env:JAVA_HOME\bin;$env:NDK_HOME\toolchains\llvm\prebuilt\windows-x86_64\bin;$env:Path"
+
+corepack pnpm@9.12.1 --dir easytier-gui run build
+```
+
+Cargo 必须使用 GNU toolchain，不能使用默认的 MSVC toolchain，因为本机没有 Visual Studio Build Tools：
+
+```powershell
+$env:CC_aarch64_linux_android = "$env:NDK_HOME\toolchains\llvm\prebuilt\windows-x86_64\bin\aarch64-linux-android24-clang.cmd"
+$env:AR_aarch64_linux_android = "$env:NDK_HOME\toolchains\llvm\prebuilt\windows-x86_64\bin\llvm-ar.exe"
+$env:CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER = $env:CC_aarch64_linux_android
+$env:LIBCLANG_PATH = 'C:\Users\lymly\llvm-dll'
+$env:PROTOC = 'C:\Users\lymly\protoc\bin\protoc.exe'
+$env:GIT_CEILING_DIRECTORIES = 'D:\projects\projectsAlpha\EasyTier'
+
+rustup run stable-x86_64-pc-windows-gnu cargo build `
+  --manifest-path easytier-gui/src-tauri/Cargo.toml `
+  --package easytier-gui `
+  --lib --release --target aarch64-linux-android `
+  --features 'tauri/custom-protocol' --locked
+```
+
+Gradle 前必须同步资源和 Native 库；脚本已自动完成。手动执行时：
+
+```powershell
+Copy-Item -Force `
+  'target\aarch64-linux-android\release\libapp_lib.so' `
+  'easytier-gui\src-tauri\gen\android\app\src\main\jniLibs\arm64-v8a\libapp_lib.so'
+
+$assets = 'easytier-gui\src-tauri\gen\android\app\src\main\assets\frontend'
+Remove-Item -Recurse -Force $assets -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force -Path $assets | Out-Null
+Copy-Item -Path 'easytier-gui\dist\*' -Destination $assets -Recurse -Force
+
+Set-Location 'easytier-gui\src-tauri\gen\android'
+cmd.exe /d /c ".\gradlew.bat assembleArm64Release --no-daemon --exclude-task=rustBuildArm64Release"
 ```
 
 ### 构建耗时
 
-| 变更范围 | Vite | Cargo easytier | Cargo easytier-gui | Gradle | 总耗时 |
-|----------|:---:|:---:|:---:|:---:|------|
-| 仅前端（Vue/TS/CSS） | ~55s | 缓存命中 | 重链 ~40s | ~12s | **~1m45s** |
-| easytier-gui Rust | ~55s | 缓存命中 | 重编 ~1m | ~12s | ~2m10s |
-| easytier-core 或其依赖 | ~55s | 重编 ~7m | 重编 ~1m | ~12s | **~10min** |
-| 无任何变更 | ~55s | 缓存命中 | 缓存命中 | ~12s | ~1m05s |
+Windows 与 Ubuntu 的耗时不同。上表位于本文顶部；以 2026-11-26 同机实测为准：
+
+| 场景 | 预期 |
+|------|------|
+| 环境验证 `-ValidateOnly` | < 1 秒 |
+| 第二次无缓存变化完整构建 | 2–5 分钟 |
+| 首次 Windows 交叉编译 + 全部 Cargo 依赖 | 约 15 分钟 |
+| 仅 Android Kotlin/资源改动，前端和 Rust 未变 | 可跳过 Cargo，但仍需脚本完成资源同步 |
 
 ---
 
 ## 三、关键原理
 
-### 为什么三步缺一不可
+### 为什么 Vite、Cargo、Gradle 缺一不可
 
-Tauri 的 `tauri_build::build()` / `generate_context!` 会嵌入 `dist/` 前端产物；手动 Gradle 使用 `-x rustBuildArm64Release` 时还会跳过 Android `assets/frontend/` 同步。Ubuntu 一键脚本已显式同步 assets。前端变更必须重新执行 Cargo 并按完整流程构建，再检查 APK 中的资源哈希，避免 `.so`、生成资源和 Gradle 缓存之间版本不一致。
+Tauri 的 `tauri_build::build()` / `generate_context!` 会嵌入 `dist/` 前端产物；手动 Gradle 使用 `-x rustBuildArm64Release` 时还会跳过 Android `assets/frontend/` 同步。Windows 与 Ubuntu 脚本都会显式同步 assets。前端变更必须重新执行 Cargo 并按完整流程构建，再检查 APK 中的资源哈希，避免 `.so`、生成资源和 Gradle 缓存之间版本不一致。
 
-### 为什么 Vite + Cargo 必须在同一环境脚本下执行
+### 为什么 Vite + Cargo 必须使用同一套 Windows 环境
 
 Cargo build.rs 会通过 `rerun-if-env-changed` 跟踪 `PROTOC`、`LIBCLANG_PATH` 和交叉编译变量。不同终端或不同路径格式会导致依赖链全量重编。
 
-同一 bash 调用先加载 `env.sh`，环境快照一致 → Cargo 指纹稳定 → 增量编译。
+Windows 脚本在单个 PowerShell 进程中设置 JDK、NDK、GNU toolchain、MinGW、protoc 和 libclang，再依次执行 Vite 与 Cargo；这样 Cargo 指纹稳定，也避免混用 WSL 的 Linux Cargo 缓存。
 
 ### 为什么 Gradle 必须用 PowerShell
 
@@ -360,7 +445,7 @@ bash (MSYS2) 文件操作与 Windows NTFS 文件锁冲突，Gradle transforms �
 
 ### 为什么跳过 Gradle 的 rustBuildArm64Release
 
-`rustBuildArm64Release` 内部调用 `pnpm tauri android android-studio-script`，依赖 `%TEMP%\com.kkrainbow.easytier-server-addr` 临时文件连接 Tauri CLI TCP 服务端。该服务端仅 Android Studio 启动时存在，命令行构建中不存在 → Tauri CLI panic。Step 1 已通过 `cargo build --lib` 生成了 `.so`，Step 2 手动复制并 `-x` 跳过该任务即可。
+`rustBuildArm64Release` 内部调用 `pnpm tauri android android-studio-script`，依赖 `%TEMP%\com.kkrainbow.easytier-server-addr` 临时文件连接 Tauri CLI TCP 服务端。该服务端仅 Android Studio 启动时存在，命令行构建中不存在 → Tauri CLI panic。脚本已提前通过 `cargo build --lib` 生成 `.so`，再手动复制并用 `-x` 跳过该任务。
 
 清理 `merged_jni_libs` / `merged_native_libs` / `stripped_native_libs` 确保 Gradle 不使用缓存的旧 `.so`。
 
@@ -368,8 +453,8 @@ bash (MSYS2) 文件操作与 Windows NTFS 文件锁冲突，Gradle transforms �
 
 Cargo 增量编译依赖"指纹"(fingerprint) 稳定。以下措施保证指纹不因无关因素失效：
 
-1. **所有交叉编译 env var 固化在 `[env]`** — 不经过 shell export，Cargo 直接从配置文件读取，值恒定
-2. **Vite + Cargo 同一 bash 调用** — 单次环境快照
+1. **所有交叉编译 env var 由 Windows 脚本一次性注入** — Vite、Cargo、Gradle 使用同一路径格式和 toolchain
+2. **Vite + Cargo 在同一 PowerShell 脚本中执行** — 单次环境快照
 3. **`GIT_CEILING_DIRECTORIES`** — easytier-core 的 `constants.rs` 使用 `git_version::git_version!()` proc-macro，编译时运行 `git describe` 并生成 `include_bytes!(".git/index")`。Cargo 基于 mtime 追踪该文件 → 任何 git 操作（含 IDE 后台刷新）都会更新 `.git/index` mtime → easytier-core 指纹失效。设置此变量后 proc-macro 找不到 git 仓库 → 走 fallback（`CARGO_PKG_VERSION`）→ 不生成 git 文件追踪 → 指纹稳定
 
 开发构建的版本号因此显示纯 `CARGO_PKG_VERSION`（如 `2.7.0`），无 commit hash。CI 不受影响。
@@ -380,13 +465,15 @@ Cargo 增量编译依赖"指纹"(fingerprint) 稳定。以下措施保证指纹�
 
 | 工具 | 路径 | 用途 |
 |------|------|------|
-| Rust | `$HOME/.cargo/bin` | 编译工具链 |
-| MinGW-w64 | `$HOME/mingw64` | GCC 链接器（替代 VS Build Tools） |
-| LLVM/libclang | `$HOME/llvm-dll`（`libclang.dll`） | kcp-sys bindgen |
-| protoc | `$HOME/protoc/bin/protoc.exe` | prost-wkt-types |
-| pnpm | `$HOME/.npm-global` | 前端包管理 |
+| Rust 宿主 toolchain | `stable-x86_64-pc-windows-gnu` | 替代 MSVC，提供宿主构建脚本链接器 |
+| Android target | `aarch64-linux-android` | GNU toolchain 的 Android 标准库 |
+| MinGW-w64 | `C:\Users\lymly\mingw64\mingw64` | GCC/ld 宿主链接器 |
+| LLVM/libclang | `C:\Users\lymly\llvm-dll`（`libclang.dll`） | kcp-sys bindgen |
+| protoc | `C:\Users\lymly\protoc\bin\protoc.exe` | prost-wkt-types |
+| pnpm | `corepack pnpm@9.12.1` | 前端包管理，避免 pnpm 版本漂移 |
 | JDK 17 | `D:\tools\Java\jdk-17.0.12` | Android Gradle |
-| Android SDK | `D:\tools\Android\Sdk`（NDK 27.0.12077973 + build-tools 34 + platform 34） | Android 编译 |
+| Android SDK | `D:\tools\Android\Sdk` | Android 编译 |
+| Android NDK | `27.0.12077973` | arm64 Clang、sysroot、llvm-ar |
 
 ---
 
@@ -394,12 +481,17 @@ Cargo 增量编译依赖"指纹"(fingerprint) 稳定。以下措施保证指纹�
 
 | 问题 | 原因 | 解决 |
 |------|------|------|
-| 仅改前端却全量重编（~9min） | git-version proc-macro 追踪 `.git/index` mtime | `.cargo/config.toml` `[env]` 加 `GIT_CEILING_DIRECTORIES` |
-| 跨会话 Cargo 全量重编 | MSYS2 路径转换导致 env var 值波动 | 全部 env var 固入 `[env]`，Vite+Cargo 同一 bash 调用 |
+| `link.exe` 找不到 | 默认 Rust 是 MSVC toolchain，但本机没有 VS Build Tools | 使用 `stable-x86_64-pc-windows-gnu`；脚本自动切换 |
+| Rustup 下载 Android target 卡住且 `.partial` 为 0 字节 | 官方源连接异常 | 设置 `RUSTUP_DIST_SERVER=https://rsproxy.cn`；脚本自动使用 |
+| Gradle 报 Tauri 子工程 “No matching variant / No variants exist” | `tauri.settings.gradle` 残留 `/home/lymly`、`/mnt/d` WSL 路径 | 运行 Windows 脚本，自动从 `Cargo.lock` 重建为 `C:/...`、`D:/...` |
+| Windows 下 Rollup 缺 `@rollup/rollup-win32-x64-msvc` | `node_modules` 被 WSL/Linux 安装覆盖 | 不要跨系统共用 `node_modules`，执行 `-InstallDeps` 重新安装 |
+| WSL 下 Rollup 缺 `@rollup/rollup-linux-x64-gnu` | `node_modules` 被 Windows 安装覆盖 | 在对应平台重新安装依赖，或优先使用目标平台的一键脚本 |
+| 仅改前端却全量重编 | git-version proc-macro 追踪 `.git/index` mtime | 保持 `GIT_CEILING_DIRECTORIES=仓库根目录`；Windows 脚本已设置 |
+| 跨会话 Cargo 全量重编 | toolchain、NDK 路径或 `node_modules` 所属平台变化 | 固定使用 Windows 脚本和 GNU toolchain |
 | Gradle `Could not move temporary workspace` | bash + NTFS 文件锁冲突 | 用 PowerShell，设 `$env:GRADLE_USER_HOME` |
-| `link.exe` 找不到 | 无 VS Build Tools | 改用 MinGW-w64 |
 | `libclang.dll` / `protoc` 找不到 | kcp-sys / prost-wkt-types 构建需要 | 安装 LLVM / protoc 到 `$HOME` |
 | APK 不更新前端 | 前端嵌入 `.so`，且 Gradle 跳过 `rustBuild` 时不会同步 `assets/frontend/` | 前端变更必须跑 Cargo + Vite，同步资源并检查 APK 资源哈希 |
 | `usesCleartextTraffic` 不生效 | Release 默认 false | Manifest 硬编码 + manifestPlaceholders |
 | Windows 符号链接失败 | 非管理员无权限 | BuildTask.kt 改用文件复制 |
 | Gradle 缓存损坏 | JDK 切换或磁盘问题 | 删 `~/.gradle/caches` |
+| Kotlin incremental cache “different roots” 并 fallback 编译 | Tauri 插件源码在 C 盘、Android 工程在 D 盘，Kotlin 增量缓存无法跨盘相对化 | 只要最终 `BUILD SUCCESSFUL` 可忽略；必要时执行 `-CleanAndroid` |

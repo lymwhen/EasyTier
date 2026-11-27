@@ -8,7 +8,7 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 2. **easytier-gui 最小改动**：仅新增页面，原 `index.vue` 通过路由 redirect 跳转至 `/home`，方便合并上游。
 3. **luci-app-wolplus 可改**：作为 WOL 中间层，CGI API 部署在路由器 `/cgi-bin/wolplus-api`。
 4. **配置驱动**：WOL 设备通过 TOML 配置文件管理（独立于网络 TOML），不提供图形化添加。
-5. **Glassmorphism + Material You 风格**：毛玻璃标题栏/Tab 栏、Tonal 按钮、卡片入场动画。
+5. **现有玻璃标题栏/Tab 栏 + n3 Material You 内容风格**：底部导航保留玻璃材质和现有图标，布局与状态胶囊参考 `D:\Downloads\n3.html`；总览卡、按钮、标签、组网设备列表按 n3 实现；卡片统一使用电脑列表的入场与展开动画。
 
 ## 相对上游变更清单
 
@@ -20,7 +20,7 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 
 | 文件 | 变更 | 必要性 |
 |------|------|--------|
-| `easytier-gui/src/pages/home.vue` | **[新增]** WOL/网络/路由器/设置四个 Tab 主界面；电脑卡片稳定 ID、树状父子层级、路由器传输状态提示 | 必要 — 项目核心 |
+| `easytier-gui/src/pages/home.vue` | **[新增]** WOL/网络/路由器/设置四个 Tab 主界面；电脑卡片稳定 ID、居中的展开工作区、路由器传输状态提示 | 必要 — 项目核心 |
 | `easytier-gui/src/App.vue` | 主题初始化 + 窗口标题 + Toast + RouterView（Splash 已移除） | 必要 — 初始化流程 |
 | `easytier-gui/src/composables/theme.ts` | `Theme` 收敛为浅色/深色，保留自动/浅色/深色切换解析；深色统一使用纯黑主题 | 必要 — 主题切换逻辑 |
 | `easytier-gui/src/composables/backend.ts` | 新增 `httpGet`/`httpPost`/`tcpPing`/`luciProxy*` IPC 封装 | 必要 — 前端 HTTP/代理调用 |
@@ -93,11 +93,11 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 
 <table>
 <tr><th>模块</th><th>功能项</th><th>平台支持情况</th></tr>
-<tr><td rowspan="12"><b>整体UI</b></td><td>Glassmorphism + Material You 混合风格 — 毛玻璃标题栏/Tab 栏（`backdrop-filter: blur` + 双层渐变过渡）、Tonal 按钮（`color-mix(accent, panel-strong)` 无内边框，变体：white/green/red/primary/export）、磨砂玻璃标题栏按钮（`md-hdr-btn-glass`）、卡片圆角 20px + 阴影、双主题系统（浅色/深色，深色统一使用纯黑背景，`html[data-theme]` 属性驱动）</td><td>全平台</td></tr>
+<tr><td rowspan="12"><b>整体UI</b></td><td>现有玻璃标题栏/Tab 栏 + n3 Material You 内容风格 — 标题栏和底部 Tab 保留玻璃模糊材质；底部导航采用 n3 的图标胶囊、文字排布和 active 状态；总览卡使用 n3 28px 圆角、三段统计卡和粉/绿/蓝渐变（深色下渐变整体压暗一档、更接近纯黑）；按钮与标签统一使用 n3 tonal container 色；深色模式下所有列表项（电脑页设备卡、设置页列表项、组网流量图卡、网络设备/服务器卡片）统一使用组网页设备列表项背景 #1c1f24，电脑列表展开区子卡片保持纯黑；浅色模式下组网页与设置页整页底色沿用电脑页背景（--pc-bg，#f9f9ff）；双主题系统（浅色/深色，深色统一使用纯黑背景）</td><td>全平台</td></tr>
 <tr><td>底部 Tab 导航栏（电脑 / 路由器 / 组网 / 设置），默认首页可配置（localStorage 持久化）</td><td>全平台</td></tr>
 <tr><td>App 图标更换为圆润 Lucide layers 风格网络层叠图标，PNG 按 Android 官方 108dp 画布尺寸降采样（14.7MB → 1.2MB）；Splash 页面已移除，路由 redirect 直接跳转 `/home`</td><td>全平台</td></tr>
 <tr><td>全部操作图标统一更换 — 标题栏编辑/刷新/切换、底部 Tab、唤醒铃铛面型图标、关机电源面型图标、Connect 链式连接、断开断链 SVG</td><td>全平台</td></tr>
-<tr><td>卡片入场顺次动画 — CSS `@keyframes` 从下方滑入 + 淡入，每组内顺次错开 100ms；`@animationend` 移除动画类防 `display:none` 重播；新设备出现时动画正常触发</td><td>全平台</td></tr>
+<tr><td>卡片入场顺次动画 — 总览卡、统计卡、电脑列表、组网图表、网络设备/服务器和设置项统一使用电脑卡片的 `14px` 上移 + 淡入；由 `page-active` 控制，每次切换到对应 Tab 时重新播放，组内错开 60ms</td><td>全平台</td></tr>
 <tr><td>图表 SVG — 无左侧 Y 轴预留空间，最大值标签叠于图表左上角，y=0 由横轴线隐式表达，横坐标左右贴边（`left:2px` / `right:2px`）</td><td>全平台</td></tr>
 <tr><td>自定义 Material snackbar 底部居中胶囊 Toast（替代 PrimeVue useToast）— 2.5s 滑入动画</td><td>全平台</td></tr>
 <tr><td>中英双语 — 自定义 `tt(key)` 函数 + 内联 i18n 字典（不依赖 easytier-frontend-lib），用户面文本全部双语化</td><td>全平台</td></tr>
@@ -107,19 +107,19 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 <tr><td>图表颜色 CSS 变量化 — `--chart-cpu`/`--chart-mem`/`--chart-gpu`/`--chart-disk-r`/`--chart-disk-w`/`--chart-net-up`/`--chart-net-down`，模板 SVG 统一引用变量</td><td>全平台</td></tr>
 <tr><td rowspan="10"><b>电脑<br>(WOL)</b></td><td>设备卡片 — 粉红渐变总览卡片（电脑在线数/路由器/通道三统计）+ 设备卡片（在线状态指示灯脉冲动画 + 名称 + IP + 状态文字），点击展开详情查看 PC 性能监控图表</td><td>全平台</td></tr>
 <tr><td>远程唤醒 — App → HTTP GET 路由器 CGI（<code>luci-app-wolplus</code>）→ <code>etherwake</code> 发送魔术包；局域网直连 / EasyTier SOCKS5 隧道双路径</td><td>全平台</td></tr>
-<tr><td>在线状态检测 — App → HTTP GET PC Agent（Go，32249 端口，<code>/api/v1/status</code>）；30 秒自动轮询，路由器离线时中止并置灰卡片</td><td>全平台</td></tr>
+<tr><td>在线状态检测 — App → HTTP GET PC Agent（Go，32249 端口，<code>/api/v1/status</code>）；30 秒自动轮询，按每台设备自己的 <code>router_ip</code> 独立检查路由器；首次探测显示“检测中”，连续 2 次失败才确认离线，单次超时不再造成在线列表闪烁</td><td>全平台</td></tr>
 <tr><td>远程关机 — App → HTTP POST PC Agent（<code>/api/v1/shutdown</code>），Agent 执行 <code>shutdown /s /t 5</code>；含关机失败回退 online 机制（12 次 / 60s 检测）</td><td>全平台</td></tr>
 <tr><td>唤醒/关机状态机 — idle → waking（橙色脉冲 5s）→ online / offline；online → shutting（红色脉冲）→ offline / 回退 online</td><td>全平台</td></tr>
 <tr><td>设备配置 TOML 文本编辑器（等宽字体 Dialog）— 支持从剪贴板导入；路由器离线时卡片半透明（opacity 0.55）、操作按钮隐藏</td><td>全平台</td></tr>
 <tr><td>展开底部收起按钮 — 设备展开后底部显示向上箭头 + "收起/Collapse" 文字，点击即可折叠，无需滚动回父卡片</td><td>全平台</td></tr>
 <tr><td>设备信息卡片仅调试模式显示 — 底部 MAC · 路由器 IP · 接口 · 端口摘要行仅在调试模式开启时展示，非调试模式不显示</td><td>全平台</td></tr>
-<tr><td>PC 性能监控 — 实时采集 CPU/内存/GPU 使用率、磁盘 IO 读写速度、网络上下行流量，SVG 面积渐变折线图展示（60 点 / 3 分钟窗口）；硬件信息（CPU 型号、内存 DDR 类型与频率、GPU 型号）；10 秒自动刷新；颜色标识健康状态</td><td>全平台</td></tr>
+<tr><td>PC 性能监控 — 实时采集 CPU/内存/GPU 使用率、磁盘 IO 读写速度、网络上下行流量，SVG 面积渐变折线图展示（60 点 / 5 分钟窗口）；硬件信息（CPU 型号、内存 DDR 类型与频率、GPU 型号）；5 秒自动刷新；颜色标识健康状态</td><td>全平台</td></tr>
 <tr><td>路径标签（ET-LAN / LAN 蓝色胶囊）— 根据 <code>netRunning</code> 与 <code>router_ip</code> 自动判断路径模式</td><td>全平台</td></tr>
-<tr><td rowspan="9"><b>组网</b></td><td>总览信息卡片 — 毛玻璃标题 + 虚拟IP副标题 + 接口IPv4/IPv6（每地址一行，v4在前v6在后，ASCII升序）+ NAT标签 + 三统计（节点/服务器/累计流量）；标题与标签垂直居中，标题过长自动换行</td><td>全平台</td></tr>
-<tr><td>Peer 卡片展示 — 上半部分：IP + 主机名 + 延迟/丢包率；下半部分两行布局：第一行流量 + P2P/TCP/NAT标签（正常大小），第二行版本号（`v2.7.0` 格式）；左右垂直居中对齐</td><td>全平台</td></tr>
+<tr><td rowspan="9"><b>组网</b></td><td>总览信息卡片 — n3 绿色渐变 + 虚拟IP副标题 + NAT标签 + 三统计（节点/服务器/累计流量）；接口IPv4/IPv6 地址仅在调试模式显示</td><td>全平台</td></tr>
+<tr><td>Peer / 服务器卡片展示 — n3 ListItem：头像 + 名称 + 延迟，IP/流量与 P2P、协议、NAT 标签分两行；无 hover；点击整卡按电脑页 grid 动画展开，展开区只显示版本号</td><td>全平台</td></tr>
 <tr><td>网络质量颜色分级 — 绿（正常）/ 蓝（loss>3% 或 lat>50）/ 橙（loss>5% 或 lat>100）/ 红（loss>10% 或 lat>300）；NAT 标签：绿/绿/绿/蓝/橙对应 Open/NAT1/NAT2/NAT3/NAT4</td><td>全平台</td></tr>
 <tr><td>Peer 排序 — 路由器优先（hostname 匹配 <code>/route|wrt|路由|home|家/i</code>），其余按 IP 排序；服务器按 hostname 字母排序</td><td>全平台</td></tr>
-<tr><td>实时速率图表 — SVG 面积渐变折线图（与性能监控同款 area-fill 样式），绿色上行 `#43a047` / 蓝色下行 `#1e88e5`，3 分钟窗口（60 点），HTML 坐标轴标签覆盖 SVG 之上；连接重建时速率防负值 + 清空旧数据</td><td>全平台</td></tr>
+<tr><td>实时速率图表 — 复用电脑页 `ComputerChart.vue`，仅绘制折线不绘制面积；上下行颜色与设备列表流量一致，2 分钟窗口（40 点 / 3 秒采样），不采用 n3 图表样式；连接重建时速率防负值 + 清空旧数据</td><td>全平台</td></tr>
 <tr><td>多网络管理 — 切换/新增/删除网络，当前网络标记 ✓，底部 "Add Network" 入口；网络配置 TOML 编辑器（含剪贴板导入）</td><td>全平台</td></tr>
 <tr><td>连接状态条 — 本机 IP + 设备名 + 版本号 + 红色断开按钮；连接中显示 "Connecting..."；netDiscovering 12 秒内空列表显示 "Waiting for peers..."</td><td>全平台</td></tr>
 <tr><td>3 秒自动刷新 Peer 数据；连接时自动检测全部 WOL 设备状态</td><td>全平台</td></tr>
@@ -134,7 +134,7 @@ Tauri v2 Android App，集成 EasyTier 组网与 WOL 电脑设备管理。
 <tr><td>语言切换 — 地球图标 + 当前语言蓝色胶囊标签（中文 / English），点击 <code>toggleLang()</code> 即时切换所有 UI 文字</td><td>全平台</td></tr>
 <tr><td>默认首页 — 原生 <code>&lt;select&gt;</code> 下拉（电脑 / 路由器 / 组网），<code>localStorage['defaultTab']</code> 持久化</td><td>全平台</td></tr>
 <tr><td>主题切换（Theme）— 浅色/深色两种模式切换，右侧显示当前模式蓝色胶囊标签，支持自动跟随系统主题（<code>prefers-color-scheme</code>），<code>localStorage['themeMode']</code> 持久化，<code>applyTheme()</code> 统一状态机管理；深色模式统一使用纯黑背景</td><td>全平台</td></tr>
-<tr><td>调试模式 — toggle 开关，开启后在组网页底部显示诊断信息 + 解锁高级设置菜单项；副标题"显示高级选项和调试信息"</td><td>全平台</td></tr>
+<tr><td>调试模式 — Material You 风格 toggle 开关（关闭态小圆点 + 2px 轨道描边，开启态圆点放大并以 accent 填充），开启后在组网页底部显示诊断信息 + 解锁高级设置菜单项；副标题"显示高级选项和调试信息"</td><td>全平台</td></tr>
 <tr><td>一键配置导入/导出 — WOL + LuCI + 网络配置打包为 JSON（<code>v:1</code> 结构），经 deflate 压缩 + Base64URL 编码为 <code>ETGC:2:...</code> 格式写入剪贴板（压缩后约为原始 JSON 的 30-40%）；Import 校验前缀 + 解压 + 解码 + 校验 + 二次确认弹窗防误操作覆盖</td><td>全平台</td></tr>
 <tr><td>深色主题（Dark）— 深色模式统一使用纯黑背景色（<code>#000</code>）并适配 Dialog/卡片/代码块/标题栏/Tab 栏等全部组件</td><td>全平台</td></tr>
 <tr><td>帮助对话框 — 展示 WOL、PC 性能监控、EasyTier VPN、LuCI 路由器、配置导入导出五大模块的功能说明和示例配置（含配置代码复制按钮）；WOL 部分提供 <code>luci-app-wolplus</code> 下载链接（通过 <code>tauri-plugin-opener</code> 打开浏览器）</td><td>全平台</td></tr>
@@ -255,7 +255,7 @@ PC
 
 **标题栏**：编辑按钮（白色 Tonal 按钮）。
 
-**总览信息卡片**（Hero Card，左列标题+副标题，右列刷新按钮）：副标题 "远程唤醒与设备管理"；三个统计项：电脑（在线数/总数）、路由器（在线/总数）、通道（局域网/异地组网）。
+**总览信息卡片**（Hero Card，左列标题+副标题，右列刷新按钮）：副标题 "远程唤醒与设备管理"；三个统计项：电脑（在线数/总数）、路由器（在线/总数）、通道（局域网/组网）。
 
 **设备卡片**：
 - 状态指示灯（脉冲动画）+ 名称 + IP + 状态文字
@@ -272,96 +272,194 @@ PC
 **自动刷新**：30 秒轮询设备在线状态。
 
 
-### 电脑页面升级计划（命令功能待实施）
+### 电脑页面升级计划（已实施）
 
-> 本节记录电脑页面升级方案。父子卡片层级优化已实施；远程命令执行、长时命令和命令结果能力仍按本节计划实施。实施时保留现有 WOL、性能监控和定制内容，不对 `easytier-core` 做修改。
+> 本节记录已实施的电脑页面升级：n2 风格设备列表与性能图表、稳定设备 ID、多设备展开，以及 App 端自定义远程命令。保留现有 WOL、路由器可达性、LAN/EasyTier 访问路径和性能监控，不修改 `easytier-core`。
 
-#### 升级目标
+#### 实现范围
 
-1. 加强设备卡片展开后的父子层级，使父设备始终是视觉主体。
-2. 在电脑设备下增加可配置的远程命令执行能力。
-3. 支持长时间命令：App 退出、切后台或网络短暂中断时，命令继续执行并可重新接入。
-4. 支持命令运行状态、退出码、stdout/stderr 和增量结果返回。
-5. 命令执行必须基于 `wol-agent` 本地白名单，不开放任意 Shell。
+1. 电脑列表项、展开交互和性能图表按 `D:\Downloads\n2.html` 实现。
+2. 在线状态继续由现有 `wolStatus`、`routerOnline` 和唤醒/关机阶段驱动，不采用 n2 的模拟在线逻辑。
+3. 展开状态、状态数据、性能历史、命令和运行记录均使用稳定设备 ID。
+4. 支持多张设备卡片同时展开。
+5. 命令定义保存在 App 本地；`wol-agent` 不维护预置用户命令。
+6. Agent 以 `program + args[]` 直接执行程序，不启用 Shell。
 
-#### 父子卡片层级
+#### n2 设备列表
 
-现有展开状态以数组下标记录，但设备排序变化后下标不稳定。计划改为稳定设备 ID：
-
-```ts
-expandedDeviceId = mac || `${ip}:${agent_port}`
-```
-
-展开后的视觉关系调整为：
-
-- 父设备卡片保持原始尺寸、完整透明度，不再使用 `opacity: 0.82` 或 `transform: scale(0.95)` 削弱主体。
-- 子内容放入父卡片下方的缩进工作区，使用垂直树线、`└─` 分支或等价树状连接符建立从属关系。
-- 子工作区包含“命令”和“性能”两个模块；空间紧张时使用“性能 / 命令”分段切换，避免展开后页面过长。
-- 子卡片使用较浅的表面色、较细边框和较小圆角，不使用强于父卡片的独立阴影。
-- 父卡片继续承载名称、在线状态、IP、唤醒、关机等主操作；性能数据和命令属于展开后的派生内容。
-- 展开、收起和列表重排均按稳定设备 ID 保持状态，避免设备排序变化导致展开对象错位。
-
-#### 远程命令配置
-
-命令定义由 `wol-agent` 本地配置维护，App 只获取可展示信息并提交 `command_id`，不提交程序路径、参数或 Shell 文本。
-
-建议配置格式：
-
-```toml
-[[commands]]
-id = "network-diag"
-label = "网络诊断"
-description = "采集 DNS、路由和网络连通性信息"
-program = "C:\\Tools\\diag.exe"
-args = ["--quick"]
-timeout_secs = 120
-risk = "normal"
-duration_hint = "约 30 秒"
-cancelable = true
-```
-
-约束如下：
-
-| 项目 | 规则 |
-|------|------|
-| 命令来源 | `wol-agent` 本地 allowlist，不由 App 动态写入 |
-| 执行方式 | 使用明确的 `program + args` 直接启动，不启用 `shell=true` |
-| App 请求 | 仅发送 `command_id` 和幂等 `request_id` |
-| 命令信息 | App 不展示、也不接收真实 `program` 和 `args` |
-| 风险等级 | 至少区分普通和高风险；高风险命令使用更强的二次确认 |
-| 并发限制 | 默认每个命令同时只允许一个活动运行 |
-| 超时 | 每个命令独立配置；超时后终止完整进程树 |
-| 取消 | 仅 `cancelable = true` 的命令显示取消入口 |
-
-#### 长时命令与结果模型
-
-命令不能通过一次同步 HTTP 请求等待全部结果。采用“提交、返回运行 ID、增量读取、可重连”的异步模型：
+设备卡片结构：
 
 ```text
-POST command-runs
-  → 立即返回 run_id
-  → wol-agent 异步启动命令
-  → App 轮询运行状态和输出游标
-  → succeeded / failed / timed_out / canceled / interrupted
+[头像] [名称]                         [状态] [电源] [更多] [展开]
+       [IP · OS]
 ```
 
-建议命令 API：
+关键规格：
+
+- 卡片圆角 `24px`，列表间距 `12px`
+- 卡片展开前后颜色保持一致：浅色模式白底、深色模式 `#1c1f24`（与组网页列表项背景统一，取 `--pc-card-bg`/`--n3-surface`），无边框并复用电脑页顶部总览卡的 `--md-shadow`；列表卡片不响应 hover
+- 所有卡片统一无边框；需要阴影的卡片必须使用电脑列表项的 `--md-shadow`。电脑列表项内部展开的性能卡、命令输出卡和状态卡不添加阴影
+- 指标、状态和命令输出等子卡片使用独立背景：浅色 `#f5f6f9`，深色纯黑 `#000`
+- CPU、GPU、内存、磁盘和网络图标底色与父卡片一致：浅色白色，深色 `#111214`
+- 头像桌面端 `48px`、移动端 `40px`
+- 电脑列表头像使用灰色 `secondary-container` 背景和深色图标；图标与标题列间距为 `14px`（移动端 `10px`）
+- 头像左右保留额外留白（桌面端 `8px`、移动端 `4px`），避免与卡片边缘和名称区域过近
+- 电源、更多、展开按钮为 `40px` 圆形按钮
+- 状态标签由“圆点 + 文字”组成，颜色不单独承载含义
+- 离线显示绿色开机按钮，在线显示红色关机按钮，阶段进行中或路由器不可达时禁用
+- 点击头部非按钮区域、箭头均可展开/收起
+- 支持 `⋮`、桌面端右键和移动端长按打开命令菜单
+- 展开使用 `grid-template-rows: 0fr → 1fr`，面板淡入并上移
+- 展开面板不使用树形连接线；信息标签、指标卡和命令输出区左右等距居中
+- 展开底部“收起”按钮水平居中
+
+响应式规则：
+
+| 宽度 | 行为 |
+|------|------|
+| `> 720px` | 性能指标两列 |
+| `<= 720px` | 性能指标单列 |
+| `<= 600px` | 状态移至第二行，隐藏 OS，头像缩小，列表提示隐藏 |
+| `<= 380px` | 图标按钮缩小至 `36px`，长文本和状态信息继续收缩 |
+
+所有网格列均使用 `minmax(0, 1fr)`，图表宽度为 `100%`，避免窄屏溢出。
+
+#### 在线状态逻辑
+
+统一有效状态。每台设备使用自己的路由器状态，不再共享第一台设备的全局状态：
+
+```text
+首次且路由器尚未确认       → checking
+设备未配置 router_ip       → routerOffline
+router.state = unreachable → routerOffline
+phase = waking             → waking
+phase = shutting           → shutting
+尚无首次 Agent 探测结果    → checking
+online = true              → online
+otherwise                  → offline
+```
+
+- `checking`：灰色脉冲
+- `routerOffline`：卡片降透明度，操作禁用
+- `waking` / `shutting`：黄色旋转状态
+- `online`：绿色圆点和光晕
+- `offline`：灰色圆点
+- 命令只有在设备在线、路由器路径可用且命令凭据存在时可执行
+- 路由器探测确认 WOLPlus CGI 可响应，而不仅是 TCP 端口可连接
+- App 启动后网络实例状态由 LAN 校正为 EasyTier 时，会立即使旧路径结果失效并重新探测，不再等待下一个 30 秒周期
+- 路由器和设备均允许 1 次瞬时失败；连续 2 次失败才切换为离线
+- 设备列表按 IP/名称稳定排序，在线状态变化不会导致卡片上下跳动
+- 旧结果按设备探测令牌丢弃，30 秒轮询与唤醒/关机阶段轮询不会互相覆盖
+
+Agent `status` 增加 `system_uptime_secs`，App 用其显示“已运行”；旧 `uptime` 仍表示 Agent 进程运行时间，保持兼容。
+
+#### 展开和状态模型
+
+```ts
+interface SortedWolDevice extends WolDevice {
+  deviceId: string
+  status: WolDeviceState
+  error: string
+}
+
+const expandedDeviceIds = reactive(new Set<string>())
+```
+
+- `deviceId = mac || ip:agent_port`
+- 状态和错误按设备 ID 保存，不再使用 IP 作为唯一键
+- 性能轮询只请求已展开且在线的设备
+- 收起设备时停止对应轮询
+- 配置删除时同步清理展开、状态、图表和命令状态
+
+#### 性能图表
+
+新增 `ComputerChart.vue`，统一实现 CPU、GPU、内存、磁盘和网络图表：
+
+- SVG `viewBox="0 0 100 100"`，`preserveAspectRatio="none"`
+- 图表高度 `96px`
+- 水平网格位于 `4%`、`50%`、`96%`
+- 折线 `2px`，非缩放描边
+- 单序列面积透明度 `0.14`
+- 主序列 `#2a78d6`，次序列 `#eb6834`；深色模式使用 `#3987e5` / `#d95926`
+- Y 轴显示最大值和中间值，X 轴左右贴边
+- 鼠标、触摸显示十字准线、数据点和提示框
+- 键盘支持 `←`、`→`、`Home`、`End`
+- 无数据保留为空隙，不错误显示为零
+- 图表按已有样本数动态铺满 X 轴，与组网页图表一致；只有一个样本时将该值复制到左右端点，形成一条表示当前值的水平线
+- `null` 或请求失败区间断开折线，不用直线跨接中断时段
+- 中英文提示、无数据文案和键盘读屏文本随界面语言切换
+
+采集保持现有 5 秒频率，保存 60 点，因此实际窗口为 5 分钟；X 轴根据数据点显示“N 秒前 / N 分钟前”，而不是固定显示 60 秒。
+
+指标卡采用 n2 布局：
+
+- CPU、GPU、内存使用率图
+- 指标子卡片和命令输出卡片不使用边框，以背景和阴影区分层级
+- 每个磁盘独立卡片，包含容量、进度条和读写双线图
+- 即使磁盘只有一个分区，也显示分区名称、容量和占用进度
+- 每个物理网卡独立卡片，包含上下行双线图
+- Agent 未提供频率、温度等数据时不虚构显示
+- CPU/GPU 卡片没有“已用/可用”等副信息行时，图表仍与标题行保持固定间距
+- 总览卡三个统计值统一使用组网页设备列表项名称的 `15px / 22px / 500` 字号、行高与字重
+- 三个统计卡整体与 Hero 标题区间距为 `12px`，卡内上下 padding 为 `10px / 8px`，统计卡不添加阴影；深色模式统计卡背景保持 `#111214`（hero 渐变压暗后仍保持层次）
+
+#### App 端自定义命令
+
+命令保存在 App：
+
+```ts
+interface AppCommand {
+  id: string
+  name: string
+  program: string
+  args: string[]
+  timeoutSecs: number
+  cancelable: boolean
+  risk: 'normal' | 'high'
+}
+```
+
+存储键：
+
+```text
+computerCustomCommandsV1   // 命令，按 deviceId 分组
+wolAgentCommandTokensV1    // 每台设备的命令 Token
+```
+
+Token 不写入可导出的 WOL TOML，也不进入配置导入导出内容。
+
+命令入口：
+
+- 设备卡片 `⋮`
+- 桌面端右键卡片
+- 移动端长按卡片
+
+展开区域不再显示“性能 / 命令”分段切换。命令从菜单和确认 Dialog 发起，执行后进入命令输出视图，并提供“返回性能”按钮。菜单和确认 Dialog 采用 n2 视觉，但显示的是 App 自定义命令。执行时只提交结构化 `program + args[]`，不提交 Shell 文本。
+
+#### wol-agent 命令 API
 
 ```http
-GET  /api/v1/commands
-POST /api/v1/command-runs
-GET  /api/v1/command-runs?active=true
-GET  /api/v1/command-runs/{run_id}
-GET  /api/v1/command-runs/{run_id}/output?after_seq=0
-POST /api/v1/command-runs/{run_id}/cancel
+GET    /api/v1/command-policy
+POST   /api/v1/command-runs
+GET    /api/v1/command-runs?active=true
+GET    /api/v1/command-runs/{run_id}
+GET    /api/v1/command-runs/{run_id}/output?after_seq=0
+POST   /api/v1/command-runs/{run_id}/cancel
 ```
 
-提交请求示例：
+提交示例：
 
 ```json
 {
-  "command_id": "network-diag",
-  "request_id": "3c259c3c-5cb1-4d32-a48d-72e6f221a4f4"
+  "request_id": "3c259c3c-5cb1-4d32-a48d-72e6f221a4f4",
+  "command": {
+    "name": "刷新 DNS 缓存",
+    "program": "C:\\Windows\\System32\\ipconfig.exe",
+    "args": ["/flushdns"],
+    "timeout_secs": 30,
+    "cancelable": true,
+    "risk": "normal"
+  }
 }
 ```
 
@@ -370,148 +468,137 @@ POST /api/v1/command-runs/{run_id}/cancel
 | 状态 | 含义 |
 |------|------|
 | `queued` | 已接收，等待执行 |
-| `running` | 命令正在执行 |
+| `running` | 正在执行 |
 | `succeeded` | 正常结束且退出码为 0 |
 | `failed` | 启动失败或退出码非 0 |
-| `timed_out` | 超过命令配置的执行时限 |
+| `timed_out` | 超过命令超时 |
 | `canceled` | 用户主动取消 |
-| `interrupted` | `wol-agent` 重启导致未完成运行无法恢复 |
-| `unknown` | 状态无法可靠确认 |
+| `interrupted` | Agent 重启导致旧运行无法恢复 |
+| `unknown` | 无法可靠确认 |
 
-输出采用序列号游标增量读取，避免长命令或大结果一次性占用内存和网络：
+输出使用全局递增序列号：
 
 ```json
 {
-  "next_seq": 20,
-  "eof": false,
+  "next_seq": 3,
+  "eof": true,
+  "truncated": false,
   "chunks": [
-    { "seq": 18, "stream": "stdout", "text": "..." },
-    { "seq": 19, "stream": "stderr", "text": "..." }
+    { "seq": 1, "stream": "stdout", "text": "..." },
+    { "seq": 2, "stream": "stderr", "text": "..." }
   ]
 }
 ```
 
-运行详情至少返回：
+App 通过 `after_seq` 增量读取；活动运行期间每 1–2 秒轮询，断开后继续使用游标。
 
-- 命令展示名称和风险等级。
-- `queued_at`、`started_at`、`finished_at`、运行时长。
-- 当前状态、退出码、超时原因或错误信息。
-- stdout/stderr 增量输出及各自序号。
-- `eof`、输出截断标记和下一次读取游标。
-- 是否允许取消、是否已取消。
+#### Agent 安全策略
 
-第一版支持文本和 JSON 结果；文件、二进制结果和结果文件下载暂不纳入。App 需限制单次显示结果大小并标记截断，完整原始输出的持久化策略在实施前另行确认。
+命令接口必须配置 Bearer Token 和允许目录：
 
-生命周期规则：
+```bash
+wol-agent.exe ^
+  --port 32249 ^
+  --command-token "<device-token>" ^
+  --command-allowed-dir "C:\\Tools"
+```
 
-- App 退出、切后台或网络中断时，`wol-agent` 不终止命令。
-- App 重新打开后先读取 `active=true` 的运行列表，再按 `run_id` 重新接入未结束结果。
-- `wol-agent` 重启时，第一版将未能确认结束的旧运行标记为 `interrupted`，不自动重试，避免重复执行高风险命令。
-- 跨 `wol-agent` 重启保留运行日志和结果可在后续阶段实现，不在第一版承诺。
-- 取消操作必须终止完整进程树：Windows 使用 Job Object 或等价机制，Unix 使用进程组。
-- 超时和取消必须写入最终状态、退出信息和时间戳。
+安全规则：
 
-#### App 交互设计
+- Token 为空或允许目录为空时命令 API 禁用
+- 程序必须是允许目录内的绝对路径
+- 默认禁止 `cmd.exe`、PowerShell、脚本解释器和常用系统绕过程序
+- Windows 只允许 `.exe` / `.com`
+- 不允许 App 提供 Shell、环境变量或工作目录
+- `request_id` 提供幂等保护
+- 默认每台 Agent 同时只允许一个活动运行
+- 限制超时、请求频率和单次运行输出量
+- Windows 使用 Job Object、Unix 使用进程组终止完整进程树
+- 状态和输出保存在内存；第一版不承诺跨 Agent 重启恢复结果
 
-**命令列表**
+现有 `status`、`stats` 和 `shutdown` 的认证兼容策略保持独立；新增命令接口不复用无认证接口。
 
-- 命令以列表展示，每项包含图标、名称、简述、预计时长和风险标记。
-- 不显示真实程序路径、命令行参数或凭据。
-- 正在运行的命令显示运行状态、已用时和进入结果页入口。
-- 同一命令已有活动运行时，不重复发起，改为查看当前运行。
+#### Tauri HTTP Bridge
 
-**执行确认**
+新增通用请求命令：
 
-- 点击命令后显示二次确认 Dialog。
-- Dialog 展示命令名称、用途、目标设备、预计时长、超时时间、风险说明和不可逆影响。
-- 普通命令需要明确点击“确认执行”；高风险命令增加额外确认动作或输入确认。
-- 确认提交后立即进入运行视图，不等待命令完成。
+```ts
+httpRequest({
+  method,
+  url,
+  proxy,
+  timeoutSecs,
+  headers,
+  body
+})
+```
 
-**运行与结果视图**
+返回：
 
-- 显示排队、运行、超时、取消、成功、失败、中断等状态。
-- 显示开始时间、已用时、退出码和错误原因。
-- stdout/stderr 分流展示，可按流筛选；日志滚动时提供暂停自动滚动和复制能力。
-- 通过 `after_seq` 增量拉取结果，断线恢复后继续从游标读取。
-- 可取消命令仅在执行中显示取消入口；取消前需要再次确认。
-- 输出过长或过旧时显示截断提示，不让 WebView 无限制加载。
+```ts
+interface HttpRequestResult {
+  status: number
+  headers: Record<string, string>
+  body: string
+}
+```
 
-#### 安全要求
+支持 GET/POST、JSON body、Authorization 请求头、非 2xx 响应、SOCKS5 代理和独立超时。
 
-远程命令执行属于高风险能力，完成认证和授权前不得对外启用命令 API：
+#### 文件改造点
 
-- 命令 API 必须使用每台设备独立的命令凭据或令牌，不能继续复用当前无认证 HTTP 接口。
-- `wol-agent` 每次执行前都按 `command_id` 重新校验本地 allowlist。
-- App 不参与拼接命令行，不接受服务器返回的真实 `program`/`args`。
-- `request_id` 提供幂等保护，网络重试不得重复启动命令。
-- 记录命令 ID、目标设备、发起时间、状态、退出码和调用方标识，避免记录敏感输出或凭据。
-- 限制请求频率、单命令并发数、运行时长和输出总量。
-- 不允许通过参数、环境变量或工作目录注入 Shell 文本。
-- 现有 `/api/v1/status`、`/api/v1/stats`、`/api/v1/shutdown` 的认证兼容策略需在实施时明确；不能因新增命令接口扩大原有接口风险。
-
-#### 实施改造点
-
-| 层级 | 计划改动 |
-|------|----------|
-| Tauri HTTP Bridge | 扩展 `httpPost` 为支持 method、JSON body、headers、timeout，并返回 HTTP status 和响应体 |
-| `easytier-gui/src/composables/backend.ts` | 增加命令列表、提交运行、查询运行、增量输出和取消接口封装 |
-| `wol-agent` | 增加命令 allowlist、异步运行管理器、状态/输出缓存、超时、进程树取消和认证 |
-| `easytier-gui/src/pages/home.vue` | 使用稳定 ID 重构展开状态，增加树状子工作区、命令列表、确认 Dialog、运行和结果视图 |
-| `docs/project.md` | 记录最终实现状态、配置格式、API 和安全边界 |
-
-当前 `httpPost` 只能提交 URL、代理和超时，不支持 JSON body、请求头、响应状态码，因此 Tauri HTTP Bridge 是命令功能的前置改造。
-
-#### 实施顺序
-
-1. 扩展 Tauri HTTP Bridge，支持带 body/header 的通用请求和非 2xx 响应读取。
-2. 在 `wol-agent` 实现认证、命令 allowlist、异步运行器、状态机、输出游标、超时和进程树取消。
-3. 重构电脑页展开状态和父子卡片层级，不改变现有 WOL/性能数据流。
-4. 增加命令列表、二次确认、活动运行恢复和结果查看器。
-5. 补充配置示例、API 文档、失败场景和验收记录。
-6. 分阶段验证普通命令、长时命令、取消、超时、App 重启恢复、网络重连、Agent 重启和输出截断。
+| 文件 | 改动 |
+|------|------|
+| `easytier-gui/src/components/ComputerChart.vue` | 新增 n2 响应式图表组件 |
+| `easytier-gui/src/composables/wol_status.ts` | 纯状态转换、首次探测、失败宽限和多路由器语义 |
+| `easytier-gui/src/composables/wol_status.test.ts` | 在线状态转换单测 |
+| `easytier-gui/src/composables/computer_commands.ts` | App 命令存储、Token 和 Agent API 封装 |
+| `easytier-gui/src/composables/backend.ts` | 通用 `httpRequest` |
+| `easytier-gui/src-tauri/src/lib.rs` | 通用 HTTP Bridge |
+| `easytier-gui/src/pages/home.vue` | n2 列表、状态重构、多展开、图表和命令 UI |
+| `wol-agent/commands.go` | 命令策略、异步运行、输出游标和认证 |
+| `wol-agent/process_windows.go` | Windows Job Object 进程树取消 |
+| `wol-agent/process_unix.go` | Unix 进程组取消 |
+| `wol-agent/main.go` | 注册命令路由和系统 uptime |
 
 #### 验收标准
 
-- 设备列表排序变化不会导致展开状态跳到其他设备。
-- 父卡片视觉权重明显高于子模块，展开区域与父设备的从属关系清晰。
-- App 只能执行预先配置的命令，不能提交任意程序或 Shell。
-- 提交长时命令后立即返回 `run_id`，关闭或切换 App 不影响命令继续执行。
-- App 重新打开后能够找到活动运行并继续读取结果。
-- stdout/stderr 可区分、按序增量读取，断线后不会重复返回已读结果。
-- 超时、失败、取消和中断具有明确终态，不重复执行命令。
-- 取消操作能清理完整子进程树，不遗留后台进程。
-- 未完成认证和授权设计前，命令接口不对外启用。
-
-#### 实施前需确认的边界
-
-以下内容不默认扩展，实施前需要单独确认：
-
-- 是否要求命令运行日志跨 `wol-agent` 重启长期持久化。
-- 是否需要导出或下载完整命令结果文件。
-- 是否需要多命令并发、定时命令、命令参数输入或命令分组。
-- 是否将现有 WOL 状态、关机和统计接口一并迁移到认证体系。
+- n2 列表在桌面、窄屏和移动宽度下无水平溢出
+- 多设备同时展开时状态、图表和命令互不串扰
+- 排序或配置变化不会导致展开状态跳到其他设备
+- 在线状态继续遵循路由器和唤醒/关机业务逻辑
+- 首次启动和 LAN → EasyTier 路径切换不会误报路由器离线
+- 单次探测超时保持最后确认状态，连续 2 次失败才显示离线
+- 图表固定 60 槽，断点正确分段，中英文提示一致
+- App 只能执行本地保存的 `program + args[]`
+- Agent 无预置用户命令，未配置 Token 或允许目录时 API 禁用
+- 网络重试不会因相同 `request_id` 重复执行
+- stdout/stderr 按全局序列增量读取
+- 超时、取消、失败和中断具有明确终态
+- 取消后终止完整进程树
+- Vue 模板编译、Vite 构建、Go vet 和 Android 构建通过
 
 ### 组网页面
 
-**标题栏**：未连接时显示网络名称 + 磨砂玻璃编辑按钮 + 切换按钮；已连接时标题切换为"异地组网" + 红色断开按钮。
+**标题栏**：未连接时显示网络名称 + 磨砂玻璃编辑按钮 + 切换按钮；已连接时标题切换为"组网" + 红色断开按钮。
 
-**未连接态**：中央大 Connect 按钮（accent 蓝色背景）。无网络配置时显示空状态提示（图标 + "未配置网络" + "点击 ⚡ 切换并添加网络"），不显示 Connect 按钮。
+**未连接态**：中央大 Connect 按钮（accent 蓝色背景；深色模式改用设置页关于按钮同款 tonal 底色 `--n3-primary-container`）。无网络配置时显示空状态提示（图标 + "未配置网络" + "点击 ⚡ 切换并添加网络"），不显示 Connect 按钮。
 
-**连接中**：按钮背景色减淡过渡（0.4s），文字保持白色，水波涟漪动画（双层扩散淡出），spinner 替代链接图标。
+**连接中**：按钮背景色减淡过渡（0.4s），文字保持白色（深色模式文字/图标取 `--n3-on-primary-container`），涟漪同步换成 tonal 色，spinner 替代链接图标。
 
 **已连接态**：
-- 总览信息卡片：毛玻璃背景 + 网络名称 + 虚拟IP副标题 + 接口IPv4/IPv6地址（每地址一行，无前缀标签）+ NAT标签 + 已连接状态 + 三统计项（节点数/服务器数/累计流量）
-- 速率图表：实时上下行速率面积渐变折线图（60 点 / 3 分钟），HTML 坐标轴标签覆盖在 SVG 之上
-- 网络设备列表：上半部分 IP+主机名+延迟/丢包率，下半部分两行（流量+标签 / 版本号），卡片入场顺次动画
+- 总览信息卡片：n3 绿色渐变 + 网络名称 + 虚拟IP副标题 + NAT标签 + 已连接状态 + 三统计项（节点数/服务器数/累计流量）
+- 速率图表：复用电脑页 `ComputerChart.vue`，40 点 / 2 分钟，支持单样本水平线和历史回溯
+- 网络设备列表：n3 ListItem + 无 hover + 点击展开版本号
 - 服务器列表：同设备卡片布局，按主机名字母排序
 - 连接状态下隐藏编辑和切换网络按钮
 - 断开按钮在标题栏以红色断链图标展示
 
-**速率图表**：实时上下行速率面积渐变折线图（60 点 / 3 分钟），HTML 坐标轴标签覆盖在 SVG 之上。Y 轴最大值叠于左上角，y=0 不显示标签（横轴线隐式表达），图表线随卡片宽度拉伸。
+**速率图表**：复用电脑页 `ComputerChart.vue` 的网格、十字准线、提示框和动态 X 轴，不采用 n3 的图表样式。图表上方左侧显示累计流量、右侧显示实时速度；上下行颜色与设备列表流量一致，只画折线不画面积。
 
-**网络设备列表**：Peer 卡片，上半部分 IP+主机名+延迟/丢包率，下半部分两行布局：第一行流量+P2P/TCP/NAT标签（正常大小），第二行版本号（`v2.7.0`）。左右两侧垂直居中对齐。
+**网络设备列表**：n3 ListItem，显示头像、名称、延迟、IP、流量和 P2P/协议/NAT 标签；点击整卡展开版本号，无 hover。
 
-**服务器列表**：同设备卡片布局，按主机名字母排序。
+**服务器列表**：同设备卡片布局，隐藏 IP 行，按主机名字母排序；底部流量与 P2P/协议/NAT 标签水平居中对齐。
 
 **Peer 排序**：路由器优先（hostname 匹配 `/route|wrt|路由|home|家/i`），其余按 IP 排序。
 
@@ -523,25 +610,25 @@ POST /api/v1/command-runs/{run_id}/cancel
 
 **设置页总览信息卡片**：
 
-蓝色渐变背景，标题 "EasyTier + WOLPlus" + 副标题 "异地组网和远程设备管理" + 右侧 About 按钮（版本号显示）。下方三个统计指标：电脑数 / 路由器数 / 网络数。
+蓝色渐变背景，标题 "EasyTier" + 副标题 "异地组网和远程设备管理" + 右侧 About 按钮（版本号显示，紧凑 34px Tonal 样式）。下方三个统计指标：电脑数 / 路由器数 / 网络数。
 
 **Default Tab（默认首页）**
-九宫格图标，副标题显示当前默认首页名称。右侧原生 `<select>` 下拉，可选电脑 / 路由器 / 组网。选中值存入 `localStorage['defaultTab']`，仅首次加载时影响 `activeTab` 初始值。
+九宫格图标，副标题显示当前默认首页名称。右侧原生 `<select>` 下拉（紧凑 34px 样式），可选电脑 / 路由器 / 组网。选中值存入 `localStorage['defaultTab']`，仅首次加载时影响 `activeTab` 初始值。
 
 **Theme（主题）**
 月亮图标，副标题显示当前主题模式 + "点击切换主题" 提示，右侧蓝色胶囊标签显示 `浅色` / `深色` / `跟随系统`。通过下拉选择自动 / 浅色 / 深色，写入 `localStorage['themeMode']`，由 `applyTheme()` 统一状态机管理（综合 `themeMode` + 系统 `prefers-color-scheme`），同步调用 Android `ThemeBridge` 动态切换状态栏/导航栏颜色；深色模式统一使用纯黑背景。
 
 **Language（语言）**
-地球图标，副标题显示当前语言和 "点击切换语言" 提示，右侧蓝色胶囊标签显示 `中文` 或 `English`。点击调用 `toggleLang()`，切换 `locale` ref 并写入 `localStorage['easytierLang']`，UI 所有文本即时更新。
+地球图标，副标题显示当前语言和 "点击切换语言" 提示，右侧蓝色胶囊标签（紧凑样式：主标签 11px、副标签 10px）显示 `中文` 或 `English`。点击调用 `toggleLang()`，切换 `locale` ref 并写入 `localStorage['easytierLang']`，UI 所有文本即时更新。
 
 **Debug Mode（调试模式）**
-齿轮图标，副标题 "显示高级选项和调试信息"，右侧开关 toggle。开启后生效两处：1) 组网页底部显示 Debug 区域（本机 IP、端口、raw TOML 文本等诊断信息）；2) 解锁高级设置菜单项（显示在调试模式下方）；3) 电脑页设备卡片底部显示设备信息摘要行（MAC · 路由器 IP · 接口 · 端口）。
+齿轮图标，副标题 "显示高级选项和调试信息"，右侧开关 toggle（Material You 两态样式）。开启后生效两处：1) 组网页底部显示 Debug 区域（本机 IP、端口、raw TOML 文本等诊断信息）；2) 解锁高级设置菜单项（显示在调试模式下方）；3) 电脑页设备卡片底部显示设备信息摘要行（MAC · 路由器 IP · 接口 · 端口）。
 
 **Advanced Settings（高级设置）**
 齿轮图标，副标题 "Mode, logging, config server, language"。**默认隐藏**，仅在开启调试模式后显示。点击跳转到原始页面 `/`（easytier-frontend-lib 自带的高级设置面板），排在调试模式开关下方。
 
 **Configuration Info（配置信息）**
-云下载图标，副标题 "全部数据导入与导出" / "Import/Export all data"，右侧两个操作按钮：
+云下载图标，副标题 "全部数据导入与导出" / "Import/Export all data"，右侧两个紧凑操作按钮（34px 高）：
 - **Export（导出）**：绿色文字按钮。将 WOL 配置（`wolDevicesToml`）、LuCI 配置（`luciRoutersToml`）、网络配置列表（`networkList` 中各网络的 `rawToml`）打包为 JSON 对象，通过 <code>tauri-plugin-clipboard-manager</code> 的 <code>writeText()</code> 写入剪贴板，底部 snackbar 提示 "配置信息已导出到剪切板"。
 - **Import（导入）**：蓝色主色按钮。打开导入 Dialog（`showImportDlg`）。
 
@@ -615,10 +702,10 @@ Tab 切换到 LuCI:
 
 #### 标题栏
 
-- 显示当前路由器 IP + 路径标签（ET-LAN / LAN）
-- 编辑按钮（齿轮图标）
+- 显示当前路由器 IP + 路径标签（组网 / 局域网）
 - 刷新按钮（仅在已连接时显示）：完整重启代理，恢复上次浏览路径
 - 切换路由器按钮（仅在有多台路由器时显示）
+- 切换菜单第一项为“编辑路由器”，不在路由器项后显示删除 X
 
 #### 配置编辑 Dialog
 
@@ -694,7 +781,7 @@ Glassmorphism + Material You 混合风格，自定义 CSS 变量体系。
 
 **毛玻璃系统**：标题栏和 Tab 栏使用 `backdrop-filter: blur(22px)` + `::before` 伪元素渐变叠加，形成半透明毛玻璃效果。面板背景色 `--panel` 和 `--panel-strong` 分别用于弱/强不透明度场景。
 
-**Tonal 按钮**：按钮背景使用 `color-mix(in srgb, var(--accent) 15%, var(--panel-strong))`，将 accent 色叠加在面板背景色之上，与面板产生层次关联。无内边框阴影，active 态仅 `scale(0.96)`。
+**Tonal 按钮**：按钮使用 n3 的 container 色和内容色，浅色/深色分别由 `--n3-*-container` 令牌控制。文字胶囊按钮高 `40px`、圆角 `20px`，active 态 `scale(.95)`；图标按钮为 `40px` 圆形，active 态 `scale(.94)`。
 
 ```css
 :root {
@@ -732,28 +819,38 @@ Glassmorphism + Material You 混合风格，自定义 CSS 变量体系。
 
 ### 卡片入场动画
 
-卡片使用 CSS `@keyframes stats-slide-in` 入场动画（从下方滑入 + 淡入），配合 `animation-delay` 实现顺次出现效果。
+卡片使用电脑列表的 `@keyframes pc-card-in` 入场动画：从下方 `14px` 滑入并淡入。
 
-**分组独立延迟**：每个卡片组（Hero、流量图、设备列表、服务器列表）内部从 `--i:0` 开始计数，组内顺次错开 100ms。新卡片组出现时不受已存在卡片影响，立即从 0ms 开始动画。
+**分组独立延迟**：每个卡片通过 `--card-i` 计数，组内顺次错开 60ms。电脑卡片沿用 `--pc-i`。
 
-**防重播机制**：动画播放一次后通过 `@animationend` 事件移除动画标记类（`md-card-enter` / `md-animated`），避免 `display:none` 切换（`v-show` Tab 切换）时浏览器重启动画。新设备出现时创建新 DOM 元素，动画正常触发。
+**Tab 切换重播**：四个页面在 `activeTab` 对应时添加 `page-active` 类，动画选择器只在类存在时生效。因此首次打开 App 和每次切换 Tab 都会重新播放；隐藏页面不会提前消耗动画。
+
+**展开动画**：电脑卡片和组网设备/服务器均使用 `grid-template-rows: 0fr → 1fr`，内容淡入并上移；组网展开区仅显示版本号。
 
 ```css
-.md-animated { animation: stats-slide-in 0.35s ease-out both; animation-delay: calc(var(--i, 0) * 0.08s); }
-@keyframes stats-slide-in { from { opacity:0; transform:translateY(16px); } to { opacity:1; transform:translateY(0); } }
+.md-page.page-active .md-hero,
+.md-page.page-active .md-hero-metric,
+.md-page.page-active .md-settings-card,
+.md-page.page-active .net-peer-card,
+.md-page.page-active .pc-card {
+  animation: pc-card-in .35s ease-out both;
+  animation-delay: calc(var(--card-i, 0) * 60ms);
+}
 ```
+
+**底部 Tab 栏**：保留 `backdrop-filter` 玻璃材质、渐变过渡和现有图标；布局改用 n3 的 56×32 active pill、12px 标签和 primary container 状态。栏高收紧为 `76px`，上下 padding 分别为 `6px / 8px`。
 
 ### 颜色体系
 
 | 场景 | 颜色 | 条件 |
 |------|------|------|
 | NAT 类型 | 绿 / 绿 / 绿 / 蓝 / 橙 | Open(NAT1) / NAT2 / NAT3 / NAT4 |
-| 网络质量 | 绿 / 蓝 / 橙 / 红 | 正常 / loss>3% 或 lat>50 / loss>5% 或 lat>100 / loss>10% 或 lat>300 |
-| 隧道类型 | 绿(Local) / 绿(P2P) / 橙(Relay) | Local / P2P / Relay |
-| 路径标签 | 蓝色胶囊 | ET-LAN / LAN（统一蓝色 `md-chip`） |
-| 断开按钮 | `#ef5350` | 标准红 |
+| 网络质量 | primary 文本 | n3 组网列表延迟样式，不再按质量变色 |
+| 隧道类型 | 蓝(Local) / 绿(P2P) / 灰(Relay) | Local / P2P / Relay |
+| 路径标签 | `primary-container` tonal 标签 | ET-LAN / LAN |
+| 断开按钮 | `error-container` tonal 按钮 | 标准红 |
 | 状态指示灯 | 绿 / 灰 / 橙（脉冲）/ 红（脉冲） | 在线 / 离线 / 唤醒中 / 关机中 |
-| Tonal 按钮 | `color-mix(accent 15%, panel-strong)` | 操作按钮（white/green/red/primary/export 变体） |
+| Tonal 按钮 | n3 `*-container` | 操作按钮（secondary/good/error/primary 变体） |
 | 图表 CPU | `--chart-cpu` `#1976d2` | CPU 使用率 |
 | 图表内存 | `--chart-mem` `#e57373` | 内存使用率 |
 | 图表 GPU | `--chart-gpu` `#7c4dff` | GPU 使用率 |
@@ -766,7 +863,7 @@ Glassmorphism + Material You 混合风格，自定义 CSS 变量体系。
 
 **总览信息卡片（Hero Card）左右列布局**：
 
-四个 Tab（电脑/路由器/组网/设置）的总览信息卡片均使用统一的 `md-hero-head` 布局模式：
+电脑、组网和设置三个页面的总览信息卡片使用 n3 Hero 布局；路由器页无总览卡：
 
 ```
 ┌─────────────────────────────────────────┐
@@ -780,39 +877,45 @@ Glassmorphism + Material You 混合风格，自定义 CSS 变量体系。
 
 - 左列：`flex-1 min-w-0`，标题和副标题垂直排列，标题过长时自动换行
 - 右列：`flex-shrink:0`，优先保证宽度不被压缩，不换行（`white-space:nowrap`）
-- 右列内容根据场景不同：电脑页为刷新按钮（绿色 Tonal）、组网页为 NAT 标签 + 已连接状态、设置页为 About 按钮
+- 右列内容根据场景不同：电脑页为刷新按钮（绿色 Tonal，紧凑 34px）、组网页为 NAT 标签 + 已连接状态、设置页为 About 按钮（紧凑 34px）
 - `.md-hero-head` 不使用 `flex-wrap:wrap`，确保右列始终在同行显示
 
 **按钮与标签的样式区分**：
 
 | 样式 | CSS 类 | 特征 | 用途 |
 |------|--------|------|------|
-| **Tonal 按钮** | `md-settings-btn` | `color-mix(accent 15%, panel-strong)` 背景，**无内边框**，`min-height:34px`，SVG 图标 18×18 | 操作触发（导入/导出/刷新/编辑） |
-| **标签/胶囊** | `md-chip` | `rgba(accent, 0.15)` 背景 + `box-shadow: inset 0 0 0 1px` **内边框** | 信息展示（NAT/路径/状态） |
+| **Tonal 按钮** | `md-settings-btn` | n3 container 背景，无内边框，默认 `40px` 高、`20px` 圆角；统计卡片与设置列表行内为紧凑变体 `34px` 高、`17px` 圆角、图标 `16px` | 操作触发（导入/导出/刷新/关于） |
+| **标签/胶囊** | `md-chip` / `md-rt` | n3 primary/good/tertiary/secondary container，`8px` 圆角，无内边框 | 信息展示（NAT/路径/状态/P2P/协议） |
 
-区分要点：**按钮无内边框**（纯色背景 + `scale(0.96)` active 态），**标签有内边框**（`inset box-shadow` 模拟描边）。
+区分要点：按钮和标签都使用 n3 tonal container，均无内边框；按钮用于触发操作并带按压缩放，标签只用于信息展示。
 
-**网络设备/服务器卡片**（下半部分两行布局）：
+**网络设备/服务器卡片**（n3 ListItem）：
 
 ```
-第一行: [↑↓流量]                    [P2P] [TCP] [NAT]
-第二行: [v版本号]
+第一行: [头像] [名称 · IPv4]                  [延迟]
+第二行:        [流量]              [P2P] [TCP] [NAT]
+展开:          [版本]                         [v2.7.0]
 ```
 
-- 左侧：流量和版本号分为两行，底部对齐（`flex flex-col justify-end`）
-- 右侧：P2P/Relay、协议摘要、NAT 标签固定在右下角并保持单行；协议过长时压缩，窄屏不覆盖左侧流量/版本信息
-- 版本号格式：`v2.7.0`（小写 v 前缀）
-- 协议摘要提取公共前缀：空间足够时 `TXT-TCP, TXT-UDP` → `TXT:TCP/UDP`；右侧空间不足时压缩为 `TXT:2` / `TXT:3`。程序通过 DOM/ResizeObserver 动态测量可用宽度，点击卡片可展开查看完整协议名
-- 协议摘要保留 `md-chip` 标签样式，与 P2P/Relay、NAT 标签同排显示
+- 左侧图标桌面/移动均为 `40px` 圆角头像；网络设备使用路由器图标，服务器使用服务器图标
+- 名称优先显示 hostname，网络设备无名称时回退到 IPv4；服务器去掉 `PublicServer_` 前缀
+- 网络设备 IPv4 紧随第一行名称，中间用 `·` 分隔（小圆点两侧间距 4px）；名称保持 `15px / 500`、IP 保持 `12px` 次要色，横向空间不足时仅缩略名称（ellipsis）；第二行只显示上下行流量，与右侧标签同行垂直居中，布局与服务器列表项一致
+- 除 `40px` 图标外，组网列表项字号整体小于 n3 默认稿：名称 `15px`、延迟/行内 IP `12px`、流量与标签 `11px`，流量使用粗体
+- 右侧：P2P/Relay、协议摘要、NAT 标签按 n3 chip 样式展示；协议过长时压缩，窄屏不覆盖左侧流量
+- 版本号只在展开区显示，格式为 `v2.7.0`（小写 v 前缀）
+- 协议摘要提取公共前缀：空间足够时 `TXT-TCP, TXT-UDP` → `TXT:TCP/UDP`；右侧空间不足时压缩为 `TXT:2` / `TXT:3`
+- 卡片无 hover；点击整卡或聚焦后按 Enter/Space 展开
+- 展开区只显示版本号，不显示协议全文
+- 版本号使用与电脑页展开后“系统”信息一致的标签样式（圆角 8px、secondary-container 背景）
 - 服务器名去掉公共前缀 `PublicServer_`
+- 设置页列表项名称使用 `16px / 400`，取消粗体
 
 **总览信息卡片**（组网页）：
 
 ```
 标题行: [网络名称]                    [NAT标签] [已连接]
 副标题: [虚拟IP v4]
-接口IP: [接口IPv4地址]                ← 有数据时显示
-        [接口IPv6地址]
+接口IP: [调试模式下显示接口 IPv4 / IPv6]
 统计行: [节点数] [服务器数] [累计流量]
 ```
 
@@ -1063,7 +1166,8 @@ ETGC:2:<deflate压缩后的Base64URL编码>
 | Android SDK | `D:\tools\Android\Sdk` |
 | NDK | `27.0.12077973` |
 | JDK 17 | `D:\tools\Java\jdk-17.0.12` |
-| Rust | `stable-x86_64-pc-windows-msvc` 1.95 |
+| Rust 桌面默认 | `stable-x86_64-pc-windows-msvc` 1.95 |
+| Rust Android 构建 | `stable-x86_64-pc-windows-gnu` + `aarch64-linux-android` target（无 VS Build Tools 时使用） |
 | pnpm | `$HOME/.npm-global` |
 | MinGW | `$HOME/mingw64/mingw64` |
 | protoc | `$HOME/protoc` |
@@ -1082,4 +1186,25 @@ ETGC:2:<deflate压缩后的Base64URL编码>
 - **本地 Android 构建** — 详见 [本地Android构建.md](本地Android构建.md)
 - **CI 全平台构建** — 详见 [CI全平台构建.md](CI全平台构建.md)
 
-构建原理、三步流程、指纹稳定性等详见 [本地Android构建.md](本地Android构建.md)。
+Windows 本地 arm64 APK 快速构建：
+
+```powershell
+cd D:\projects\projectsAlpha\EasyTier
+.\script\build-android-windows.ps1
+```
+
+只验证工具链和 Gradle 路径：
+
+```powershell
+.\script\build-android-windows.ps1 -ValidateOnly
+```
+
+脚本会自动处理以下 Windows 特有问题：
+
+- 从 `Cargo.lock` 解析 Tauri/插件版本，重建含 Windows 绝对路径的 `tauri.settings.gradle`
+- 使用 MinGW GNU Rust toolchain，避免缺少 MSVC `link.exe`
+- 使用 NDK 27 Windows Clang 交叉编译 arm64
+- 同步 `dist` 与 `libapp_lib.so`，清理 Gradle 旧 Native 中间目录
+- 验证 APK 签名、前端资源哈希和 Native 库哈希，输出 SHA-256
+
+不要在 Windows 构建中复用 WSL 生成的 `tauri.settings.gradle`，也不要让 Windows 与 WSL 共用同一个 `node_modules`。构建原理、平台隔离和完整踩坑记录详见 [本地Android构建.md](本地Android构建.md)。

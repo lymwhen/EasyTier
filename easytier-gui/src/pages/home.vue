@@ -1,18 +1,50 @@
 <script setup lang="ts">
-import { generateNetworkConfig, runNetworkInstance, collectNetworkInfo, updateNetworkConfigState, parseNetworkConfig, httpGet, httpPost, tcpPing, deleteNetworkInstance, luciProxyStart, luciProxyStop, luciGetLastPath, initRpcConnection } from '~/composables/backend'
+import { generateNetworkConfig, runNetworkInstance, collectNetworkInfo, updateNetworkConfigState, parseNetworkConfig, httpGet, httpPost, deleteNetworkInstance, luciProxyStart, luciProxyStop, luciGetLastPath, initRpcConnection } from '~/composables/backend'
+import {
+  cancelCommandRun,
+  createCommandRun,
+  formatDisplayCommand,
+  getCommandOutput,
+  getCommandPolicy,
+  getCommandRun,
+  listActiveCommandRuns,
+  loadDeviceCommands,
+  loadDeviceCommandToken,
+  saveDeviceCommands,
+  saveDeviceCommandToken,
+  type AppCommand,
+  type CommandOutputChunk,
+  type CommandPolicy,
+  type CommandRisk,
+  type CommandRun,
+} from '~/composables/computer_commands'
 import { initMobileVpnService } from '~/composables/mobile_vpn'
 import { listenGlobalEvents } from '~/composables/event'
 import { type } from '@tauri-apps/plugin-os'
 import { loadLastNetworkInstanceId, saveLastNetworkInstanceId } from '~/composables/config'
 import { Utils, I18nUtils } from 'easytier-frontend-lib'
 import pkg from '~/../package.json'
-import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import Textarea from 'primevue/textarea'
 import { listen } from '@tauri-apps/api/event'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager'
 import { resolveTheme, applyTheme as setTheme } from '~/composables/theme'
+import {
+  applyWolFailure,
+  applyWolRouterFailure,
+  applyWolRouterSuccess,
+  applyWolSuccess,
+  createWolDeviceStatus,
+  createWolRouterStatus,
+  effectiveWolState,
+  forceWolOffline,
+  markWolChecking,
+  type WolDeviceStatus,
+  type WolEffectiveState,
+  type WolRouterStatus,
+  type WolStatusResponse,
+} from '~/composables/wol_status'
 import type { NetworkTypes } from 'easytier-frontend-lib'
 
 const router = useRouter()
@@ -34,6 +66,7 @@ function showSnack(msg: string, type: SnackType = 'info', duration = 2500) {
 
 // --- i18n ---
 const T: Record<string, [string, string]> = {
+  pcManagement: ['PC management', '电脑管理'],
   wolDevices: ['PC Devices', '电脑设备'],
   wolDesc: ['Remote Wake & Device Management', '远程唤醒与设备管理'],
   pcs: ['PCs', '电脑'],
@@ -45,7 +78,10 @@ const T: Record<string, [string, string]> = {
   online: ['Online', '在线'],
   offline: ['Offline', '离线'],
   routerOffline: ['Router Offline', '路由器离线'],
+  noRouterConfigured: ['No router configured', '未配置路由器'],
   detecting: ['Detecting...', '检测中...'],
+  waking: ['Starting...', '正在开机'],
+  shutting: ['Shutting down...', '正在关机'],
   routerLabel: ['Router IP', '路由器 IP'],
   noIpConfigured: ['No IP configured', '未配置 IP'],
   wake: ['Wake', '唤醒'],
@@ -106,7 +142,7 @@ const T: Record<string, [string, string]> = {
   luciTab: ['Router', '路由器'],
   routers: ['Routers', '路由器'],
   noRouters: ['No routers configured', '未配置路由器'],
-  addRouter: ['Add Router', '添加路由器'],
+  editRouter: ['Edit Router', '编辑路由器'],
   editRoutersToml: ['Edit routers.toml', '编辑 routers.toml'],
   connectingRouter: ['Connecting...', '连接中...'],
   oneClickConfig: ['Configuration', '配置信息'],
@@ -157,7 +193,7 @@ const T: Record<string, [string, string]> = {
   close: ['Close', '关闭'],
   copyCode: ['Copy', '复制'],
   copiedCode: ['Copied', '已复制'],
-  etLan: ['ET-LAN', '异地组网'],
+  etLan: ['Network', '组网'],
   lanDirect: ['LAN', '局域网'],
   cpuModel: ['CPU', '处理器'],
   cores: ['cores', '核心'],
@@ -171,6 +207,9 @@ const T: Record<string, [string, string]> = {
   sent: ['Sent', '发送'],
   protocols: ['Protocols', '协议'],
   loadingStats: ['Loading stats...', '加载中...'],
+  retry: ['Retry', '重试'],
+  copied: ['Copied', '已复制'],
+  commandTokenRequired: ['Command credential not configured', '未配置命令凭据'],
   clipboardEmpty: ['Clipboard is empty', '剪贴板为空'],
   routerConnectFailed: ['Cannot connect to router {ip}', '无法连接到路由器 {ip}'],
   transferUpload: ['Upload', '上传'],
@@ -259,26 +298,75 @@ function setDefaultTab(tab: Tab) {
 
 // ==================== WOL Tab ====================
 interface WolDevice { name: string; mac: string; ip: string; interface: string; router_ip: string; agent_port: number }
+interface SortedWolDevice extends WolDevice {
+  deviceId: string
+  status: WolDeviceStatus
+  error: string
+}
+
 const wolDevices = ref<WolDevice[]>([])
 const wolToml = ref(localStorage.getItem('wolDevicesToml') || '')
 const showWolEditor = ref(false)
-const wolStatus = reactive<Record<string, { online: boolean; phase: 'idle' | 'waking' | 'shutting' }>>({})
+const wolStatus = reactive<Record<string, WolDeviceStatus>>({})
 const wolErrors = reactive<Record<string, string>>({})
-const routerOnline = ref<undefined | boolean>(undefined)
-const wolFirstCheck = ref(true)
+const wolRouters = reactive<Record<string, WolRouterStatus>>({})
 const wolDebug = ref('')
 const phaseTimers: Record<string, ReturnType<typeof setTimeout>> = {}
+const deviceProbeTokens: Record<string, number> = {}
+let nextDeviceProbeToken = 0
 const checkingWol = ref(false)
-const expandedDeviceId = ref<string | null>(null)
+let wolRecheckPending = false
+const expandedDeviceIds = reactive(new Set<string>())
 const statsHistory = reactive<Record<string, StatsSnapshot[]>>({})
 const statsRaw = reactive<Record<string, StatsRaw | null>>({})
 const statsError = reactive<Record<string, string>>({})
 const statsLoading = reactive<Record<string, boolean>>({})
 let statsTimer: ReturnType<typeof setInterval> | null = null
 let wolPeriod: Utils.PeriodicTask | null = null
+const WOL_STATUS_POLL_MS = 30_000
+const WOL_STATUS_TIMEOUT_SECS = 3
+const WOL_ROUTER_TIMEOUT_SECS = 4
+const STATS_POLL_MS = 5_000
+const STATS_FETCH_TIMEOUT_SECS = 8
 
 function wolDeviceKey(w: Pick<WolDevice, 'mac' | 'ip' | 'agent_port'>) {
   return w.mac?.trim() || `${w.ip}:${w.agent_port || 32249}`
+}
+
+function ensureWolStatus(deviceId: string): WolDeviceStatus {
+  if (!wolStatus[deviceId]) {
+    wolStatus[deviceId] = createWolDeviceStatus()
+    wolErrors[deviceId] = ''
+  }
+  return wolStatus[deviceId]
+}
+
+function ensureWolRouter(routerIp: string): WolRouterStatus {
+  if (!wolRouters[routerIp])
+    wolRouters[routerIp] = createWolRouterStatus()
+  return wolRouters[routerIp]
+}
+
+function invalidateWolRouterChecks() {
+  for (const routerIp of Object.keys(wolRouters)) {
+    wolRouters[routerIp] = {
+      ...wolRouters[routerIp],
+      state: 'checking',
+      consecutiveFailures: 0,
+    }
+  }
+  manageStatsPoll()
+}
+
+function beginDeviceProbe(deviceId: string) {
+  const token = ++nextDeviceProbeToken
+  deviceProbeTokens[deviceId] = token
+  wolStatus[deviceId] = markWolChecking(ensureWolStatus(deviceId))
+  return token
+}
+
+function isLatestDeviceProbe(deviceId: string, token: number) {
+  return deviceProbeTokens[deviceId] === token
 }
 
 // --- Stats types ---
@@ -302,7 +390,7 @@ interface StatsSnapshot {
   nets: { name: string; recvBps: number; sentBps: number }[]
 }
 
-const STATS_MAX_POINTS = 24  // 2 min at 5s interval
+const STATS_MAX_POINTS = 60
 
 function numericStatValue(value: unknown): number {
   if (typeof value === 'number') return Number.isFinite(value) ? value : 0
@@ -313,65 +401,74 @@ function numericStatValue(value: unknown): number {
   return 0
 }
 
-function ensureStatsKeys(ip: string) {
-  if (!statsHistory[ip]) statsHistory[ip] = []
-  if (!(ip in statsRaw)) statsRaw[ip] = null
-  if (!(ip in statsLoading)) statsLoading[ip] = false
-  if (!(ip in statsError)) statsError[ip] = ''
+function ensureStatsKeys(deviceId: string) {
+  if (!statsHistory[deviceId]) statsHistory[deviceId] = []
+  if (!(deviceId in statsRaw)) statsRaw[deviceId] = null
+  if (!(deviceId in statsLoading)) statsLoading[deviceId] = false
+  if (!(deviceId in statsError)) statsError[deviceId] = ''
 }
 
 function toggleDeviceExpand(w: WolDevice) {
   const deviceId = wolDeviceKey(w)
-  if (expandedDeviceId.value === deviceId) {
-    expandedDeviceId.value = null
-  } else {
-    expandedDeviceId.value = deviceId
-    if (w.ip) {
-      ensureStatsKeys(w.ip)
-      if (statsHistory[w.ip].length === 0) fetchStats(w.ip, w.agent_port || 32249)
+  if (expandedDeviceIds.has(deviceId)) {
+    expandedDeviceIds.delete(deviceId)
+  }
+  else {
+    expandedDeviceIds.add(deviceId)
+    const status = ensureWolStatus(deviceId)
+    const router = wolRouters[w.router_ip]
+    if (w.ip && status.online && router?.state === 'reachable') {
+      ensureStatsKeys(deviceId)
+      if (statsHistory[deviceId].length === 0) fetchStats(deviceId, w.ip, w.agent_port || 32249)
     }
+    void refreshActiveCommandRuns(deviceId)
   }
   manageStatsPoll()
 }
 
-async function fetchStats(ip: string, port: number) {
-  ensureStatsKeys(ip)
-  if (statsLoading[ip]) return
+async function fetchStats(deviceId: string, ip: string, port: number) {
+  ensureStatsKeys(deviceId)
+  if (statsLoading[deviceId]) return
   const proxy = getSocks5Proxy()
-  statsLoading[ip] = true
+  statsLoading[deviceId] = true
   try {
-    const text = await httpGet(`http://${ip}:${port}/api/v1/stats`, proxy, 3)
+    const text = await httpGet(`http://${ip}:${port}/api/v1/stats`, proxy, STATS_FETCH_TIMEOUT_SECS)
     const data = JSON.parse(text)
-    statsInfo[ip] = data
-    const prev = statsRaw[ip]
+    statsInfo[deviceId] = data
+    const prev = statsRaw[deviceId]
     const now = Date.now()
 
-    // CPU / Memory / GPU (instant values)
     const cpuPct = data.cpu?.usage_percent ?? 0
     const memPct = data.memory?.usage_percent ?? 0
     const gpuPct = data.gpu?.usage_percent ?? null
     const gpuMemPct = data.gpu?.vram_total_gb ? (gpuPct ?? 0) : null
 
-    // Per-disk IO delta
     const curDisks: { name: string; read: number; write: number }[] = []
     if (data.disks) {
       for (const d of data.disks) {
-        curDisks.push({ name: d.name || '', read: numericStatValue(d.read_bytes), write: numericStatValue(d.write_bytes) })
+        curDisks.push({
+          name: d.name || '',
+          read: numericStatValue(d.read_bytes),
+          write: numericStatValue(d.write_bytes),
+        })
       }
     }
 
-    // Per-NIC delta
     const curNets: { name: string; recv: number; sent: number }[] = []
     if (data.network) {
       for (const n of data.network) {
-        curNets.push({ name: n.name || '', recv: numericStatValue(n.recv_bytes), sent: numericStatValue(n.sent_bytes) })
+        curNets.push({
+          name: n.name || '',
+          recv: numericStatValue(n.recv_bytes),
+          sent: numericStatValue(n.sent_bytes),
+        })
       }
     }
 
-    // Compute per-disk rates
     const diskSnaps: StatsSnapshot['disks'] = []
     for (const cd of curDisks) {
-      let readBps = 0, writeBps = 0
+      let readBps = 0
+      let writeBps = 0
       if (prev) {
         const pd = prev.disks.find(d => d.name === cd.name)
         if (pd) {
@@ -383,10 +480,10 @@ async function fetchStats(ip: string, port: number) {
       diskSnaps.push({ name: cd.name, readBps, writeBps })
     }
 
-    // Compute per-NIC rates
     const netSnaps: StatsSnapshot['nets'] = []
     for (const cn of curNets) {
-      let recvBps = 0, sentBps = 0
+      let recvBps = 0
+      let sentBps = 0
       if (prev) {
         const pn = prev.nets.find(n => n.name === cn.name)
         if (pn) {
@@ -398,88 +495,81 @@ async function fetchStats(ip: string, port: number) {
       netSnaps.push({ name: cn.name, recvBps, sentBps })
     }
 
-    statsRaw[ip] = {
-      cpu_pct: cpuPct, mem_pct: memPct, gpu_pct: gpuPct, gpu_mem_pct: gpuMemPct,
-      disks: curDisks, nets: curNets,
+    statsRaw[deviceId] = {
+      cpu_pct: cpuPct,
+      mem_pct: memPct,
+      gpu_pct: gpuPct,
+      gpu_mem_pct: gpuMemPct,
+      disks: curDisks,
+      nets: curNets,
       _ts: now,
     }
 
     const snap: StatsSnapshot = {
-      ts: now, cpu: cpuPct, mem: memPct, gpu: gpuPct, gpuMem: gpuMemPct,
-      disks: diskSnaps, nets: netSnaps,
+      ts: now,
+      cpu: cpuPct,
+      mem: memPct,
+      gpu: gpuPct,
+      gpuMem: gpuMemPct,
+      disks: diskSnaps,
+      nets: netSnaps,
     }
-    statsHistory[ip].push(snap)
-    if (statsHistory[ip].length === 1) {
-      statsHistory[ip].push({ ...snap, ts: snap.ts - 1000 })
-    }
-    while (statsHistory[ip].length > STATS_MAX_POINTS) statsHistory[ip].shift()
-    statsError[ip] = ''
-  } catch (e: any) {
-    statsError[ip] = cleanErr(e)
+    statsHistory[deviceId].push(snap)
+    while (statsHistory[deviceId].length > STATS_MAX_POINTS) statsHistory[deviceId].shift()
+    statsError[deviceId] = ''
   }
-  statsLoading[ip] = false
+  catch (e: any) {
+    statsError[deviceId] = cleanErr(e)
+  }
+  statsLoading[deviceId] = false
 }
 
-// Full stats response cache for template display (model names, etc.)
 const statsInfo = reactive<Record<string, any>>({})
 
+function expandedOnlineDevices(): SortedWolDevice[] {
+  if (activeTab.value !== 'wol') return []
+  return sortedWol.value.filter(w =>
+    expandedDeviceIds.has(w.deviceId)
+    && getWolEffectiveState(w) === 'online'
+    && !!w.ip,
+  )
+}
+
 function manageStatsPoll() {
-  if (statsTimer) { clearInterval(statsTimer); statsTimer = null }
-  if (activeTab.value === 'wol' && expandedDeviceId.value !== null) {
-    const dev = sortedWol.value.find(w => wolDeviceKey(w) === expandedDeviceId.value)
-    if (dev?.ip) {
-      statsTimer = setInterval(() => {
-        if (activeTab.value === 'wol' && expandedDeviceId.value !== null) {
-          const current = sortedWol.value.find(w => wolDeviceKey(w) === expandedDeviceId.value)
-          if (current?.ip) fetchStats(current.ip, current.agent_port || 32249)
-        } else {
-          if (statsTimer) { clearInterval(statsTimer); statsTimer = null }
-        }
-      }, 5000)
+  if (statsTimer) {
+    clearInterval(statsTimer)
+    statsTimer = null
+  }
+  const devices = expandedOnlineDevices()
+  if (!devices.length) return
+
+  for (const device of devices) {
+    ensureStatsKeys(device.deviceId)
+    if (statsHistory[device.deviceId].length === 0) {
+      void fetchStats(device.deviceId, device.ip!, device.agent_port || 32249)
     }
   }
+
+  statsTimer = setInterval(() => {
+    const currentDevices = expandedOnlineDevices()
+    if (!currentDevices.length) {
+      if (statsTimer) clearInterval(statsTimer)
+      statsTimer = null
+      return
+    }
+    for (const device of currentDevices) {
+      void fetchStats(device.deviceId, device.ip!, device.agent_port || 32249)
+    }
+  }, STATS_POLL_MS)
 }
 
-// Chart helpers
-function buildStatsPath(data: number[], maxVal: number, chartH: number, chartW: number): string {
-  if (data.length < 2) return ''
-  const stepX = chartW / (data.length - 1)
-  const scaleY = (v: number) => chartH - (v / maxVal) * (chartH - 4) - 2
-  let d = `M 0,${scaleY(data[0])}`
-  for (let i = 0; i < data.length - 1; i++) {
-    const x1 = i * stepX; const y1 = scaleY(data[i])
-    const x2 = (i + 1) * stepX; const y2 = scaleY(data[i + 1])
-    const cx1 = x1 + stepX * 0.4; const cx2 = x2 - stepX * 0.4
-    d += ` C ${cx1},${y1} ${cx2},${y2} ${x2},${y2}`
-  }
-  return d
+function resetDeviceStats(deviceId: string) {
+  ensureStatsKeys(deviceId)
+  statsHistory[deviceId].splice(0)
+  statsRaw[deviceId] = null
+  statsError[deviceId] = ''
 }
 
-function buildStatsAreaPath(data: number[], maxVal: number, chartH: number, chartW: number): string {
-  const line = buildStatsPath(data, maxVal, chartH, chartW)
-  if (!line) return ''
-  const baseY = chartH
-  return line + ` L ${chartW},${baseY} L 0,${baseY} Z`
-}
-
-function statsXLabel(dataLen: number, idx: number): string {
-  // idx=0 → oldest (left), idx=last → newest "now" (right)
-  const total = dataLen - 1
-  const sec = (total - idx) * 5
-  if (sec === 0) return 'now'
-  if (sec < 60) return '-' + sec + 's'
-  const m = sec / 60
-  const r = Math.round(m * 2) / 2  // round to nearest 0.5, same as traffic chart
-  const t = r.toFixed(1)
-  return '-' + (t.endsWith('0') ? t.slice(0, -2) : t) + 'm'
-}
-
-function formatSpeedYStats(v: number): string {
-  if (v < 1024) return v.toFixed(0) + ' B/s'
-  if (v < 1048576) return (v / 1024).toFixed(0) + ' KB/s'
-  if (v < 1073741824) return (v / 1048576).toFixed(0) + ' MB/s'
-  return (v / 1073741824).toFixed(1) + ' GB/s'
-}
 function formatSpeedBps(v: number): string {
   const bps = v * 8
   if (bps < 1000) return bps.toFixed(0) + ' bps'
@@ -489,41 +579,27 @@ function formatSpeedBps(v: number): string {
 }
 
 // Template helpers — read from cached statsInfo
-function cpuModel(ip: string): string {
-  return statsInfo[ip]?.cpu?.model || 'CPU'
+function cpuModel(deviceId: string): string {
+  return statsInfo[deviceId]?.cpu?.model || 'CPU'
 }
-function cpuTitle(ip: string): string {
-  const model = statsInfo[ip]?.cpu?.model
-  const cores = statsInfo[ip]?.cpu?.cores
-  if (!model) return 'CPU'
-  let s = model
-    .replace(/\s*CPU\s*/gi, ' ')
-    .replace(/\(R\)|\(TM\)/gi, '')
-    .replace(/Core\s+i(\d)/gi, 'I$1')
-    .replace(/@\s+([\d.]+)\s*GHz/gi, '@$1Ghz')
-    .replace(/\s+/g, ' ')
-    .trim()
-  if (cores) s += ` × ${cores}`
-  return s
+function cpuCores(deviceId: string): number {
+  return statsInfo[deviceId]?.cpu?.cores || 0
 }
-function cpuCores(ip: string): number {
-  return statsInfo[ip]?.cpu?.cores || 0
+function memUsed(deviceId: string): string {
+  return statsInfo[deviceId]?.memory?.used_gb?.toFixed(1) || '--'
 }
-function memUsed(ip: string): string {
-  return statsInfo[ip]?.memory?.used_gb?.toFixed(1) || '--'
-}
-function memTotal(ip: string): string {
-  const v = statsInfo[ip]?.memory?.total_gb
+function memTotal(deviceId: string): string {
+  const v = statsInfo[deviceId]?.memory?.total_gb
   return v ? Math.round(v).toString() : '--'
 }
-function hasGPU(ip: string): boolean {
-  return !!statsInfo[ip]?.gpu
+function hasGPU(deviceId: string): boolean {
+  return !!statsInfo[deviceId]?.gpu
 }
-function gpuModel(ip: string): string {
-  return statsInfo[ip]?.gpu?.model || tt('gpuUsage')
+function gpuModel(deviceId: string): string {
+  return statsInfo[deviceId]?.gpu?.model || tt('gpuUsage')
 }
-function diskList(ip: string): any[] {
-  const info = statsInfo[ip]
+function diskList(deviceId: string): any[] {
+  const info = statsInfo[deviceId]
   if (!info?.disks) return []
   return info.disks.map((d: any) => {
     const parts = ((d.partitions || []) as any[]).map((p: any) => ({
@@ -535,10 +611,10 @@ function diskList(ip: string): any[] {
     // Sort key: min partition name (ASCII) → stable ordering
     const sortKey = parts.length ? parts.reduce((min: string, p: any) => p.name < min ? p.name : min, parts[0].name) : d.name
     return { name: d.name, model: d.model || '', total: gbStr(d.total_gb), used: gbStr(d.used_gb), parts, sortKey }
-  }).sort((a, b) => a.sortKey.localeCompare(b.sortKey))
+  }).sort((a: any, b: any) => a.sortKey.localeCompare(b.sortKey))
 }
-function netList(ip: string): any[] {
-  const info = statsInfo[ip]
+function netList(deviceId: string): any[] {
+  const info = statsInfo[deviceId]
   if (!info?.network) return []
   return info.network.map((n: any) => ({
     name: n.name,
@@ -551,43 +627,14 @@ function gbStr(v: number | undefined): string {
 }
 
 // Per-disk / per-NIC chart data helpers
-function diskHistory(ip: string, diskName: string, field: 'readBps' | 'writeBps'): number[] {
-  return statsHistory[ip]?.map(s => {
-    const d = s.disks?.find(d => d.name === diskName)
-    return d ? d[field] : 0
-  }) || []
-}
-function netHistory(ip: string, netName: string, field: 'recvBps' | 'sentBps'): number[] {
-  return statsHistory[ip]?.map(s => {
-    const n = s.nets?.find(n => n.name === netName)
-    return n ? n[field] : 0
-  }) || []
-}
-
 // Dynamic Y-axis max — pure data maximum, recalculates as points fall out of window
-function cpuChartMax(ip: string): number {
-  const arr = statsHistory[ip]
-  if (!arr?.length) return 1
-  return Math.max(1, ...arr.map(s => s.cpu))
+function memGBHistory(deviceId: string): number[] {
+  const totalGB = statsInfo[deviceId]?.memory?.total_gb || 1
+  return statsHistory[deviceId]?.map(s => s.mem / 100 * totalGB) || []
 }
-function gpuChartMax(ip: string): number {
-  const arr = statsHistory[ip]
-  if (!arr?.length) return 1
-  return Math.max(1, ...arr.map(s => s.gpu ?? 0))
-}
-function memChartMax(ip: string): number {
-  const arr = statsHistory[ip]
-  if (!arr?.length) return 1
-  const totalGB = statsInfo[ip]?.memory?.total_gb || 1
-  return Math.max(0.1, ...arr.map(s => s.mem / 100 * totalGB))
-}
-function memGBHistory(ip: string): number[] {
-  const totalGB = statsInfo[ip]?.memory?.total_gb || 1
-  return statsHistory[ip]?.map(s => s.mem / 100 * totalGB) || []
-}
-function diskChartMax(ip: string, diskName: string): number {
+function diskChartMax(deviceId: string, diskName: string): number {
   let m = 0
-  for (const s of (statsHistory[ip] || [])) {
+  for (const s of (statsHistory[deviceId] || [])) {
     const d = s.disks?.find(d => d.name === diskName)
     if (d) {
       if (d.readBps > m) m = d.readBps
@@ -596,9 +643,9 @@ function diskChartMax(ip: string, diskName: string): number {
   }
   return Math.max(m, 1)
 }
-function netChartMax(ip: string, netName: string): number {
+function netChartMax(deviceId: string, netName: string): number {
   let m = 0
-  for (const s of (statsHistory[ip] || [])) {
+  for (const s of (statsHistory[deviceId] || [])) {
     const n = s.nets?.find(n => n.name === netName)
     if (n) {
       if (n.recvBps > m) m = n.recvBps
@@ -609,27 +656,33 @@ function netChartMax(ip: string, netName: string): number {
 }
 
 // Get current speed values for legend display
-function curDiskSpeed(ip: string, diskName: string): { r: number, w: number } {
-  const h = statsHistory[ip]
+function curDiskSpeed(deviceId: string, diskName: string): { r: number, w: number } {
+  const h = statsHistory[deviceId]
   if (!h?.length) return { r: 0, w: 0 }
   const last = h[h.length - 1]
   const d = last.disks?.find(d => d.name === diskName)
   return { r: d?.readBps || 0, w: d?.writeBps || 0 }
 }
-function curNetSpeed(ip: string, netName: string): { r: number, s: number } {
-  const h = statsHistory[ip]
+function curNetSpeed(deviceId: string, netName: string): { r: number, s: number } {
+  const h = statsHistory[deviceId]
   if (!h?.length) return { r: 0, s: 0 }
   const last = h[h.length - 1]
   const n = last.nets?.find(n => n.name === netName)
   return { r: n?.recvBps || 0, s: n?.sentBps || 0 }
 }
-function curCpuPct(ip: string): number {
-  const h = statsHistory[ip]
+function curCpuPct(deviceId: string): number {
+  const h = statsHistory[deviceId]
   if (!h?.length) return 0
   return h[h.length - 1].cpu
 }
-function dkTotalPct(ip: string, dk: { name: string, used: string, total: string }): number {
-  const info = statsInfo[ip]
+
+function curMemPct(deviceId: string): number {
+  const h = statsHistory[deviceId]
+  if (!h?.length) return 0
+  return h[h.length - 1].mem
+}
+function dkTotalPct(deviceId: string, dk: { name: string, used: string, total: string }): number {
+  const info = statsInfo[deviceId]
   if (!info?.disks) return 0
   const raw = info.disks.find((d: any) => d.name === dk.name)
   if (!raw || !raw.total_gb) return 0
@@ -640,20 +693,91 @@ function diskFillColor(pct: number): string {
   if (pct >= 80) return '#ff9800'
   return '#42a5f5'
 }
-function curGpuPct(ip: string): number {
-  const h = statsHistory[ip]
+function curGpuPct(deviceId: string): number {
+  const h = statsHistory[deviceId]
   if (!h?.length) return 0
   return h[h.length - 1].gpu ?? 0
 }
 
-function memLabel(ip: string): string {
-  const m = statsInfo[ip]?.memory
+function memLabel(deviceId: string): string {
+  const m = statsInfo[deviceId]?.memory
   if (!m) return tt('memory')
   let label = ''
   if (m.ddr_type) label += m.ddr_type + ' '
   label += Math.round(m.total_gb || 0) + 'GB'
   if (m.speed_mhz) label += ' ' + m.speed_mhz + 'MHz'
   return label
+}
+
+function historyStartLabel(deviceId: string): string {
+  const length = statsHistory[deviceId]?.length || 0
+  if (length === 0) return locale.value === 'cn' ? '暂无数据' : 'No data'
+  if (length === 1) return locale.value === 'cn' ? '现在' : 'Now'
+  const seconds = (length - 1) * (STATS_POLL_MS / 1000)
+  if (seconds < 60) return locale.value === 'cn' ? `${seconds} 秒前` : `${seconds}s ago`
+  const minutes = Math.round(seconds / 60)
+  return locale.value === 'cn' ? `${minutes} 分钟前` : `${minutes}m ago`
+}
+
+function formatChartPercent(value: number) {
+  return `${Math.round(value)}%`
+}
+
+function formatChartMemory(value: number) {
+  return `${value.toFixed(1)} GB`
+}
+
+function cpuChartSeries(deviceId: string) {
+  return [{
+    values: (statsHistory[deviceId] || []).map(item => item.cpu),
+    color: 'var(--pc-series-1)',
+  }]
+}
+
+function gpuChartSeries(deviceId: string) {
+  return [{
+    values: (statsHistory[deviceId] || []).map(item => item.gpu),
+    color: 'var(--pc-series-1)',
+  }]
+}
+
+function memGBChartSeries(deviceId: string) {
+  return [{
+    values: memGBHistory(deviceId),
+    color: 'var(--pc-series-1)',
+  }]
+}
+
+function diskChartSeries(deviceId: string, diskName: string) {
+  const history = statsHistory[deviceId] || []
+  return [
+    {
+      values: history.map(item => item.disks?.find(disk => disk.name === diskName)?.readBps ?? null),
+      color: 'var(--pc-series-1)',
+      label: locale.value === 'cn' ? '读取' : 'Read',
+    },
+    {
+      values: history.map(item => item.disks?.find(disk => disk.name === diskName)?.writeBps ?? null),
+      color: 'var(--pc-series-2)',
+      label: locale.value === 'cn' ? '写入' : 'Write',
+    },
+  ]
+}
+
+function netChartSeries(deviceId: string, netName: string) {
+  const history = statsHistory[deviceId] || []
+  return [
+    {
+      values: history.map(item => item.nets?.find(net => net.name === netName)?.recvBps ?? null),
+      color: 'var(--pc-series-1)',
+      label: locale.value === 'cn' ? '下行' : 'Down',
+    },
+    {
+      values: history.map(item => item.nets?.find(net => net.name === netName)?.sentBps ?? null),
+      color: 'var(--pc-series-2)',
+      label: locale.value === 'cn' ? '上行' : 'Up',
+    },
+  ]
 }
 
 function getSocks5Proxy(): string | undefined {
@@ -673,7 +797,37 @@ function parseWolToml(t: string): WolDevice[] {
   }
   if (cur?.mac) devs.push(cur as any); return devs
 }
-function loadWolConfig() { wolDevices.value = parseWolToml(wolToml.value); for (const w of wolDevices.value) { if (!(w.ip in wolStatus)) { wolStatus[w.ip] = { online: false, phase: 'idle' }; wolErrors[w.ip] = '' } } }
+function loadWolConfig() {
+  wolDevices.value = parseWolToml(wolToml.value)
+  const validIds = new Set(wolDevices.value.map(wolDeviceKey))
+  const validRouterIps = new Set(
+    wolDevices.value.map(w => w.router_ip?.trim()).filter(Boolean),
+  )
+  for (const w of wolDevices.value) {
+    const deviceId = wolDeviceKey(w)
+    ensureWolStatus(deviceId)
+    if (w.router_ip) ensureWolRouter(w.router_ip)
+    loadComputerDeviceState(deviceId)
+  }
+  for (const id of [...expandedDeviceIds]) {
+    if (!validIds.has(id)) expandedDeviceIds.delete(id)
+  }
+  for (const id of Object.keys(wolStatus)) {
+    if (validIds.has(id)) continue
+    delete wolStatus[id]
+    delete wolErrors[id]
+    delete deviceProbeTokens[id]
+    delete statsHistory[id]
+    delete statsRaw[id]
+    delete statsInfo[id]
+    delete statsError[id]
+    delete statsLoading[id]
+  }
+  for (const routerIp of Object.keys(wolRouters)) {
+    if (!validRouterIps.has(routerIp)) delete wolRouters[routerIp]
+  }
+  manageStatsPoll()
+}
 function cleanErr(e: any): string {
   let s = String(e)
   s = s.replace(/^HTTP request failed: /, '')
@@ -681,45 +835,111 @@ function cleanErr(e: any): string {
   return s || 'Connection failed'
 }
 
-async function checkRouterStatus(): Promise<boolean> {
-  const r = wolDevices.value[0]?.router_ip
-  if (!r) { wolDebug.value = 'No router_ip configured'; return false }
-  if (netRunning.value) {
-    const proxy = getSocks5Proxy()
-    if (!proxy) { wolDebug.value = 'No SOCKS5 proxy (check socks5_proxy in TOML)'; return false }
-    wolDebug.value = 'ET check via ' + proxy + ' → ' + r
-    try { await httpGet(`http://${r}/cgi-bin/wolplus-api?action=status&ip=127.0.0.1`, proxy); wolDebug.value += ' OK'; return true }
-    catch (e: any) { wolDebug.value += ' FAIL: ' + cleanErr(e); return false }
+async function checkRouterStatus(routerIp: string): Promise<boolean> {
+  const proxy = netRunning.value ? getSocks5Proxy() : undefined
+  if (netRunning.value && !proxy) {
+    wolDebug.value = `${routerIp}: EasyTier SOCKS5 proxy is not configured`
+    return false
   }
-  wolDebug.value = 'LAN check tcpPing → ' + r
-  try { await tcpPing(r, 80); wolDebug.value += ' OK'; return true } catch (e: any) { wolDebug.value += ' FAIL: ' + cleanErr(e); return false }
+
+  const via = proxy ? `ET ${proxy}` : 'LAN'
+  try {
+    const text = await httpGet(
+      `http://${routerIp}/cgi-bin/wolplus-api?action=status&ip=127.0.0.1`,
+      proxy,
+      WOL_ROUTER_TIMEOUT_SECS,
+    )
+    const payload = JSON.parse(text)
+    if (!payload || typeof payload !== 'object' || (!('online' in payload) && !('error' in payload)))
+      throw new Error('WOLPlus API returned an unexpected response')
+    wolDebug.value = `${via} ${routerIp}: OK`
+    return true
+  }
+  catch (e: any) {
+    wolDebug.value = `${via} ${routerIp}: ${cleanErr(e)}`
+    return false
+  }
 }
 
-function stopPhasePoll(w: WolDevice, phase: string) {
-  const key = `${phase}_${w.ip}`
-  if (phaseTimers[key]) { clearTimeout(phaseTimers[key]); delete phaseTimers[key] }
-  wolStatus[w.ip] = { ...wolStatus[w.ip], phase: 'idle' }
+async function probeWolDevice(w: WolDevice, proxy?: string): Promise<boolean | null> {
+  if (!w.ip)
+    return null
+
+  const deviceId = wolDeviceKey(w)
+  const token = beginDeviceProbe(deviceId)
+  try {
+    const text = await httpGet(
+      `http://${w.ip}:${w.agent_port || 32249}/api/v1/status`,
+      proxy,
+      WOL_STATUS_TIMEOUT_SECS,
+    )
+    const data = JSON.parse(text)
+    if (!data || typeof data !== 'object' || !('online' in data))
+      throw new Error('Agent returned an invalid status response')
+    if (!isLatestDeviceProbe(deviceId, token))
+      return null
+
+    const previous = ensureWolStatus(deviceId)
+    const next = applyWolSuccess(previous, data as WolStatusResponse, Date.now())
+    wolStatus[deviceId] = next
+    wolErrors[deviceId] = ''
+    if (previous.online && !next.online)
+      resetDeviceStats(deviceId)
+    return next.online
+  }
+  catch (e: any) {
+    if (!isLatestDeviceProbe(deviceId, token))
+      return null
+    const previous = ensureWolStatus(deviceId)
+    const next = applyWolFailure(previous, Date.now())
+    wolStatus[deviceId] = next
+    wolErrors[deviceId] = cleanErr(e)
+    if (previous.online && !next.online)
+      resetDeviceStats(deviceId)
+    return next.online
+  }
 }
 
 async function checkAllWolStatus() {
-  if (checkingWol.value || !wolDevices.value.length) return; checkingWol.value = true
-  if (wolFirstCheck.value) routerOnline.value = undefined
-  const reachable = await checkRouterStatus()
-  routerOnline.value = reachable
-  wolFirstCheck.value = false
-  if (!reachable) {
-    // Abort all in-progress phase polls
-    for (const key of Object.keys(phaseTimers)) { clearTimeout(phaseTimers[key]); delete phaseTimers[key] }
-    for (const w of wolDevices.value) {
-      if (w.ip) wolStatus[w.ip] = { ...wolStatus[w.ip], online: false, phase: 'idle' }
-    }
-    checkingWol.value = false; return
+  if (!wolDevices.value.length)
+    return
+  if (checkingWol.value) {
+    wolRecheckPending = true
+    return
   }
-  const proxy = getSocks5Proxy()
-  await Promise.all(wolDevices.value.filter(w => w.ip).map(async w => {
-    try { const text = await httpGet(`http://${w.ip}:${w.agent_port || 32249}/api/v1/status`, proxy, 2); const data = JSON.parse(text); wolStatus[w.ip] = { ...wolStatus[w.ip], online: data.online === true }; wolErrors[w.ip] = '' }
-    catch (e: any) { wolStatus[w.ip] = { ...wolStatus[w.ip], online: false }; wolErrors[w.ip] = cleanErr(e) }
-  })); checkingWol.value = false
+
+  checkingWol.value = true
+  try {
+    do {
+      wolRecheckPending = false
+      const routerIps = [...new Set(
+        wolDevices.value.map(w => w.router_ip?.trim()).filter(Boolean),
+      )]
+      const routerResults = await Promise.all(routerIps.map(async (routerIp) => {
+        const reachable = await checkRouterStatus(routerIp)
+        const previous = ensureWolRouter(routerIp)
+        wolRouters[routerIp] = reachable
+          ? applyWolRouterSuccess(previous, Date.now())
+          : applyWolRouterFailure(previous, Date.now())
+        return [routerIp, reachable] as const
+      }))
+      const reachableRouters = new Set(
+        routerResults.filter(([, reachable]) => reachable).map(([routerIp]) => routerIp),
+      )
+      const proxy = getSocks5Proxy()
+
+      await Promise.all(wolDevices.value.map(async (w) => {
+        if (!w.router_ip || !reachableRouters.has(w.router_ip))
+          return
+        await probeWolDevice(w, proxy)
+      }))
+      manageStatsPoll()
+    } while (wolRecheckPending)
+  }
+  finally {
+    checkingWol.value = false
+    wolRecheckPending = false
+  }
 }
 function openWolEditorFn() { wolToml.value = localStorage.getItem('wolDevicesToml') || ''; showWolEditor.value = true }
 function saveWolConfig() { localStorage.setItem('wolDevicesToml', wolToml.value); loadWolConfig(); showWolEditor.value = false; checkAllWolStatus(); showSnack(tt('configSaved')) }
@@ -739,52 +959,726 @@ async function importFromClipboard(refName: 'wol' | 'net' | 'luci') {
   else luciToml.value = text
 }
 
-function getWolPhaseLabel(w: WolDevice & { status: { online: boolean; phase: string } }): string {
-  if (!w.ip) return tt('noIpConfigured')
-  if (routerOnline.value === undefined) return tt('detecting')
-  if (!routerOnline.value) return tt('routerOffline')
-  if (w.status.phase === 'waking') return tt('connecting')
-  if (w.status.phase === 'shutting') return tt('connecting')
-  return w.status.online ? tt('online') : tt('offline')
+function getWolEffectiveState(w: SortedWolDevice): WolEffectiveState {
+  return effectiveWolState(
+    w.router_ip ? wolRouters[w.router_ip] : undefined,
+    w.status,
+    !!w.router_ip,
+    !!w.ip,
+  )
+}
+
+function getWolPhaseLabel(w: SortedWolDevice): string {
+  if (!w.router_ip)
+    return tt('noRouterConfigured')
+  switch (getWolEffectiveState(w)) {
+    case 'checking':
+      return tt('detecting')
+    case 'routerOffline':
+      return tt('routerOffline')
+    case 'waking':
+      return tt('waking')
+    case 'shutting':
+      return tt('shutting')
+    case 'online':
+      return tt('online')
+    default:
+      return w.ip ? tt('offline') : tt('noIpConfigured')
+  }
+}
+
+function isWolBusyState(w: SortedWolDevice) {
+  const state = getWolEffectiveState(w)
+  return state === 'checking' || state === 'waking' || state === 'shutting'
+}
+
+function canWakeDevice(w: SortedWolDevice) {
+  return getWolEffectiveState(w) === 'offline'
+    && !!w.mac
+}
+
+function canShutdownDevice(w: SortedWolDevice) {
+  return getWolEffectiveState(w) === 'online'
+    && !!w.ip
+}
+
+function formatSystemUptime(seconds?: number) {
+  if (!seconds || seconds <= 0) return '--'
+  const days = Math.floor(seconds / 86400)
+  const hours = Math.floor((seconds % 86400) / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  if (locale.value === 'cn') {
+    if (days) return `${days} 天 ${hours} 小时`
+    if (hours) return `${hours} 小时 ${minutes} 分`
+    return `${minutes} 分钟`
+  }
+  if (days) return `${days}d ${hours}h`
+  if (hours) return `${hours}h ${minutes}m`
+  return `${minutes}m`
 }
 
 async function doWake(w: WolDevice) {
-  wolStatus[w.ip] = { ...wolStatus[w.ip], phase: 'waking' }
+  const deviceId = wolDeviceKey(w)
+  resetDeviceStats(deviceId)
+  wolStatus[deviceId] = { ...ensureWolStatus(deviceId), phase: 'waking' }
   const proxy = getSocks5Proxy()
   try {
     const url = `http://${w.router_ip}/cgi-bin/wolplus-api?action=wake&mac=${encodeURIComponent(w.mac)}&iface=${encodeURIComponent(w.interface || 'br-lan')}`
-    const text = await httpGet(url, proxy); const data = JSON.parse(text); wolErrors[w.ip] = ''
-    showSnack(data.success ? tt('signalSent') : data.message)
-  } catch (e: any) { wolErrors[w.ip] = cleanErr(e); showSnack(e.message); wolStatus[w.ip] = { ...wolStatus[w.ip], phase: 'idle' }; return }
-  startPhasePoll(w, 'waking', 0)
+    const text = await httpGet(url, proxy)
+    const data = JSON.parse(text)
+    wolErrors[deviceId] = ''
+    if (data.success !== true) {
+      wolStatus[deviceId] = { ...ensureWolStatus(deviceId), phase: 'idle' }
+      showSnack(
+        data.message || (locale.value === 'cn' ? '唤醒请求失败' : 'Wake request failed'),
+        'error',
+      )
+      return
+    }
+    showSnack(tt('signalSent'))
+  }
+  catch (e: any) {
+    wolErrors[deviceId] = cleanErr(e)
+    showSnack(e.message)
+    wolStatus[deviceId] = { ...ensureWolStatus(deviceId), phase: 'idle' }
+    return
+  }
+  if (w.ip)
+    startPhasePoll(w, 'waking', 0)
+  else
+    wolStatus[deviceId] = { ...ensureWolStatus(deviceId), phase: 'idle' }
 }
+
 async function doShutdown(w: WolDevice) {
-  wolStatus[w.ip] = { ...wolStatus[w.ip], phase: 'shutting' }
+  const deviceId = wolDeviceKey(w)
+  wolStatus[deviceId] = { ...ensureWolStatus(deviceId), phase: 'shutting' }
   const proxy = getSocks5Proxy()
-  try { await httpPost(`http://${w.ip}:${w.agent_port || 32249}/api/v1/shutdown`, proxy); wolErrors[w.ip] = '' } catch (e: any) { wolErrors[w.ip] = cleanErr(e); wolStatus[w.ip] = { ...wolStatus[w.ip], phase: 'idle' }; return }
+  try {
+    const text = await httpPost(`http://${w.ip}:${w.agent_port || 32249}/api/v1/shutdown`, proxy)
+    const data = JSON.parse(text)
+    if (data?.success !== true)
+      throw new Error(data?.message || 'Agent rejected the shutdown request')
+    wolErrors[deviceId] = ''
+  }
+  catch (e: any) {
+    wolErrors[deviceId] = cleanErr(e)
+    wolStatus[deviceId] = { ...ensureWolStatus(deviceId), phase: 'idle' }
+    showSnack(cleanErr(e), 'error')
+    return
+  }
   startPhasePoll(w, 'shutting', 0)
 }
+
 function startPhasePoll(w: WolDevice, phase: 'waking' | 'shutting', count: number) {
-  if (count >= 12) { wolStatus[w.ip] = { ...wolStatus[w.ip], phase: 'idle' }; return }
-  const key = `${phase}_${w.ip}`
+  const deviceId = wolDeviceKey(w)
+  if (count >= 12) {
+    wolStatus[deviceId] = { ...ensureWolStatus(deviceId), phase: 'idle' }
+    return
+  }
+  const key = `${phase}_${deviceId}`
   phaseTimers[key] = setTimeout(async () => {
-    if (!routerOnline.value) { wolStatus[w.ip] = { ...wolStatus[w.ip], phase: 'idle' }; return }
-    const proxy = getSocks5Proxy()
-    try { const text = await httpGet(`http://${w.ip}:${w.agent_port || 32249}/api/v1/status`, proxy, 2); const data = JSON.parse(text); const online = data.online === true; wolErrors[w.ip] = ''; if ((phase === 'waking' && online) || (phase === 'shutting' && !online)) { wolStatus[w.ip] = { online, phase: 'idle' }; showSnack(w.name + ' ' + (phase === 'waking' ? tt('online') : tt('offline'))); return } } catch (e: any) {
-      // Shutdown: connection refused → agent already down → success
-      if (phase === 'shutting') { wolStatus[w.ip] = { online: false, phase: 'idle' }; wolErrors[w.ip] = ''; showSnack(w.name + ' ' + tt('offline')); return }
-      wolErrors[w.ip] = cleanErr(e)
+    if (wolRouters[w.router_ip]?.state !== 'reachable') {
+      wolStatus[deviceId] = { ...ensureWolStatus(deviceId), phase: 'idle' }
+      return
     }
-    if (routerOnline.value) startPhasePoll(w, phase, count + 1)
-    else { wolStatus[w.ip] = { ...wolStatus[w.ip], phase: 'idle' } }
-  }, 3000)
+    const token = beginDeviceProbe(deviceId)
+    const proxy = getSocks5Proxy()
+    try {
+      const text = await httpGet(
+        `http://${w.ip}:${w.agent_port || 32249}/api/v1/status`,
+        proxy,
+        WOL_STATUS_TIMEOUT_SECS,
+      )
+      const data = JSON.parse(text)
+      const online = data.online === true
+      if (!isLatestDeviceProbe(deviceId, token) || wolStatus[deviceId].phase !== phase)
+        return
+      const previous = ensureWolStatus(deviceId)
+      wolStatus[deviceId] = applyWolSuccess(previous, data as WolStatusResponse, Date.now())
+      wolErrors[deviceId] = ''
+      if ((phase === 'waking' && online) || (phase === 'shutting' && !online)) {
+        wolStatus[deviceId] = { ...wolStatus[deviceId], online, phase: 'idle' }
+        if (!online)
+          resetDeviceStats(deviceId)
+        manageStatsPoll()
+        showSnack(`${w.name} ${phase === 'waking' ? tt('online') : tt('offline')}`)
+        return
+      }
+    }
+    catch (e: any) {
+      if (!isLatestDeviceProbe(deviceId, token) || wolStatus[deviceId].phase !== phase)
+        return
+      if (phase === 'shutting') {
+        wolStatus[deviceId] = forceWolOffline(ensureWolStatus(deviceId), Date.now())
+        wolErrors[deviceId] = ''
+        resetDeviceStats(deviceId)
+        showSnack(`${w.name} ${tt('offline')}`)
+        return
+      }
+      wolErrors[deviceId] = cleanErr(e)
+    }
+    if (wolRouters[w.router_ip]?.state === 'reachable')
+      startPhasePoll(w, phase, count + 1)
+    else wolStatus[deviceId] = { ...ensureWolStatus(deviceId), phase: 'idle' }
+  }, 5000)
 }
-function getWolPathType(): 'tunnel' | 'lan' { return netRunning.value ? 'tunnel' : 'lan' }
-const sortedWol = computed(() => {
-  const list = wolDevices.value.map(w => ({ ...w, status: wolStatus[w.ip] || { online: false, phase: 'idle' as const }, error: wolErrors[w.ip] || '' }))
-  list.sort((a, b) => { if (a.status.online !== b.status.online) return a.status.online ? -1 : 1; return ipToNum(a.ip) - ipToNum(b.ip) })
+
+function getWolPathType(): 'tunnel' | 'lan' {
+  return netRunning.value ? 'tunnel' : 'lan'
+}
+
+const wolRouterIps = computed(() => [...new Set(
+  wolDevices.value.map(w => w.router_ip?.trim()).filter(Boolean),
+)])
+
+const wolOnlineRouterCount = computed(() =>
+  wolRouterIps.value.filter(routerIp => wolRouters[routerIp]?.state === 'reachable').length,
+)
+
+const sortedWol = computed<SortedWolDevice[]>(() => {
+  const list = wolDevices.value.map((w) => {
+    const deviceId = wolDeviceKey(w)
+    return {
+      ...w,
+      deviceId,
+      status: ensureWolStatus(deviceId),
+      error: wolErrors[deviceId] || '',
+    }
+  })
+  list.sort((a, b) => {
+    const byIp = ipToNum(a.ip) - ipToNum(b.ip)
+    return byIp || a.name.localeCompare(b.name)
+  })
   return list
 })
+
+const wolOnlineCount = computed(() =>
+  sortedWol.value.filter(w => getWolEffectiveState(w) === 'online').length,
+)
+
+// ==================== Computer commands ====================
+type ComputerSegment = 'performance' | 'commands'
+interface CommandRunView {
+  deviceId: string
+  run: CommandRun
+  chunks: CommandOutputChunk[]
+  cursor: number
+  filter: 'all' | 'stdout' | 'stderr'
+  autoScroll: boolean
+  loading: boolean
+  error: string
+}
+
+const computerSegments = reactive<Record<string, ComputerSegment>>({})
+const deviceCommands = reactive<Record<string, AppCommand[]>>({})
+const commandTokens = reactive<Record<string, string>>({})
+const commandPolicies = reactive<Record<string, CommandPolicy | null>>({})
+const activeCommandRuns = reactive<Record<string, CommandRun[]>>({})
+const commandRunViews = reactive<Record<string, CommandRunView>>({})
+const selectedRunKeys = reactive<Record<string, string>>({})
+const commandRunTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+const commandMenu = reactive({
+  visible: false,
+  deviceId: '',
+  x: 0,
+  y: 0,
+})
+const commandMenuRef = ref<HTMLElement | null>(null)
+let commandMenuReturnFocus: HTMLElement | null = null
+let longPressTimer: ReturnType<typeof setTimeout> | null = null
+let longPressStart: { x: number, y: number } | null = null
+let suppressNextDeviceClick = false
+
+const commandManager = reactive({
+  visible: false,
+  deviceId: '',
+  name: '',
+  program: '',
+  argsText: '',
+  timeoutSecs: 60,
+  cancelable: true,
+  risk: 'normal' as CommandRisk,
+  token: '',
+  error: '',
+  saving: false,
+})
+
+const commandConfirm = reactive({
+  visible: false,
+  deviceId: '',
+  commandId: '',
+  confirmText: '',
+  error: '',
+})
+
+function loadComputerDeviceState(deviceId: string) {
+  if (!deviceCommands[deviceId]) deviceCommands[deviceId] = loadDeviceCommands(deviceId)
+  if (!(deviceId in commandTokens)) commandTokens[deviceId] = loadDeviceCommandToken(deviceId)
+  if (!computerSegments[deviceId]) computerSegments[deviceId] = 'performance'
+}
+
+function commandAgentRequest(deviceId: string) {
+  const device = sortedWol.value.find(item => item.deviceId === deviceId)
+  if (!device?.ip) throw new Error(tt('noIpConfigured'))
+  if (getWolEffectiveState(device) !== 'online')
+    throw new Error(locale.value === 'cn' ? '设备当前不在线' : 'Device is not online')
+  const token = commandTokens[deviceId] || ''
+  if (!token) throw new Error(tt('commandTokenRequired'))
+  return {
+    ip: device.ip,
+    port: device.agent_port || 32249,
+    proxy: getSocks5Proxy(),
+    token,
+  }
+}
+
+function commandRunKey(deviceId: string, runId: string) {
+  return `${deviceId}:${runId}`
+}
+
+function ensureCommandRunView(deviceId: string, run: CommandRun): CommandRunView {
+  const key = commandRunKey(deviceId, run.run_id)
+  if (!commandRunViews[key]) {
+    commandRunViews[key] = {
+      deviceId,
+      run,
+      chunks: [],
+      cursor: 0,
+      filter: 'all',
+      autoScroll: true,
+      loading: false,
+      error: '',
+    }
+  }
+  else {
+    commandRunViews[key].run = run
+  }
+  return commandRunViews[key]
+}
+
+function scheduleCommandRunPolling(deviceId: string, runId: string) {
+  const key = commandRunKey(deviceId, runId)
+  if (commandRunTimers.has(key)) return
+  const tick = async () => {
+    commandRunTimers.delete(key)
+    const view = commandRunViews[key]
+    if (!view) return
+    try {
+      view.loading = true
+      const request = commandAgentRequest(deviceId)
+      const run = await getCommandRun(request, runId)
+      const output = await getCommandOutput(request, runId, view.cursor)
+      const existing = new Set(view.chunks.map(chunk => chunk.seq))
+      for (const chunk of output.chunks) {
+        if (!existing.has(chunk.seq)) view.chunks.push(chunk)
+      }
+      view.chunks.sort((a, b) => a.seq - b.seq)
+      view.cursor = output.next_seq
+      view.run = run
+      view.error = ''
+      if (run.status !== 'queued' && run.status !== 'running') {
+        activeCommandRuns[deviceId] = (activeCommandRuns[deviceId] || [])
+          .filter(active => active.run_id !== run.run_id)
+      }
+      if (run.status === 'queued' || run.status === 'running') {
+        const timer = setTimeout(tick, 1500)
+        commandRunTimers.set(key, timer)
+      }
+    }
+    catch (e: any) {
+      view.error = cleanErr(e)
+      const device = sortedWol.value.find(item => item.deviceId === deviceId)
+      if (device && getWolEffectiveState(device) === 'online') {
+        const timer = setTimeout(tick, 4000)
+        commandRunTimers.set(key, timer)
+      }
+    }
+    finally {
+      view.loading = false
+    }
+  }
+  const timer = setTimeout(tick, 250)
+  commandRunTimers.set(key, timer)
+}
+
+async function refreshActiveCommandRuns(deviceId: string) {
+  loadComputerDeviceState(deviceId)
+  if (!commandTokens[deviceId]) {
+    activeCommandRuns[deviceId] = []
+    return
+  }
+  try {
+    const runs = await listActiveCommandRuns(commandAgentRequest(deviceId))
+    activeCommandRuns[deviceId] = runs
+    for (const run of runs) {
+      ensureCommandRunView(deviceId, run)
+      scheduleCommandRunPolling(deviceId, run.run_id)
+      if (!selectedRunKeys[deviceId]) selectedRunKeys[deviceId] = run.run_id
+    }
+  }
+  catch (e: any) {
+    activeCommandRuns[deviceId] = []
+    const selected = selectedRunKeys[deviceId]
+    if (selected) {
+      const view = commandRunViews[commandRunKey(deviceId, selected)]
+      if (view) view.error = cleanErr(e)
+    }
+  }
+}
+
+function selectedCommandRunView(deviceId: string): CommandRunView | null {
+  const runId = selectedRunKeys[deviceId]
+  if (!runId) return null
+  return commandRunViews[commandRunKey(deviceId, runId)] || null
+}
+
+function runOutputText(view: CommandRunView | null): string {
+  if (!view) return ''
+  return view.chunks
+    .filter(chunk => view.filter === 'all' || chunk.stream === view.filter)
+    .map(chunk => chunk.text)
+    .join('')
+}
+
+function runStatusLabel(run: CommandRun): string {
+  const labels: Record<string, string> = {
+    queued: locale.value === 'cn' ? '排队中' : 'Queued',
+    running: locale.value === 'cn' ? '运行中' : 'Running',
+    succeeded: locale.value === 'cn' ? '成功' : 'Succeeded',
+    failed: locale.value === 'cn' ? '失败' : 'Failed',
+    timed_out: locale.value === 'cn' ? '已超时' : 'Timed out',
+    canceled: locale.value === 'cn' ? '已取消' : 'Canceled',
+    interrupted: locale.value === 'cn' ? '已中断' : 'Interrupted',
+    unknown: locale.value === 'cn' ? '未知' : 'Unknown',
+  }
+  return labels[run.status] || run.status
+}
+
+function isRunActive(run: CommandRun) {
+  return run.status === 'queued' || run.status === 'running'
+}
+
+function formatRunDuration(milliseconds: number) {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000))
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return minutes ? `${minutes}m ${seconds}s` : `${seconds}s`
+}
+
+const commandMenuDevice = computed(() =>
+  sortedWol.value.find(item => item.deviceId === commandMenu.deviceId) || null,
+)
+
+function canRunComputerCommands(w: SortedWolDevice) {
+  return getWolEffectiveState(w) === 'online'
+    && !!commandTokens[w.deviceId]
+    && !!w.ip
+}
+
+function menuActiveRun(command: AppCommand) {
+  const device = commandMenuDevice.value
+  return device ? findActiveRunForCommand(device.deviceId, command) : null
+}
+
+function setComputerSegment(deviceId: string, segment: ComputerSegment) {
+  computerSegments[deviceId] = segment
+  if (segment === 'commands') void refreshActiveCommandRuns(deviceId)
+}
+
+function findActiveRunForCommand(deviceId: string, command: AppCommand) {
+  return activeCommandRuns[deviceId]?.find(run => run.name === command.name) || null
+}
+
+async function submitComputerCommand(w: SortedWolDevice, command: AppCommand) {
+  commandConfirm.visible = false
+  commandConfirm.error = ''
+  try {
+    const run = await createCommandRun(commandAgentRequest(w.deviceId), command)
+    ensureCommandRunView(w.deviceId, run)
+    selectedRunKeys[w.deviceId] = run.run_id
+    computerSegments[w.deviceId] = 'commands'
+    scheduleCommandRunPolling(w.deviceId, run.run_id)
+    await refreshActiveCommandRuns(w.deviceId)
+    showSnack(locale.value === 'cn' ? `已发送「${command.name}」到 ${w.name}` : `Sent “${command.name}” to ${w.name}`)
+  }
+  catch (e: any) {
+    commandConfirm.error = cleanErr(e)
+    showSnack(cleanErr(e), 'error', 4500)
+  }
+}
+
+function openCommandConfirm(w: SortedWolDevice, command: AppCommand) {
+  closeCommandMenu(false)
+  const active = findActiveRunForCommand(w.deviceId, command)
+  if (active) {
+    selectedRunKeys[w.deviceId] = active.run_id
+    ensureCommandRunView(w.deviceId, active)
+    scheduleCommandRunPolling(w.deviceId, active.run_id)
+    computerSegments[w.deviceId] = 'commands'
+    expandedDeviceIds.add(w.deviceId)
+    manageStatsPoll()
+    return
+  }
+  commandConfirm.deviceId = w.deviceId
+  commandConfirm.commandId = command.id
+  commandConfirm.confirmText = ''
+  commandConfirm.error = ''
+  commandConfirm.visible = true
+}
+
+function confirmedCommand(): { device: SortedWolDevice, command: AppCommand } | null {
+  const device = sortedWol.value.find(item => item.deviceId === commandConfirm.deviceId)
+  const command = deviceCommands[commandConfirm.deviceId]?.find(item => item.id === commandConfirm.commandId)
+  if (!device || !command) return null
+  if (command.risk === 'high' && commandConfirm.confirmText.trim() !== device.name) return null
+  return { device, command }
+}
+
+async function executeConfirmedCommand() {
+  const target = confirmedCommand()
+  if (!target) {
+    commandConfirm.error = locale.value === 'cn' ? '请输入完整设备名称确认高风险命令' : 'Enter the full device name to confirm'
+    return
+  }
+  await submitComputerCommand(target.device, target.command)
+}
+
+async function cancelSelectedCommand(view: CommandRunView | null) {
+  if (!view || !isRunActive(view.run) || !view.run.cancelable) return
+  try {
+    const run = await cancelCommandRun(commandAgentRequest(view.deviceId), view.run.run_id)
+    view.run = run
+    showSnack(locale.value === 'cn' ? '已请求取消命令' : 'Cancellation requested')
+  }
+  catch (e: any) {
+    showSnack(cleanErr(e), 'error', 4000)
+  }
+}
+
+function onRunOutputUpdated(event: Event, view: CommandRunView | null) {
+  if (!view?.autoScroll) return
+  const element = event.currentTarget as HTMLElement | null
+  if (element) element.scrollTop = element.scrollHeight
+}
+
+async function copySelectedCommandOutput(view: CommandRunView | null) {
+  if (!view) return
+  await writeText(runOutputText(view))
+  showSnack(tt('copied'))
+}
+
+function openCommandMenu(w: SortedWolDevice, event: MouseEvent | { clientX: number, clientY: number, currentTarget?: EventTarget | null }) {
+  closeCommandMenu(false)
+  loadComputerDeviceState(w.deviceId)
+  commandMenu.deviceId = w.deviceId
+  commandMenu.visible = true
+  commandMenuReturnFocus = (event.currentTarget as HTMLElement | null) || null
+  const target = event as MouseEvent
+  commandMenu.x = target.clientX
+  commandMenu.y = target.clientY
+  void nextTick(() => {
+    const menu = commandMenuRef.value
+    if (!menu) return
+    const rect = menu.getBoundingClientRect()
+    const margin = 8
+    commandMenu.x = Math.min(
+      Math.max(margin, commandMenu.x),
+      Math.max(margin, window.innerWidth - rect.width - margin),
+    )
+    commandMenu.y = Math.min(
+      Math.max(margin, commandMenu.y),
+      Math.max(margin, window.innerHeight - rect.height - margin),
+    )
+    const first = menu.querySelector<HTMLElement>('.pc-menu-item:not(:disabled)')
+    first?.focus({ preventScroll: true })
+  })
+  void refreshActiveCommandRuns(w.deviceId)
+}
+
+function openCommandMenuFromAnchor(w: SortedWolDevice, anchor: HTMLElement) {
+  const rect = anchor.getBoundingClientRect()
+  openCommandMenu(w, {
+    clientX: rect.right,
+    clientY: rect.bottom + 4,
+    currentTarget: anchor,
+  })
+}
+
+function onCommandMenuKeydown(event: KeyboardEvent) {
+  const menu = commandMenuRef.value
+  if (!menu) return
+  const items = Array.from(menu.querySelectorAll<HTMLButtonElement>('.pc-menu-item:not(:disabled)'))
+  const currentIndex = items.indexOf(document.activeElement as HTMLButtonElement)
+  const focusItem = (index: number) => {
+    if (!items.length) return
+    const normalized = ((index % items.length) + items.length) % items.length
+    items[normalized]?.focus({ preventScroll: true })
+  }
+
+  switch (event.key) {
+    case 'ArrowDown':
+      event.preventDefault()
+      focusItem(currentIndex + 1)
+      break
+    case 'ArrowUp':
+      event.preventDefault()
+      focusItem(currentIndex < 0 ? items.length - 1 : currentIndex - 1)
+      break
+    case 'Home':
+      event.preventDefault()
+      focusItem(0)
+      break
+    case 'End':
+      event.preventDefault()
+      focusItem(items.length - 1)
+      break
+    case 'Escape':
+      event.preventDefault()
+      closeCommandMenu()
+      break
+    case 'Tab':
+      closeCommandMenu(false)
+      break
+  }
+}
+
+function closeCommandMenu(restoreFocus = true) {
+  if (!commandMenu.visible) return
+  commandMenu.visible = false
+  commandMenu.deviceId = ''
+  if (restoreFocus && commandMenuReturnFocus?.isConnected) {
+    commandMenuReturnFocus.focus({ preventScroll: true })
+  }
+  commandMenuReturnFocus = null
+}
+
+function startDeviceLongPress(event: PointerEvent, w: SortedWolDevice) {
+  if (event.pointerType !== 'touch' || event.button !== 0) return
+  if ((event.target as Element | null)?.closest('button')) return
+  cancelDeviceLongPress()
+  longPressStart = { x: event.clientX, y: event.clientY }
+  longPressTimer = setTimeout(() => {
+    suppressNextDeviceClick = true
+    openCommandMenu(w, event)
+    longPressTimer = null
+    longPressStart = null
+  }, 500)
+}
+
+function moveDeviceLongPress(event: PointerEvent) {
+  if (!longPressTimer || !longPressStart) return
+  if (Math.hypot(event.clientX - longPressStart.x, event.clientY - longPressStart.y) > 10) {
+    cancelDeviceLongPress()
+  }
+}
+
+function cancelDeviceLongPress() {
+  if (longPressTimer) clearTimeout(longPressTimer)
+  longPressTimer = null
+  longPressStart = null
+}
+
+function onDeviceHeadClick(w: SortedWolDevice) {
+  if (suppressNextDeviceClick) {
+    suppressNextDeviceClick = false
+    return
+  }
+  toggleDeviceExpand(w)
+}
+
+function onDocumentCommandPointerDown(event: PointerEvent) {
+  if (!commandMenu.visible) return
+  const target = event.target as Node | null
+  if (target && commandMenuRef.value?.contains(target)) return
+  closeCommandMenu(false)
+}
+
+function openCommandManager(w: SortedWolDevice) {
+  closeCommandMenu(false)
+  loadComputerDeviceState(w.deviceId)
+  commandManager.deviceId = w.deviceId
+  commandManager.name = ''
+  commandManager.program = ''
+  commandManager.argsText = ''
+  commandManager.timeoutSecs = commandPolicies[w.deviceId]?.default_timeout_secs || 60
+  commandManager.cancelable = true
+  commandManager.risk = 'normal'
+  commandManager.token = commandTokens[w.deviceId] || ''
+  commandManager.error = ''
+  commandManager.saving = false
+  commandManager.visible = true
+  void refreshCommandPolicy(w.deviceId)
+}
+
+async function refreshCommandPolicy(deviceId: string) {
+  try {
+    commandPolicies[deviceId] = await getCommandPolicy({
+      ip: sortedWol.value.find(item => item.deviceId === deviceId)?.ip || '',
+      port: sortedWol.value.find(item => item.deviceId === deviceId)?.agent_port || 32249,
+      proxy: getSocks5Proxy(),
+      token: commandTokens[deviceId] || '',
+    })
+  }
+  catch (e: any) {
+    commandPolicies[deviceId] = null
+    commandManager.error = cleanErr(e)
+  }
+}
+
+function addComputerCommand() {
+  const deviceId = commandManager.deviceId
+  const name = commandManager.name.trim()
+  const program = commandManager.program.trim()
+  const args = commandManager.argsText
+    .split(/\r?\n/)
+    .map(item => item.trim())
+    .filter(item => item.length > 0)
+  const timeoutSecs = Number.parseInt(String(commandManager.timeoutSecs), 10)
+  if (!name || !program || !Number.isFinite(timeoutSecs) || timeoutSecs < 1) {
+    commandManager.error = locale.value === 'cn' ? '请填写名称、可执行文件和有效超时时间' : 'Enter a name, program, and valid timeout'
+    return
+  }
+  loadComputerDeviceState(deviceId)
+  deviceCommands[deviceId] = [
+    ...(deviceCommands[deviceId] || []),
+    {
+      id: `cmd-${createCommandIdSuffix()}`,
+      name,
+      program,
+      args,
+      timeoutSecs,
+      cancelable: commandManager.cancelable,
+      risk: commandManager.risk,
+    },
+  ]
+  saveDeviceCommands(deviceId, deviceCommands[deviceId])
+  saveDeviceCommandToken(deviceId, commandManager.token.trim())
+  commandTokens[deviceId] = commandManager.token.trim()
+  commandManager.name = ''
+  commandManager.program = ''
+  commandManager.argsText = ''
+  commandManager.error = ''
+  void refreshCommandPolicy(deviceId)
+}
+
+function createCommandIdSuffix() {
+  return Math.random().toString(36).slice(2, 10) + Date.now().toString(36)
+}
+
+function deleteComputerCommand(command: AppCommand) {
+  const deviceId = commandManager.deviceId
+  deviceCommands[deviceId] = (deviceCommands[deviceId] || []).filter(item => item.id !== command.id)
+  saveDeviceCommands(deviceId, deviceCommands[deviceId])
+}
+
+function finishCommandManager() {
+  const deviceId = commandManager.deviceId
+  saveDeviceCommandToken(deviceId, commandManager.token.trim())
+  commandTokens[deviceId] = commandManager.token.trim()
+  commandManager.visible = false
+  showSnack(tt('saved'))
+}
 
 // ==================== Network Tab ====================
 interface StoredNet { config: NetworkTypes.NetworkConfig; source: string; rawToml: string }
@@ -813,11 +1707,39 @@ const deleteTargetIdx = ref(-1)
 function loadNetworks() { const raw = localStorage.getItem('networkList'); const list: StoredNet[] = JSON.parse(raw || '[]').filter((e: any) => e.config?.instance_id); networks.value = list; const lastId = loadLastNetworkInstanceId(); let idx = list.findIndex(e => e.config.instance_id === lastId); if (idx < 0 && list.length > 0) idx = 0; netIndex.value = idx }
 const currentNet = computed(() => netIndex.value >= 0 ? networks.value[netIndex.value] : null)
 const netInstId = computed(() => currentNet.value?.config?.instance_id || '')
-const netDiscovering = computed(() => netRunning.value && !netPeers.length && !netServers.length && netConnectTime.value > 0 && Date.now() - netConnectTime.value < 12000)
+const netDiscovering = computed(() => netRunning.value && !netPeers.value.length && !netServers.value.length && netConnectTime.value > 0 && Date.now() - netConnectTime.value < 12000)
 const connectBounce = ref(false)
 
-async function fetchNetInfo() { if (!netInstId.value) return; try { const resp = await collectNetworkInfo(netInstId.value); const infoMap = resp.info?.map || {}; const info = infoMap[netInstId.value] || Object.values(infoMap)[0]; if (info) { netRunning.value = info.running; const my = info.my_node_info; netSelfIp.value = formatIp(my?.virtual_ipv4); netSelfNat.value = my?.stun_info || null; const ifv4s = my?.ips?.interface_ipv4s || []; const ifv6s = my?.ips?.interface_ipv6s || []; netIfaceIpv4.value = ifv4s.map((a: any) => formatIp(a)).filter(ip => ip && !ip.startsWith('127.') && !ip.startsWith('169.254.')).sort()
-netIfaceIpv6.value = ifv6s.map((a: any) => formatIpv6(a)).filter(ip => ip && ip !== '::1' && !ip.startsWith('fe80:') && !ip.startsWith('fd') && !ip.startsWith('fc')).sort(); const all = (info.peer_route_pairs || []).filter((p: any) => p.route?.cost > 0); netPeers.value = all.filter((p: any) => !isServer(p)); netServers.value = all.filter((p: any) => isServer(p)) } } catch { /* */ } updateTrafficSpeed(); scheduleProtocolFit() }
+async function fetchNetInfo() {
+  if (!netInstId.value) return
+  const previousRunning = netRunning.value
+  const previousProxy = getSocks5Proxy()
+  try {
+    const resp = await collectNetworkInfo(netInstId.value)
+    const infoMap = resp.info?.map || {}
+    const info = infoMap[netInstId.value] || Object.values(infoMap)[0]
+    if (info) {
+      netRunning.value = info.running
+      const my = info.my_node_info
+      netSelfIp.value = formatIp(my?.virtual_ipv4)
+      netSelfNat.value = my?.stun_info || null
+      const ifv4s = my?.ips?.interface_ipv4s || []
+      const ifv6s = my?.ips?.interface_ipv6s || []
+      netIfaceIpv4.value = ifv4s.map((a: any) => formatIp(a)).filter(ip => ip && !ip.startsWith('127.') && !ip.startsWith('169.254.')).sort()
+      netIfaceIpv6.value = ifv6s.map((a: any) => formatIpv6(a)).filter(ip => ip && ip !== '::1' && !ip.startsWith('fe80:') && !ip.startsWith('fd') && !ip.startsWith('fc')).sort()
+      const all = (info.peer_route_pairs || []).filter((p: any) => p.route?.cost > 0)
+      netPeers.value = all.filter((p: any) => !isServer(p))
+      netServers.value = all.filter((p: any) => isServer(p))
+    }
+  }
+  catch { /* */ }
+  updateTrafficSpeed()
+  scheduleProtocolFit()
+  if (previousRunning !== netRunning.value || previousProxy !== getSocks5Proxy()) {
+    invalidateWolRouterChecks()
+    void checkAllWolStatus()
+  }
+}
 async function refreshNet() { netLoading.value = true; await fetchNetInfo(); netLoading.value = false }
 
 function doConnectWithBounce() {
@@ -839,7 +1761,19 @@ async function doConnect() {
   } catch (e: any) { showSnack(String(e)) }
   finally { netConnecting.value = false }
 }
-async function doDisconnect() { try { await updateNetworkConfigState(netInstId.value, true); netRunning.value = false; netConnectTime.value = 0; showSnack(tt('disconnectedToast')) } catch (e: any) { showSnack(String(e)) } }
+async function doDisconnect() {
+  try {
+    await updateNetworkConfigState(netInstId.value, true)
+    netRunning.value = false
+    netConnectTime.value = 0
+    invalidateWolRouterChecks()
+    void checkAllWolStatus()
+    showSnack(tt('disconnectedToast'))
+  }
+  catch (e: any) {
+    showSnack(String(e))
+  }
+}
 
 async function openNetEditor() {
   if (currentNet.value?.rawToml) { editingNetToml.value = currentNet.value.rawToml }
@@ -920,15 +1854,6 @@ function qualityText(lat: string, loss: string): string {
   return loss + ' · ' + lat
 }
 
-function qualityCls(lat: string, loss: string): string {
-  const l = parseFloat(loss) || 0
-  const d = parseFloat(lat) || 0
-  if (l > 10 || d > 300) return 'md-q-bad'
-  if (l > 5 || d > 100) return 'md-q-warn'
-  if (l > 3 || d > 50) return 'md-q-info'
-  return 'md-q-good'
-}
-
 function natTypeKey(value: unknown): string {
   if (typeof value === 'number') return String(value)
   if (typeof value !== 'string') return ''
@@ -968,12 +1893,30 @@ function buildDetail(p: any): any {
     d.loss = n > 0 ? Math.round(loss / n * 100) + '%' : ''
     if (up > 0) d.up = '↑' + formatBytes(up)
     if (down > 0) d.down = '↓' + formatBytes(down)
-    const tunnelTypes = [...new Set(pr.conns.map((c: any) => c.tunnel?.tunnel_type || '?'))]
+    const tunnelTypes = [...new Set(pr.conns.map((c: any) => c.tunnel?.tunnel_type || '?'))] as string[]
     d.tun = tunnelSummary(tunnelTypes)
     d.tunCompact = tunnelSummary(tunnelTypes, true)
     d.tunFull = tunnelTypes.map((t: string) => t.toUpperCase()).join(', ')
   }
   return d
+}
+
+function netPeerTitle(p: any, isServer: boolean): string {
+  const hostname = displayHostname(p.route?.hostname)
+  if (isServer) return hostname || tt('server')
+  return hostname || formatIp(p.route?.ipv4_addr) || (locale.value === 'cn' ? '网络设备' : 'Network device')
+}
+
+function netPeerInlineIp(p: any): string {
+  // 名称已回退为 IP 时不再重复展示行内 IP
+  if (!displayHostname(p.route?.hostname)) return ''
+  return formatIp(p.route?.ipv4_addr)
+}
+
+function netPeerVersion(p: any): string {
+  const version = String(buildDetail(p).ver || '').trim()
+  if (!version) return '--'
+  return /^v/i.test(version) ? version : `v${version}`
 }
 
 function tunnelDisplay(p: any): string {
@@ -1011,11 +1954,11 @@ function measureChipWidth(element: HTMLElement, text: string): number {
 }
 
 function updateProtocolFit() {
-  const groups = document.querySelectorAll<HTMLElement>('.md-card-tags[data-peer-key]')
+  const groups = Array.from(document.querySelectorAll<HTMLElement>('.md-card-tags[data-peer-key]'))
   for (const group of groups) {
     const key = group.dataset.peerKey
-    const proto = group.querySelector<HTMLElement>('.md-chip-proto')
-    const row = group.closest<HTMLElement>('.md-row-bot')
+    const proto = group.querySelector('.md-chip-proto') as HTMLElement | null
+    const row = group.closest('.md-row-bot, .net-peer-row-bottom') as HTMLElement | null
     if (!key || !proto || !row) continue
 
     if (protocolFitObserver && !observedProtocolRows.has(row)) {
@@ -1060,8 +2003,27 @@ const netTrafficSpeed = reactive({ up: '', down: '', upBytes: 0, downBytes: 0, u
 const trafficHistory = reactive<{ up: number; down: number }[]>([])
 const TRAFFIC_MAX_POINTS = 40 // 2 min at 3s interval
 let lastTraffic = { up: 0, down: 0, ts: 0 }
-const TRAFFIC_UP_COLOR = '#43a047'
-const TRAFFIC_DOWN_COLOR = '#1e88e5'
+const TRAFFIC_UP_COLOR = 'var(--n3-good)'
+const TRAFFIC_DOWN_COLOR = 'var(--n3-primary)'
+
+function trafficChartMax(): number {
+  return Math.max(1, ...trafficHistory.map(point => Math.max(point.up, point.down)))
+}
+
+function trafficChartSeries() {
+  return [
+    {
+      values: trafficHistory.map(point => point.up),
+      color: TRAFFIC_UP_COLOR,
+      label: locale.value === 'cn' ? '上行' : 'Up',
+    },
+    {
+      values: trafficHistory.map(point => point.down),
+      color: TRAFFIC_DOWN_COLOR,
+      label: locale.value === 'cn' ? '下行' : 'Down',
+    },
+  ]
+}
 
 function updateTrafficSpeed() {
   let up = 0, down = 0
@@ -1093,12 +2055,6 @@ function updateTrafficSpeed() {
   lastTraffic = { up, down, ts: now }
 }
 
-function formatSpeedY(v: number): string {
-  if (v < 1024) return v + 'B/s'
-  if (v < 1048576) return (v / 1024).toFixed(0) + 'K'
-  if (v < 1073741824) return (v / 1048576).toFixed(0) + 'M'
-  return (v / 1073741824).toFixed(1) + 'G'
-}
 function formatXLabel(total: number, idx: number): string {
   const sec = (total - 1 - idx) * 3
   if (sec === 0) return 'now'
@@ -1513,7 +2469,7 @@ async function executeImport() {
   showSnack(tt('importSuccess'))
 }
 
-function netName(): string { const n = currentNet.value; return n ? (n.config.instance_name || n.config.network_name || tt('unnamed')) : tt('noNetwork') }
+function netName(): string { const n = currentNet.value; return n ? ((n.config as any).instance_name || n.config.network_name || tt('unnamed')) : tt('noNetwork') }
 
 function onDocClick(e: MouseEvent) { const t = e.target as HTMLElement; if (!t.closest('.md-switch-menu') && !t.closest('.md-switch-btn')) showSwitchMenu.value = false }
 
@@ -1623,6 +2579,10 @@ function onNativeTransferEvent(event: Event) {
   if (detail?.status && detail.filename) handleNativeTransfer(detail)
 }
 
+function closeCommandMenuOnViewportChange() {
+  closeCommandMenu(false)
+}
+
 onMounted(async () => {
   applyTheme()
   window.addEventListener('resize', scheduleProtocolFit)
@@ -1637,7 +2597,7 @@ onMounted(async () => {
   window.addEventListener('easytier-native-transfer', onNativeTransferEvent)
   await initRpcConnection(true)
 
-  loadWolConfig(); checkAllWolStatus(); wolPeriod = new Utils.PeriodicTask(checkAllWolStatus, 30000); wolPeriod.start()
+  loadWolConfig(); checkAllWolStatus(); wolPeriod = new Utils.PeriodicTask(checkAllWolStatus, WOL_STATUS_POLL_MS); wolPeriod.start()
   loadNetworks(); if (netInstId.value) refreshNet(); netPeriod = new Utils.PeriodicTask(fetchNetInfo, 3000); netPeriod.start()
   loadLuciConfig()
   if (activeTab.value === 'luci' && luciRouters.value.length > 0) {
@@ -1648,19 +2608,43 @@ onMounted(async () => {
   }
   document.addEventListener('click', onDocClick)
   document.addEventListener('click', onLuciDocClick)
+  document.addEventListener('pointerdown', onDocumentCommandPointerDown, true)
+  window.addEventListener('scroll', closeCommandMenuOnViewportChange, true)
+  window.addEventListener('resize', closeCommandMenuOnViewportChange)
 })
 const cleanupFns: Array<() => void> = []
 
-onUnmounted(() => { window.removeEventListener('easytier-native-transfer', onNativeTransferEvent); cleanupFns.forEach(fn => fn()); wolPeriod?.stop(); netPeriod?.stop(); if (statsTimer) clearInterval(statsTimer); stopLuciProxyFn(); for (const k of Object.keys(phaseTimers)) clearTimeout(phaseTimers[k]); if (snackTimer) clearTimeout(snackTimer); if (protocolFitFrame) cancelAnimationFrame(protocolFitFrame); protocolFitObserver?.disconnect(); window.removeEventListener('resize', scheduleProtocolFit); document.removeEventListener('click', onDocClick); document.removeEventListener('click', onLuciDocClick) })
+onUnmounted(() => {
+  window.removeEventListener('easytier-native-transfer', onNativeTransferEvent)
+  cleanupFns.forEach(fn => fn())
+  wolPeriod?.stop()
+  netPeriod?.stop()
+  if (statsTimer) clearInterval(statsTimer)
+  stopLuciProxyFn()
+  for (const k of Object.keys(phaseTimers)) clearTimeout(phaseTimers[k])
+  for (const timer of commandRunTimers.values()) clearTimeout(timer)
+  commandRunTimers.clear()
+  cancelDeviceLongPress()
+  closeCommandMenu(false)
+  if (snackTimer) clearTimeout(snackTimer)
+  if (protocolFitFrame) cancelAnimationFrame(protocolFitFrame)
+  protocolFitObserver?.disconnect()
+  window.removeEventListener('resize', scheduleProtocolFit)
+  window.removeEventListener('resize', closeCommandMenuOnViewportChange)
+  window.removeEventListener('scroll', closeCommandMenuOnViewportChange, true)
+  document.removeEventListener('click', onDocClick)
+  document.removeEventListener('click', onLuciDocClick)
+  document.removeEventListener('pointerdown', onDocumentCommandPointerDown, true)
+})
 </script>
 
 <template>
   <div class="md-app">
 
     <!-- ==================== WOL Tab ==================== -->
-    <div v-show="activeTab === 'wol'" class="md-page">
+    <div v-show="activeTab === 'wol'" class="md-page pc-page" :class="{ 'page-active': activeTab === 'wol' }">
       <header class="md-hdr">
-        <span class="md-hdr-title">{{ tt('wolDevices') }}</span>
+        <span class="md-hdr-title">{{ tt('pcManagement') }}</span>
         <div class="flex-1" />
         <button class="md-settings-btn md-settings-btn-white" @click="openWolEditorFn">
           <svg width="18" height="18" viewBox="0 0 1024 1024" fill="currentColor"><path d="M714.965 128l-85.333 85.333H213.333v597.334h597.334V394.368L896 309.035v544.298A42.667 42.667 0 0 1 853.333 896H170.667A42.667 42.667 0 0 1 128 853.333V170.667A42.667 42.667 0 0 1 170.667 128h544.298z m159.062-38.4l60.373 60.416-392.192 392.192-60.245 0.128-0.086-60.459L874.027 89.6z"/></svg>
@@ -1684,263 +2668,500 @@ onUnmounted(() => { window.removeEventListener('easytier-native-transfer', onNat
           </div>
           <div class="md-hero-metrics">
             <div class="md-hero-metric">
-              <div class="md-hero-mv">{{ sortedWol.filter(w => w.status.online && routerOnline === true).length }} / {{ sortedWol.length }}</div>
+              <div class="md-hero-mv">{{ wolOnlineCount }} / {{ sortedWol.length }}</div>
               <div class="md-hero-ml">{{ tt('pcs') }}</div>
             </div>
             <div class="md-hero-metric">
-              <div class="md-hero-mv">{{ routerOnline === true ? `1 / 1` : routerOnline === false ? `0 / 1` : '...' }}</div>
+              <div class="md-hero-mv">{{ wolRouterIps.length ? `${wolOnlineRouterCount} / ${wolRouterIps.length}` : '--' }}</div>
               <div class="md-hero-ml">{{ locale === 'cn' ? '路由器' : 'Router' }}</div>
             </div>
             <div class="md-hero-metric">
-              <div class="md-hero-mv">{{ getWolPathType() === 'tunnel' ? (locale === 'cn' ? '异地组网' : 'Remote') : (locale === 'cn' ? '局域网' : 'LAN') }}</div>
+              <div class="md-hero-mv">{{ getWolPathType() === 'tunnel' ? (locale === 'cn' ? '组网' : 'Network') : (locale === 'cn' ? '局域网' : 'LAN') }}</div>
               <div class="md-hero-ml">{{ tt('channel') }}</div>
             </div>
           </div>
         </div>
 
-        <div v-if="!sortedWol.length" class="md-scroll-view" style="display:flex;align-items:center;justify-content:center">
-          <div class="flex flex-col items-center gap-3 opacity-50">
+        <div v-if="!sortedWol.length" class="pc-empty-state">
+          <div class="flex flex-col items-center gap-3">
             <svg width="48" height="48" viewBox="0 0 1024 1024" fill="none" stroke="var(--md-muted)" stroke-width="20"><path d="M864 752H624v64h136c12.8 0 24 11.2 24 24s-11.2 24-24 24h-480c-12.8 0-24-11.2-24-24s11.2-24 24-24H400v-64H160c-17.6 0-32-14.4-32-32V192c0-17.6 14.4-32 32-32h704c17.6 0 32 14.4 32 32v528c0 17.6-14.4 32-32 32z m-16-544H176v464h672V208z m-48 416H224V256h576v368z"/></svg>
             <div class="text-base md-text-muted">{{ tt('noWolDevices') }}</div>
             <div class="text-sm text-center px-4 md-text-muted">{{ tt('tapToAdd') }}</div>
           </div>
         </div>
-        <div v-for="(w, i) in sortedWol" :key="wolDeviceKey(w)" class="md-device-group" :class="{ 'md-device-group-open': expandedDeviceId === wolDeviceKey(w) && w.status.online && routerOnline === true }">
-        <div class="md-card md-device-parent" :class="{ 'md-card-dim': routerOnline === false }">
-          <div class="md-row" @click="w.status.online ? toggleDeviceExpand(w) : null">
-            <span class="md-dot" :class="{
-              'md-dot-on': w.status.online && w.status.phase==='idle' && routerOnline === true,
-              'md-dot-off': (!w.status.online || routerOnline === false) && w.status.phase==='idle',
-              'md-dot-ph md-dot-waking': w.status.phase==='waking' && routerOnline !== false,
-              'md-dot-ph md-dot-shutting': w.status.phase==='shutting' && routerOnline !== false,
-              'md-dot-off animate-pulse': routerOnline === undefined && w.status.phase==='idle'
-            }" />
-            <div class="flex-1 min-w-0">
-              <div class="md-name">{{ w.name }}</div>
-              <div class="md-sub">
-                <template v-if="w.ip">{{ w.ip }} &middot; {{ getWolPhaseLabel(w) }}</template>
-                <template v-else>{{ tt('noIpConfigured') }}</template>
-              </div>
-            </div>
-            <svg v-if="w.status.online" class="md-chevron" :class="{ 'md-chevron-open': expandedDeviceId === wolDeviceKey(w) }" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
-            <button v-if="w.ip && w.status.phase==='idle' && routerOnline === true && !w.status.online" class="md-wake-btn" @click.stop="doWake(w)">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
-              {{ tt('wake') }}
-            </button>
-            <button v-if="w.ip && w.status.phase==='idle' && routerOnline === true && w.status.online" class="md-shutdown-btn" @click.stop="doShutdown(w)">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M13 3h-2v10h2V3zm4.83 2.17l-1.42 1.42C17.99 7.86 19 9.81 19 12c0 3.87-3.13 7-7 7s-7-3.13-7-7c0-2.19 1.01-4.14 2.59-5.42L6.17 5.17C4.23 6.82 3 9.26 3 12c0 4.97 4.03 9 9 9s9-4.03 9-9c0-2.74-1.23-5.18-3.17-6.83z"/></svg>
-              {{ tt('shutdown') }}
-            </button>
-            <button v-if="!w.ip && routerOnline === true" class="md-wake-btn" @click.stop="doWake(w)">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
-              {{ tt('wake') }}
-            </button>
-          </div>
+        <div v-if="sortedWol.length" class="pc-list-head">
+          <h2>{{ locale === 'cn' ? `设备 (${sortedWol.length})` : `Devices (${sortedWol.length})` }}</h2>
+          <span class="pc-list-hint">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
+            {{ locale === 'cn' ? '右键设备卡片或点击' : 'Right-click a card or tap' }}
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
+            {{ locale === 'cn' ? '执行自定义命令' : 'to run custom commands' }}
+          </span>
         </div>
-          <!-- Expanded Stats — child workspace connected to the parent card -->
-          <template v-if="expandedDeviceId === wolDeviceKey(w) && w.status.online && routerOnline === true">
-            <div class="md-device-children">
-            <!-- Loading -->
-            <div v-if="statsHistory[w.ip].length === 0" class="md-card md-stats-card md-stats-loading-card md-animated" style="--i:0" @animationend="$event.target.classList.remove('md-animated')">
-              <div class="md-stats-loading">
-                <i class="pi pi-spin pi-spinner" style="font-size:1.2rem;color:var(--md-muted)" />
-                <span>{{ tt('loadingStats') }}</span>
+
+        <div
+          v-for="(w, i) in sortedWol"
+          :key="w.deviceId"
+          class="pc-card"
+          :style="{ '--pc-i': i }"
+          :class="{
+            'pc-card-open': expandedDeviceIds.has(w.deviceId),
+            'pc-card-dim': getWolEffectiveState(w) === 'routerOffline',
+          }"
+        >
+          <article>
+            <div
+              class="pc-head sl"
+              @click="onDeviceHeadClick(w)"
+              @contextmenu.prevent="openCommandMenu(w, $event)"
+              @pointerdown="startDeviceLongPress($event, w)"
+              @pointermove="moveDeviceLongPress($event)"
+              @pointerup="cancelDeviceLongPress"
+              @pointercancel="cancelDeviceLongPress"
+            >
+              <div
+                class="pc-avatar"
+                :class="{ 'pc-avatar-online': getWolEffectiveState(w) === 'online' }"
+                aria-hidden="true"
+              >
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M21 2H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h7v2H8v2h8v-2h-2v-2h7c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H3V4h18v12z"/></svg>
+              </div>
+
+              <div class="pc-title">
+                <h3 class="pc-name" :title="w.name">{{ w.name }}</h3>
+                <div class="pc-meta">
+                  <span class="pc-ip mono">{{ w.ip || tt('noIpConfigured') }}</span>
+                  <span v-if="w.status.os" class="pc-os">{{ w.status.os }}</span>
+                </div>
+              </div>
+
+              <span
+                class="pc-status"
+                :class="`pc-status-${getWolEffectiveState(w)}`"
+                role="status"
+              >
+                <span class="pc-status-dot" />
+                <span>{{ getWolPhaseLabel(w) }}</span>
+              </span>
+
+              <button
+                class="pc-icon-btn pc-power"
+                :class="{
+                  'pc-power-on': canWakeDevice(w),
+                  'pc-power-off': canShutdownDevice(w),
+                }"
+                type="button"
+                :disabled="!canWakeDevice(w) && !canShutdownDevice(w)"
+                :aria-pressed="canShutdownDevice(w)"
+                :aria-label="canShutdownDevice(w) ? `${tt('shutdown')}：${w.name}` : `${tt('wake')}：${w.name}`"
+                :title="canShutdownDevice(w) ? tt('shutdown') : tt('wake')"
+                @click.stop="canShutdownDevice(w) ? doShutdown(w) : doWake(w)"
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M13 3h-2v10h2V3zm4.83 2.17-1.42 1.42C17.99 7.86 19 9.81 19 12c0 3.87-3.13 7-7 7s-7-3.13-7-7c0-2.19 1.01-4.14 2.58-5.42L6.17 5.17C4.23 6.82 3 9.26 3 12c0 4.97 4.03 9 9 9s9-4.03 9-9c0-2.74-1.23-5.18-3.17-6.83z"/></svg>
+              </button>
+
+              <button
+                class="pc-icon-btn pc-more"
+                type="button"
+                aria-haspopup="menu"
+                :aria-label="locale === 'cn' ? `${w.name} 的自定义命令` : `Custom commands for ${w.name}`"
+                :title="locale === 'cn' ? '自定义命令' : 'Custom commands'"
+                @click.stop="openCommandMenuFromAnchor(w, $event.currentTarget as HTMLElement)"
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
+              </button>
+
+              <button
+                class="pc-icon-btn pc-chevron"
+                type="button"
+                :aria-expanded="expandedDeviceIds.has(w.deviceId)"
+                :aria-label="expandedDeviceIds.has(w.deviceId) ? `${locale === 'cn' ? '收起' : 'Collapse'} ${w.name}` : `${locale === 'cn' ? '展开' : 'Expand'} ${w.name}`"
+                @click.stop="toggleDeviceExpand(w)"
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+              </button>
+            </div>
+
+            <div
+              class="pc-body"
+              :class="{ 'pc-body-open': expandedDeviceIds.has(w.deviceId) }"
+              :inert="!expandedDeviceIds.has(w.deviceId)"
+            >
+              <div class="pc-body-inner">
+                <div class="pc-panel">
+                  <div class="pc-info">
+                    <span>{{ locale === 'cn' ? '系统' : 'System' }} <b>{{ w.status.os || '--' }}</b></span>
+                    <span>{{ locale === 'cn' ? '已运行' : 'Uptime' }} <b>{{ formatSystemUptime(w.status.systemUptimeSecs) }}</b></span>
+                    <span v-if="showDebug">{{ tt('macLabel') }} <b class="mono">{{ w.mac }}</b></span>
+                  </div>
+
+                  <template v-if="(computerSegments[w.deviceId] || 'performance') === 'performance'">
+                    <div v-if="getWolEffectiveState(w) !== 'online'" class="pc-offline-state">
+                      <svg v-if="isWolBusyState(w)" class="pc-busy-spinner" width="36" height="36" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 4V2A10 10 0 0 0 2 12h2a8 8 0 0 1 8-8z"/></svg>
+                      <svg v-else width="40" height="40" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M21 2H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h7v2H8v2h8v-2h-2v-2h7c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H3V4h18v12zM8.7 13.3 11 11 8.7 8.7l1.4-1.4L12.4 9.6l2.3-2.3 1.4 1.4-2.3 2.3 2.3 2.3-1.4 1.4-2.3-2.3-2.3 2.3z"/></svg>
+                      <p>{{ getWolPhaseLabel(w) }}</p>
+                      <button v-if="canWakeDevice(w)" class="pc-tonal-btn pc-power-on" type="button" @click="doWake(w)">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
+                        {{ tt('wake') }}
+                      </button>
+                    </div>
+
+                    <div v-else-if="statsLoading[w.deviceId] && !statsHistory[w.deviceId]?.length" class="pc-loading-state">
+                      <i class="pi pi-spin pi-spinner" />
+                      <span>{{ tt('loadingStats') }}</span>
+                    </div>
+
+                    <div v-else-if="statsError[w.deviceId] && !statsHistory[w.deviceId]?.length" class="pc-error-state">
+                      <p>{{ statsError[w.deviceId] }}</p>
+                      <button class="pc-tonal-btn" type="button" @click="fetchStats(w.deviceId, w.ip, w.agent_port || 32249)">
+                        {{ tt('retry') }}
+                      </button>
+                    </div>
+
+                    <div v-else class="pc-metrics">
+                      <div v-if="statsError[w.deviceId]" class="pc-inline-error">
+                        <span>{{ statsError[w.deviceId] }}</span>
+                        <button class="pc-tonal-btn" type="button" @click="fetchStats(w.deviceId, w.ip, w.agent_port || 32249)">
+                          {{ tt('retry') }}
+                        </button>
+                      </div>
+                      <section class="pc-metric">
+                        <div class="pc-metric-head">
+                          <span class="pc-metric-icon" aria-hidden="true">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M15 9H9v6h6V9zm-2 4h-2v-2h2v2zm8-2V9h-2V7c0-1.1-.9-2-2-2h-2V3h-2v2H9V3H7v2H5c-1.1 0-2 .9-2 2v2H1v2h2v2H1v2h2v2c0 1.1.9 2 2 2h2v-2h2v2h2v-2h2v2h2c1.1 0 2-.9 2-2v-2h2v-2h-2v-2h2zm-4 6H7V7h10v10z"/></svg>
+                          </span>
+                          <div class="pc-metric-name">
+                            <div class="pc-metric-label">CPU</div>
+                            <div class="pc-metric-spec" :title="cpuModel(w.deviceId)">{{ cpuModel(w.deviceId) }}<template v-if="cpuCores(w.deviceId)"> · {{ cpuCores(w.deviceId) }} {{ locale === 'cn' ? '核' : 'cores' }}</template></div>
+                          </div>
+                          <div class="pc-metric-value">{{ curCpuPct(w.deviceId).toFixed(0) }}<small>%</small></div>
+                        </div>
+                        <ComputerChart
+                          :series="cpuChartSeries(w.deviceId)"
+                          :max="100"
+                          :name="locale === 'cn' ? 'CPU 使用率' : 'CPU usage'"
+                          :format="formatChartPercent"
+                          :area="true"
+                          :x-start-label="historyStartLabel(w.deviceId)"
+                          :sample-interval-secs="5"
+                          :capacity="STATS_MAX_POINTS"
+                          :locale="locale"
+                        />
+                      </section>
+
+                      <section v-if="hasGPU(w.deviceId)" class="pc-metric">
+                        <div class="pc-metric-head">
+                          <span class="pc-metric-icon" aria-hidden="true">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M22 9V7h-2V5c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2v-2h2v-2h-2v-2h2v-2h-2V9h2zm-4 10H4V5h14v14zM6 13h5v4H6v-4zm6-6h4v3h-4V7zM6 7h5v5H6V7zm6 4h4v6h-4v-6z"/></svg>
+                          </span>
+                          <div class="pc-metric-name">
+                            <div class="pc-metric-label">GPU</div>
+                            <div class="pc-metric-spec" :title="gpuModel(w.deviceId)">{{ gpuModel(w.deviceId) }}</div>
+                          </div>
+                          <div class="pc-metric-value">{{ curGpuPct(w.deviceId).toFixed(0) }}<small>%</small></div>
+                        </div>
+                        <ComputerChart
+                          :series="gpuChartSeries(w.deviceId)"
+                          :max="100"
+                          :name="locale === 'cn' ? 'GPU 使用率' : 'GPU usage'"
+                          :format="formatChartPercent"
+                          :area="true"
+                          :x-start-label="historyStartLabel(w.deviceId)"
+                          :sample-interval-secs="5"
+                          :capacity="STATS_MAX_POINTS"
+                          :locale="locale"
+                        />
+                      </section>
+
+                      <section class="pc-metric">
+                        <div class="pc-metric-head">
+                          <span class="pc-metric-icon" aria-hidden="true">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M3 7h18c.55 0 1 .45 1 1v8c0 .55-.45 1-1 1h-1v2h-2v-2h-3v2h-2v-2H8v2H6v-2H3c-.55 0-1-.45-1-1V8c0-.55.45-1 1-1zm1 2v6h16V9H4zm2 1h2v4H6v-4zm4 0h2v4h-2v-4zm4 0h2v4h-2v-4z"/></svg>
+                          </span>
+                          <div class="pc-metric-name">
+                            <div class="pc-metric-label">{{ tt('memoryUsage') }}</div>
+                            <div class="pc-metric-spec" :title="memLabel(w.deviceId)">{{ memLabel(w.deviceId) }}</div>
+                          </div>
+                          <div class="pc-metric-value">{{ curMemPct(w.deviceId).toFixed(0) }}<small>%</small></div>
+                        </div>
+                        <div class="pc-metric-sub">
+                          <span>{{ locale === 'cn' ? '已用' : 'Used' }} <b>{{ memUsed(w.deviceId) }}G / {{ memTotal(w.deviceId) }}G</b></span>
+                          <span>{{ locale === 'cn' ? '可用' : 'Available' }} <b>{{ Math.max(0, Number(memTotal(w.deviceId)) - Number(memUsed(w.deviceId))).toFixed(1) }}G</b></span>
+                        </div>
+                        <ComputerChart
+                          :series="memGBChartSeries(w.deviceId)"
+                          :max="Math.max(0.1, Number(memTotal(w.deviceId)) || 1)"
+                          :name="locale === 'cn' ? '内存占用' : 'Memory usage'"
+                          :format="formatChartMemory"
+                          :area="true"
+                          :x-start-label="historyStartLabel(w.deviceId)"
+                          :sample-interval-secs="5"
+                          :capacity="STATS_MAX_POINTS"
+                          :locale="locale"
+                        />
+                      </section>
+
+                      <section v-for="dk in diskList(w.deviceId)" :key="`disk-${dk.name}`" class="pc-metric">
+                        <div class="pc-metric-head">
+                          <span class="pc-metric-icon" aria-hidden="true">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M20 3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H4V5h16v14zM6 7h5v5H6V7zm6 0h6v2h-6V7zm0 4h6v2h-6v-2z"/></svg>
+                          </span>
+                          <div class="pc-metric-name">
+                            <div class="pc-metric-label">{{ tt('disk') }}</div>
+                            <div class="pc-metric-spec" :title="dk.model || dk.name">{{ dk.model || dk.name }}</div>
+                          </div>
+                          <div class="pc-metric-value">{{ dkTotalPct(w.deviceId, dk) }}<small>%</small></div>
+                        </div>
+                        <div class="pc-metric-sub pc-disk-sub">
+                          <span>{{ dk.used }}GB / {{ dk.total }}GB</span>
+                          <span class="pc-usage-bar"><i :style="{ width: `${dkTotalPct(w.deviceId, dk)}%` }" /></span>
+                          <span class="pc-key" style="--pc-key: var(--pc-series-1)">{{ locale === 'cn' ? '读取' : 'Read' }} <b>{{ formatSpeedBps(curDiskSpeed(w.deviceId, dk.name).r) }}</b></span>
+                          <span class="pc-key" style="--pc-key: var(--pc-series-2)">{{ locale === 'cn' ? '写入' : 'Write' }} <b>{{ formatSpeedBps(curDiskSpeed(w.deviceId, dk.name).w) }}</b></span>
+                        </div>
+                        <ComputerChart
+                          :series="diskChartSeries(w.deviceId, dk.name)"
+                          :max="diskChartMax(w.deviceId, dk.name)"
+                          :name="locale === 'cn' ? '硬盘读写速度' : 'Disk throughput'"
+                          :format="formatSpeedBps"
+                          :x-start-label="historyStartLabel(w.deviceId)"
+                          :sample-interval-secs="5"
+                          :capacity="STATS_MAX_POINTS"
+                          :locale="locale"
+                        />
+                        <div v-if="dk.parts?.length" class="pc-partitions">
+                          <div v-for="part in dk.parts" :key="part.name" class="pc-partition">
+                            <span>{{ part.name }}</span>
+                            <span class="pc-usage-bar"><i :style="{ width: `${part.pct}%`, background: diskFillColor(part.pct) }" /></span>
+                            <span>{{ part.used }}GB / {{ part.total }}GB</span>
+                          </div>
+                        </div>
+                      </section>
+
+                      <section v-for="nc in netList(w.deviceId)" :key="`net-${nc.name}`" class="pc-metric">
+                        <div class="pc-metric-head">
+                          <span class="pc-metric-icon" aria-hidden="true">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
+                          </span>
+                          <div class="pc-metric-name">
+                            <div class="pc-metric-label">{{ locale === 'cn' ? '网络' : 'Network' }}</div>
+                            <div class="pc-metric-spec" :title="nc.desc">{{ nc.desc }}</div>
+                          </div>
+                          <div class="pc-metric-value">{{ formatSpeedBps(curNetSpeed(w.deviceId, nc.name).r) }}</div>
+                        </div>
+                        <div class="pc-metric-sub">
+                          <span class="pc-key" style="--pc-key: var(--pc-series-1)">{{ locale === 'cn' ? '下行' : 'Down' }} <b>{{ formatSpeedBps(curNetSpeed(w.deviceId, nc.name).r) }}</b></span>
+                          <span class="pc-key" style="--pc-key: var(--pc-series-2)">{{ locale === 'cn' ? '上行' : 'Up' }} <b>{{ formatSpeedBps(curNetSpeed(w.deviceId, nc.name).s) }}</b></span>
+                        </div>
+                        <ComputerChart
+                          :series="netChartSeries(w.deviceId, nc.name)"
+                          :max="netChartMax(w.deviceId, nc.name)"
+                          :name="locale === 'cn' ? '网络流量' : 'Network traffic'"
+                          :format="formatSpeedBps"
+                          :x-start-label="historyStartLabel(w.deviceId)"
+                          :sample-interval-secs="5"
+                          :capacity="STATS_MAX_POINTS"
+                          :locale="locale"
+                        />
+                      </section>
+
+                    </div>
+                  </template>
+
+                  <template v-else>
+                    <div class="pc-command-toolbar">
+                      <div>
+                        <div class="pc-command-title">{{ locale === 'cn' ? '自定义命令' : 'Custom commands' }}</div>
+                        <div class="pc-command-sub">{{ locale === 'cn' ? '命令由 App 保存，Agent 不预置' : 'Commands are stored in the App' }}</div>
+                      </div>
+                      <div class="pc-command-actions">
+                        <button class="pc-tonal-btn" type="button" @click="setComputerSegment(w.deviceId, 'performance')">
+                          {{ locale === 'cn' ? '返回性能' : 'Back' }}
+                        </button>
+                        <button class="pc-tonal-btn" type="button" @click="openCommandManager(w)">
+                          {{ locale === 'cn' ? '管理' : 'Manage' }}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div v-if="!commandTokens[w.deviceId]" class="pc-command-empty">
+                      <p>{{ tt('commandTokenRequired') }}</p>
+                      <button class="pc-tonal-btn" type="button" @click="openCommandManager(w)">
+                        {{ locale === 'cn' ? '配置命令凭据' : 'Configure credential' }}
+                      </button>
+                    </div>
+
+                    <div v-else-if="!(deviceCommands[w.deviceId] || []).length" class="pc-command-empty">
+                      <p>{{ locale === 'cn' ? '还没有自定义命令' : 'No custom commands yet' }}</p>
+                      <button class="pc-tonal-btn" type="button" @click="openCommandManager(w)">
+                        {{ locale === 'cn' ? '添加命令' : 'Add command' }}
+                      </button>
+                    </div>
+
+                    <div v-else class="pc-command-list">
+                      <button
+                        v-for="command in deviceCommands[w.deviceId] || []"
+                        :key="command.id"
+                        class="pc-command-item"
+                        type="button"
+                        :disabled="!canRunComputerCommands(w)"
+                        @click="openCommandConfirm(w, command)"
+                      >
+                        <span class="pc-command-icon" aria-hidden="true">
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M20 4H4c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 14H4V8h16v10zm-2-1h-6v-2h6v2zM7.5 17l-1.41-1.41L8.67 13l-2.59-2.59L7.5 9l4 4-4 4z"/></svg>
+                        </span>
+                        <span class="pc-command-text">
+                          <span>{{ command.name }}</span>
+                          <small class="mono" :title="formatDisplayCommand(command)">{{ formatDisplayCommand(command) }}</small>
+                        </span>
+                        <span v-if="command.risk === 'high'" class="pc-risk-badge">{{ locale === 'cn' ? '高风险' : 'High risk' }}</span>
+                        <span v-if="findActiveRunForCommand(w.deviceId, command)" class="pc-running-badge">{{ locale === 'cn' ? '运行中' : 'Running' }}</span>
+                      </button>
+                    </div>
+
+                    <div v-if="selectedCommandRunView(w.deviceId)" class="pc-run-view">
+                      <div class="pc-run-head">
+                        <div>
+                          <div class="pc-run-title">{{ selectedCommandRunView(w.deviceId)!.run.name }}</div>
+                          <div class="pc-run-meta">
+                            <span class="pc-run-status" :class="`pc-run-${selectedCommandRunView(w.deviceId)!.run.status}`">{{ runStatusLabel(selectedCommandRunView(w.deviceId)!.run) }}</span>
+                            <span>{{ formatRunDuration(selectedCommandRunView(w.deviceId)!.run.duration_ms) }}</span>
+                            <span v-if="selectedCommandRunView(w.deviceId)!.run.exit_code != null">#{{ selectedCommandRunView(w.deviceId)!.run.exit_code }}</span>
+                          </div>
+                        </div>
+                        <div class="pc-run-actions">
+                          <button
+                            v-if="isRunActive(selectedCommandRunView(w.deviceId)!.run) && selectedCommandRunView(w.deviceId)!.run.cancelable"
+                            class="pc-danger-btn"
+                            type="button"
+                            @click="cancelSelectedCommand(selectedCommandRunView(w.deviceId))"
+                          >
+                            {{ locale === 'cn' ? '取消' : 'Cancel' }}
+                          </button>
+                          <button class="pc-tonal-btn" type="button" @click="copySelectedCommandOutput(selectedCommandRunView(w.deviceId))">
+                            {{ locale === 'cn' ? '复制' : 'Copy' }}
+                          </button>
+                          <button
+                            class="pc-tonal-btn"
+                            type="button"
+                            :aria-pressed="selectedCommandRunView(w.deviceId)!.autoScroll"
+                            @click="selectedCommandRunView(w.deviceId)!.autoScroll = !selectedCommandRunView(w.deviceId)!.autoScroll"
+                          >
+                            {{ selectedCommandRunView(w.deviceId)!.autoScroll
+                              ? (locale === 'cn' ? '暂停滚动' : 'Pause scroll')
+                              : (locale === 'cn' ? '自动滚动' : 'Auto scroll') }}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div class="pc-output-filters" role="group" :aria-label="locale === 'cn' ? '输出筛选' : 'Output filter'">
+                        <button
+                          v-for="filter in (['all', 'stdout', 'stderr'] as const)"
+                          :key="filter"
+                          type="button"
+                          :class="{ 'pc-filter-active': selectedCommandRunView(w.deviceId)!.filter === filter }"
+                          @click="selectedCommandRunView(w.deviceId)!.filter = filter"
+                        >
+                          {{ filter === 'all' ? (locale === 'cn' ? '全部' : 'All') : filter }}
+                        </button>
+                      </div>
+
+                      <pre
+                        class="pc-output"
+                        @vue:updated="onRunOutputUpdated($event, selectedCommandRunView(w.deviceId))"
+                      >{{ runOutputText(selectedCommandRunView(w.deviceId)) || (locale === 'cn' ? '暂无输出' : 'No output yet') }}</pre>
+                      <div v-if="selectedCommandRunView(w.deviceId)!.run.truncated" class="pc-run-note">
+                        {{ locale === 'cn' ? '输出达到上限，已截断' : 'Output reached the limit and was truncated' }}
+                      </div>
+                      <div v-if="selectedCommandRunView(w.deviceId)!.error" class="pc-run-error">
+                        {{ selectedCommandRunView(w.deviceId)!.error }}
+                      </div>
+                      <div v-if="selectedCommandRunView(w.deviceId)!.run.error" class="pc-run-error">
+                        {{ selectedCommandRunView(w.deviceId)!.run.error }}
+                      </div>
+                    </div>
+
+                    <div v-else class="pc-command-empty">
+                      <p>{{ locale === 'cn' ? '选择命令开始执行' : 'Choose a command to start' }}</p>
+                    </div>
+                  </template>
+
+                  <div v-if="showDebug" class="pc-debug-info">
+                    {{ w.mac }} · {{ w.router_ip }} · {{ w.interface || 'br-lan' }} · {{ w.agent_port || 32249 }}
+                  </div>
+
+                  <button class="pc-collapse-btn" type="button" @click="toggleDeviceExpand(w)">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                      <path d="m18 15-6-6-6 6" />
+                    </svg>
+                    <span>{{ locale === 'cn' ? '收起' : 'Collapse' }}</span>
+                  </button>
+                </div>
               </div>
             </div>
-            <template v-else-if="statsHistory[w.ip].length > 0 && statsRaw[w.ip]">
-              <!-- Section 1: CPU -->
-              <div class="md-card md-stats-card md-animated" style="--i:1" @animationend="$event.target.classList.remove('md-animated')">
-                <div class="md-stats-hdr">
-                  <span class="md-stats-label">{{ cpuTitle(w.ip) }}</span>
-                  <span class="md-stats-legends">
-                    <span class="md-stats-legend" style="color:var(--chart-cpu)">&#9679; CPU {{ curCpuPct(w.ip).toFixed(0) }}%</span>
-                  </span>
-                </div>
-                <div class="md-stats-chart-wrap">
-                  <svg class="md-stats-svg" viewBox="0 0 320 108" preserveAspectRatio="none">
-                    <defs>
-                      <linearGradient :id="'g-cpu-'+w.ip" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stop-color="var(--chart-cpu)" stop-opacity="0.30"/>
-                        <stop offset="100%" stop-color="var(--chart-cpu)" stop-opacity="0.02"/>
-                      </linearGradient>
-                    </defs>
-                    <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsAreaPath(statsHistory[w.ip].map(s => s.cpu), cpuChartMax(w.ip), 88, 320)" :fill="'url(#g-cpu-'+w.ip+')'"/>
-                    <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsPath(statsHistory[w.ip].map(s => s.cpu), cpuChartMax(w.ip), 88, 320)" fill="none" stroke="var(--chart-cpu)" stroke-width="1.5"/>
-                    <line x1="0" y1="88" x2="320" y2="88" stroke="var(--md-border)" stroke-width="0.5"/>
-                  </svg>
-                  <span class="md-chart-label md-chart-y-max">{{ cpuChartMax(w.ip).toFixed(0) }}%</span>
-
-                  <span class="md-chart-label md-chart-x-start">{{ statsXLabel(statsHistory[w.ip].length, 0) }}</span>
-                  <span class="md-chart-label md-chart-x-mid">{{ statsXLabel(statsHistory[w.ip].length, Math.floor((statsHistory[w.ip].length-1)/2)) }}</span>
-                  <span class="md-chart-label md-chart-x-end">{{ statsXLabel(statsHistory[w.ip].length, statsHistory[w.ip].length-1) }}</span>
-                </div>
-              </div>
-
-              <!-- Section 2: Memory -->
-              <div class="md-card md-stats-card md-animated" style="--i:2" @animationend="$event.target.classList.remove('md-animated')">
-                <div class="md-stats-hdr">
-                  <span class="md-stats-label">{{ memLabel(w.ip) }}</span>
-                  <span class="md-stats-legends">
-                    <span class="md-stats-legend" style="color:var(--chart-mem)">&#9679; MEM {{ memUsed(w.ip) }}G / {{ memTotal(w.ip) }}G</span>
-                  </span>
-                </div>
-                <div class="md-stats-chart-wrap">
-                  <svg class="md-stats-svg" viewBox="0 0 320 108" preserveAspectRatio="none">
-                    <defs>
-                      <linearGradient :id="'g-mem-'+w.ip" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stop-color="var(--chart-mem)" stop-opacity="0.30"/>
-                        <stop offset="100%" stop-color="var(--chart-mem)" stop-opacity="0.02"/>
-                      </linearGradient>
-                    </defs>
-                    <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsAreaPath(memGBHistory(w.ip), memChartMax(w.ip), 88, 320)" :fill="'url(#g-mem-'+w.ip+')'"/>
-                    <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsPath(memGBHistory(w.ip), memChartMax(w.ip), 88, 320)" fill="none" stroke="var(--chart-mem)" stroke-width="1.5"/>
-                    <line x1="0" y1="88" x2="320" y2="88" stroke="var(--md-border)" stroke-width="0.5"/>
-                  </svg>
-                  <span class="md-chart-label md-chart-y-max">{{ memChartMax(w.ip).toFixed(1) }}G</span>
-
-                  <span class="md-chart-label md-chart-x-start">{{ statsXLabel(statsHistory[w.ip].length, 0) }}</span>
-                  <span class="md-chart-label md-chart-x-mid">{{ statsXLabel(statsHistory[w.ip].length, Math.floor((statsHistory[w.ip].length-1)/2)) }}</span>
-                  <span class="md-chart-label md-chart-x-end">{{ statsXLabel(statsHistory[w.ip].length, statsHistory[w.ip].length-1) }}</span>
-                </div>
-              </div>
-
-              <!-- Section 3: GPU -->
-              <div v-if="hasGPU(w.ip)" class="md-card md-stats-card md-animated" style="--i:3" @animationend="$event.target.classList.remove('md-animated')">
-                <div class="md-stats-hdr">
-                  <span class="md-stats-label">{{ gpuModel(w.ip) }}</span>
-                  <span class="md-stats-legends">
-                    <span class="md-stats-legend" style="color:var(--chart-gpu)">&#9679; GPU {{ curGpuPct(w.ip).toFixed(0) }}%</span>
-                  </span>
-                </div>
-                <div class="md-stats-chart-wrap">
-                  <svg class="md-stats-svg" viewBox="0 0 320 108" preserveAspectRatio="none">
-                    <defs>
-                      <linearGradient :id="'g-gpu-'+w.ip" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stop-color="var(--chart-gpu)" stop-opacity="0.30"/>
-                        <stop offset="100%" stop-color="var(--chart-gpu)" stop-opacity="0.02"/>
-                      </linearGradient>
-                    </defs>
-                    <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsAreaPath(statsHistory[w.ip].map(s => s.gpu ?? 0), gpuChartMax(w.ip), 88, 320)" :fill="'url(#g-gpu-'+w.ip+')'"/>
-                    <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsPath(statsHistory[w.ip].map(s => s.gpu ?? 0), gpuChartMax(w.ip), 88, 320)" fill="none" stroke="var(--chart-gpu)" stroke-width="1.5"/>
-                    <line x1="0" y1="88" x2="320" y2="88" stroke="var(--md-border)" stroke-width="0.5"/>
-                  </svg>
-                  <span class="md-chart-label md-chart-y-max">{{ gpuChartMax(w.ip).toFixed(0) }}%</span>
-
-                  <span class="md-chart-label md-chart-x-start">{{ statsXLabel(statsHistory[w.ip].length, 0) }}</span>
-                  <span class="md-chart-label md-chart-x-mid">{{ statsXLabel(statsHistory[w.ip].length, Math.floor((statsHistory[w.ip].length-1)/2)) }}</span>
-                  <span class="md-chart-label md-chart-x-end">{{ statsXLabel(statsHistory[w.ip].length, statsHistory[w.ip].length-1) }}</span>
-                </div>
-              </div>
-
-              <!-- Section 4: Disks -->
-              <template v-if="diskList(w.ip).length">
-                <div v-for="(dk, di) in diskList(w.ip)" :key="'dk'+di" class="md-card md-stats-card md-animated" :style="{ '--i': 4 + di }" @animationend="$event.target.classList.remove('md-animated')">
-                  <div class="md-stats-hdr">
-                    <span class="md-stats-label"><template v-if="dk.model">{{ dk.model }}</template><template v-else>{{ dk.name }}</template></span>
-                    <span class="md-stats-legends">
-                      <span class="md-stats-legend" style="color:var(--chart-disk-r)">&#9679; R {{ formatSpeedYStats(curDiskSpeed(w.ip, dk.name).r) }}</span>
-                      <span class="md-stats-legend" style="color:var(--chart-disk-w)">&#9679; W {{ formatSpeedYStats(curDiskSpeed(w.ip, dk.name).w) }}</span>
-                    </span>
-                  </div>
-                  <div class="md-stats-chart-wrap">
-                    <svg class="md-stats-svg" viewBox="0 0 320 108" preserveAspectRatio="none">
-                      <defs>
-                        <linearGradient :id="'g-dr-'+w.ip+'-'+di" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stop-color="var(--chart-disk-r)" stop-opacity="0.30"/>
-                          <stop offset="100%" stop-color="var(--chart-disk-r)" stop-opacity="0.02"/>
-                        </linearGradient>
-                        <linearGradient :id="'g-dw-'+w.ip+'-'+di" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stop-color="var(--chart-disk-w)" stop-opacity="0.30"/>
-                          <stop offset="100%" stop-color="var(--chart-disk-w)" stop-opacity="0.02"/>
-                        </linearGradient>
-                      </defs>
-                      <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsAreaPath(diskHistory(w.ip, dk.name, 'readBps'), diskChartMax(w.ip, dk.name), 88, 320)" :fill="'url(#g-dr-'+w.ip+'-'+di+')'"/>
-                      <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsAreaPath(diskHistory(w.ip, dk.name, 'writeBps'), diskChartMax(w.ip, dk.name), 88, 320)" :fill="'url(#g-dw-'+w.ip+'-'+di+')'"/>
-                      <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsPath(diskHistory(w.ip, dk.name, 'readBps'), diskChartMax(w.ip, dk.name), 88, 320)" fill="none" stroke="var(--chart-disk-r)" stroke-width="1.5"/>
-                      <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsPath(diskHistory(w.ip, dk.name, 'writeBps'), diskChartMax(w.ip, dk.name), 88, 320)" fill="none" stroke="var(--chart-disk-w)" stroke-width="1.5"/>
-                      <line x1="0" y1="88" x2="320" y2="88" stroke="var(--md-border)" stroke-width="0.5"/>
-                      </svg>
-                    <span class="md-chart-label md-chart-y-max">{{ formatSpeedYStats(diskChartMax(w.ip, dk.name)) }}</span>
-
-                    <span class="md-chart-label md-chart-x-start">{{ statsXLabel(statsHistory[w.ip].length, 0) }}</span>
-                    <span class="md-chart-label md-chart-x-mid">{{ statsXLabel(statsHistory[w.ip].length, Math.floor((statsHistory[w.ip].length-1)/2)) }}</span>
-                    <span class="md-chart-label md-chart-x-end">{{ statsXLabel(statsHistory[w.ip].length, statsHistory[w.ip].length-1) }}</span>
-                  </div>
-                  <!-- Disk total row (only when multiple partitions) -->
-                  <div v-if="dk.parts.length > 1" class="md-disk-total">
-                    <div class="md-part-fill-bg" :style="{ width: dkTotalPct(w.ip, dk) + '%', background: diskFillColor(dkTotalPct(w.ip, dk)) }" />
-                    <span class="md-part-label">{{ tt('disk') }}</span>
-                    <span class="md-disk-total-usage">{{ dk.used }}GB / {{ dk.total }}GB</span>
-                  </div>
-                  <!-- Partition rows with background progress -->
-                  <div v-for="p in dk.parts" :key="p.name" class="md-part-row">
-                    <div class="md-part-fill-bg" :style="{ width: p.pct + '%', background: diskFillColor(p.pct) }" />
-                    <span class="md-part-label">{{ p.name }}</span>
-                    <span class="md-part-usage">{{ p.used }}GB / {{ p.total }}GB</span>
-                  </div>
-                </div>
-              </template>
-
-              <!-- Section 5: Network -->
-              <template v-if="netList(w.ip).length">
-                <div v-for="(nc, ni) in netList(w.ip)" :key="'nc'+ni" class="md-card md-stats-card md-animated" :style="{ '--i': 4 + diskList(w.ip).length + ni }" @animationend="$event.target.classList.remove('md-animated')">
-                  <div class="md-stats-hdr">
-                    <span class="md-stats-label">{{ nc.desc }}</span>
-                    <span class="md-stats-legends">
-                      <span class="md-stats-legend" style="color:var(--chart-disk-r)">&#9679; &#8593; {{ formatSpeedBps(curNetSpeed(w.ip, nc.name).s) }}</span>
-                      <span class="md-stats-legend" style="color:var(--chart-net-down)">&#9679; &#8595; {{ formatSpeedBps(curNetSpeed(w.ip, nc.name).r) }}</span>
-                    </span>
-                  </div>
-                  <div class="md-stats-chart-wrap">
-                    <svg class="md-stats-svg" viewBox="0 0 320 108" preserveAspectRatio="none">
-                      <defs>
-                        <linearGradient :id="'g-nr-'+w.ip+'-'+ni" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stop-color="var(--chart-net-down)" stop-opacity="0.30"/>
-                          <stop offset="100%" stop-color="var(--chart-net-down)" stop-opacity="0.02"/>
-                        </linearGradient>
-                        <linearGradient :id="'g-ns-'+w.ip+'-'+ni" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stop-color="var(--chart-disk-r)" stop-opacity="0.30"/>
-                          <stop offset="100%" stop-color="var(--chart-disk-r)" stop-opacity="0.02"/>
-                        </linearGradient>
-                      </defs>
-                      <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsAreaPath(netHistory(w.ip, nc.name, 'recvBps'), netChartMax(w.ip, nc.name), 88, 320)" :fill="'url(#g-nr-'+w.ip+'-'+ni+')'"/>
-                      <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsAreaPath(netHistory(w.ip, nc.name, 'sentBps'), netChartMax(w.ip, nc.name), 88, 320)" :fill="'url(#g-ns-'+w.ip+'-'+ni+')'"/>
-                      <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsPath(netHistory(w.ip, nc.name, 'recvBps'), netChartMax(w.ip, nc.name), 88, 320)" fill="none" stroke="var(--chart-net-down)" stroke-width="1.5"/>
-                      <path v-if="statsHistory[w.ip].length > 1" :d="buildStatsPath(netHistory(w.ip, nc.name, 'sentBps'), netChartMax(w.ip, nc.name), 88, 320)" fill="none" stroke="var(--chart-disk-r)" stroke-width="1.5"/>
-                      <line x1="0" y1="88" x2="320" y2="88" stroke="var(--md-border)" stroke-width="0.5"/>
-                      </svg>
-                    <span class="md-chart-label md-chart-y-max">{{ formatSpeedBps(netChartMax(w.ip, nc.name)) }}</span>
-
-                    <span class="md-chart-label md-chart-x-start">{{ statsXLabel(statsHistory[w.ip].length, 0) }}</span>
-                    <span class="md-chart-label md-chart-x-mid">{{ statsXLabel(statsHistory[w.ip].length, Math.floor((statsHistory[w.ip].length-1)/2)) }}</span>
-                    <span class="md-chart-label md-chart-x-end">{{ statsXLabel(statsHistory[w.ip].length, statsHistory[w.ip].length-1) }}</span>
-                  </div>
-                </div>
-              </template>
-
-              <!-- Device info summary card (debug only) -->
-              <div v-if="showDebug" class="md-card md-stats-card md-stats-info-card">
-                <div class="md-stats-info">{{ w.mac }} &middot; {{ w.router_ip }} &middot; {{ w.interface || 'br-lan' }} &middot; {{ w.agent_port || 32249 }}</div>
-              </div>
-
-            </template>
-            </div>
-            <!-- Collapse button -->
-            <div class="md-stats-collapse" @click="toggleDeviceExpand(w)">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 15l-6-6-6 6"/></svg>
-              <span>{{ locale === 'cn' ? '收起' : 'Collapse' }}</span>
-            </div>
-          </template>
+          </article>
         </div>
-        </div>
+
       </div>
+    </div>
+    </div>
+
+    <div
+      v-if="commandMenu.visible && commandMenuDevice"
+      ref="commandMenuRef"
+      class="pc-menu"
+      role="menu"
+      :style="{ left: `${commandMenu.x}px`, top: `${commandMenu.y}px` }"
+      :aria-label="locale === 'cn' ? `${commandMenuDevice.name} 的自定义命令` : `Custom commands for ${commandMenuDevice.name}`"
+      @keydown="onCommandMenuKeydown"
+    >
+      <div class="pc-menu-label">
+        {{ locale === 'cn' ? `在 ${commandMenuDevice.name} 上执行` : `Run on ${commandMenuDevice.name}` }}
+      </div>
+
+      <div v-if="!canRunComputerCommands(commandMenuDevice)" class="pc-menu-note">
+        {{ getWolEffectiveState(commandMenuDevice) !== 'online'
+          ? (locale === 'cn' ? '设备当前不可执行命令' : 'Device cannot run commands now')
+          : tt('commandTokenRequired') }}
+      </div>
+
+      <div v-if="!(deviceCommands[commandMenu.deviceId] || []).length" class="pc-menu-note">
+        {{ locale === 'cn' ? '还没有自定义命令' : 'No custom commands yet' }}
+      </div>
+
+      <button
+        v-for="command in deviceCommands[commandMenu.deviceId] || []"
+        :key="command.id"
+        class="pc-menu-item sl"
+        type="button"
+        role="menuitem"
+        :disabled="!canRunComputerCommands(commandMenuDevice)"
+        :title="formatDisplayCommand(command)"
+        @click="openCommandConfirm(commandMenuDevice, command)"
+      >
+        <span class="pc-menu-icon" aria-hidden="true">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M20 4H4c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 14H4V8h16v10zm-2-1h-6v-2h6v2zM7.5 17l-1.41-1.41L8.67 13l-2.59-2.59L7.5 9l4 4-4 4z"/></svg>
+        </span>
+        <span class="pc-menu-text">
+          <span>{{ command.name }}</span>
+          <small class="mono">{{ formatDisplayCommand(command) }}</small>
+        </span>
+        <span v-if="menuActiveRun(command)" class="pc-running-badge">{{ runStatusLabel(menuActiveRun(command)!) }}</span>
+      </button>
+
+      <div class="pc-menu-divider" role="separator" />
+      <button class="pc-menu-item sl" type="button" role="menuitem" @click="openCommandManager(commandMenuDevice)">
+        <span class="pc-menu-icon" aria-hidden="true">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+        </span>
+        <span>{{ locale === 'cn' ? '管理自定义命令…' : 'Manage custom commands…' }}</span>
+      </button>
     </div>
 
     <!-- ==================== Network Tab ==================== -->
-    <div v-show="activeTab === 'net'" class="md-page">
+    <div v-show="activeTab === 'net'" class="md-page md-page-bg" :class="{ 'page-active': activeTab === 'net' }">
       <header class="md-hdr">
         <template v-if="netRunning">
-          <span class="md-hdr-title">{{ locale === 'cn' ? '异地组网' : 'Remote Network' }}</span>
+          <span class="md-hdr-title">{{ locale === 'cn' ? '组网' : 'Network' }}</span>
           <div class="flex-1" />
           <button class="md-settings-btn md-settings-btn-red" @click="doDisconnect">
             <svg width="18" height="18" viewBox="0 0 1024 1024" fill="currentColor"><path d="M797.248 111.936a210.944 210.944 0 0 1 114.816 114.816c10.624 25.728 16 53.312 15.936 81.216a210.624 210.624 0 0 1-61.888 150.016L744.32 580.48a11.264 11.264 0 0 1-8.256 3.328 11.2 11.2 0 0 1-8.256-3.328l-56.768-56.768a11.264 11.264 0 0 1-3.392-8.32 11.264 11.264 0 0 1 3.392-8.192l122.24-122.24a109.12 109.12 0 0 0-118.848-177.792 108.288 108.288 0 0 0-35.392 23.68L517.12 353.088a11.392 11.392 0 0 1-8.256 3.328 11.52 11.52 0 0 1-8.256-3.328l-56.768-56.832a11.456 11.456 0 0 1 0-16.128l122.176-122.24a210.88 210.88 0 0 1 150.016-61.888c27.84-0.128 55.488 5.312 81.28 15.936zM299.584 217.664a31.04 31.04 0 0 0-44.224 0l-36.224 36.096a31.168 31.168 0 0 0-6.784 34.24 31.36 31.36 0 0 0 6.784 10.24l488.384 488.32a30.976 30.976 0 0 0 34.24 6.848 30.912 30.912 0 0 0 10.176-6.848l36.16-36.16a31.36 31.36 0 0 0 0-44.416l-488.512-488.32z m224 451.136a11.2 11.2 0 0 0-8.32-3.392 11.328 11.328 0 0 0-8.192 3.392l-122.24 122.24a108.352 108.352 0 0 1-76.992 31.808 108.16 108.16 0 0 1-77.12-31.872 109.184 109.184 0 0 1 0-154.176l122.688-122.048a11.392 11.392 0 0 0 3.328-8.32 11.52 11.52 0 0 0-3.328-8.192L296.576 441.6a11.52 11.52 0 0 0-8.256-3.328 11.392 11.392 0 0 0-8.192 3.328l-122.24 122.24a210.752 210.752 0 0 0-61.888 150.016 210.496 210.496 0 0 0 61.888 150.016 210.368 210.368 0 0 0 150.016 61.888 210.752 210.752 0 0 0 150.08-61.888l122.176-122.24a11.52 11.52 0 0 0 0-16.192l-56.576-56.704z"/></svg>
@@ -1969,7 +3190,7 @@ onUnmounted(() => { window.removeEventListener('easytier-native-transfer', onNat
               <div v-for="(n, i) in networks" :key="n.config.instance_id" class="md-sw-item" @click="switchToNet(i)">
                 <span v-if="i === netIndex" class="md-sw-check">&#10003;</span>
                 <span v-else style="width:18px;display:inline-block" />
-                <span class="flex-1 truncate">{{ n.config.instance_name || n.config.network_name || tt('unnamed') }}</span>
+                <span class="flex-1 truncate">{{ (n.config as any).instance_name || n.config.network_name || tt('unnamed') }}</span>
                 <button class="md-sw-del" @click="confirmDeleteNet(i, $event)">&times;</button>
               </div>
             </div>
@@ -2002,7 +3223,7 @@ onUnmounted(() => { window.removeEventListener('easytier-native-transfer', onNat
         <div class="md-scroll-view">
           <div class="md-scroll-content">
           <!-- Network Hero Card (integrates connection info + green accent) -->
-          <div class="md-card md-hero md-hero-connected md-card-enter" style="animation-delay:0s" @animationend="$event.target.classList.remove('md-card-enter')">
+          <div class="md-card md-hero md-hero-connected">
             <div class="md-hero-head">
               <div class="flex-1 min-w-0">
                 <div class="md-hero-title">{{ netName() }}</div>
@@ -2036,102 +3257,136 @@ onUnmounted(() => { window.removeEventListener('easytier-native-transfer', onNat
           </div>
 
           <!-- Traffic Chart -->
-          <div v-if="trafficHistory.length > 1" class="md-card md-traffic-card md-card-enter" style="animation-delay:0.08s" @animationend="$event.target.classList.remove('md-card-enter')">
+          <div v-if="trafficHistory.length" class="md-card md-traffic-card">
             <div class="md-traffic-hdr">
-              <div class="flex-1">
-                <span class="md-traffic-label" :style="{color:TRAFFIC_UP_COLOR}">&#8593; {{ netTrafficSpeed.up || '--' }}</span>
-                <span class="md-traffic-label" :style="{color:TRAFFIC_DOWN_COLOR}">&#8595; {{ netTrafficSpeed.down || '--' }}</span>
-              </div>
               <div class="md-traffic-total">
                 <span class="md-traffic-label" :style="{color:TRAFFIC_UP_COLOR}">&#8593; {{ netTrafficSpeed.upTotal }}</span>
                 <span class="md-traffic-label" :style="{color:TRAFFIC_DOWN_COLOR}">&#8595; {{ netTrafficSpeed.downTotal }}</span>
               </div>
+              <div class="md-traffic-current">
+                <span class="md-traffic-label" :style="{color:TRAFFIC_UP_COLOR}">&#8593; {{ netTrafficSpeed.up || '--' }}</span>
+                <span class="md-traffic-label" :style="{color:TRAFFIC_DOWN_COLOR}">&#8595; {{ netTrafficSpeed.down || '--' }}</span>
+              </div>
             </div>
-            <div class="md-traffic-chart-wrap">
-              <svg class="md-traffic-svg" viewBox="0 0 320 108" preserveAspectRatio="none">
-                <defs>
-                  <linearGradient id="g-traffic-up" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stop-color="var(--chart-disk-r)" stop-opacity="0.30"/>
-                    <stop offset="100%" stop-color="var(--chart-disk-r)" stop-opacity="0.02"/>
-                  </linearGradient>
-                  <linearGradient id="g-traffic-down" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stop-color="var(--chart-net-down)" stop-opacity="0.30"/>
-                    <stop offset="100%" stop-color="var(--chart-net-down)" stop-opacity="0.02"/>
-                  </linearGradient>
-                </defs>
-                <!-- Up area -->
-                <path v-if="trafficHistory.length > 1" :d="buildStatsAreaPath(trafficHistory.map(p => p.up), Math.max(1, ...trafficHistory.map(p => Math.max(p.up, p.down))), 88, 320)" fill="url(#g-traffic-up)"/>
-                <!-- Down area -->
-                <path v-if="trafficHistory.length > 1" :d="buildStatsAreaPath(trafficHistory.map(p => p.down), Math.max(1, ...trafficHistory.map(p => Math.max(p.up, p.down))), 88, 320)" fill="url(#g-traffic-down)"/>
-                <!-- Up line -->
-                <path v-if="trafficHistory.length > 1" :d="buildStatsPath(trafficHistory.map(p => p.up), Math.max(1, ...trafficHistory.map(p => Math.max(p.up, p.down))), 88, 320)" fill="none" :stroke="TRAFFIC_UP_COLOR" stroke-width="1.5"/>
-                <!-- Down line -->
-                <path v-if="trafficHistory.length > 1" :d="buildStatsPath(trafficHistory.map(p => p.down), Math.max(1, ...trafficHistory.map(p => Math.max(p.up, p.down))), 88, 320)" fill="none" :stroke="TRAFFIC_DOWN_COLOR" stroke-width="1.5"/>
-                <line x1="0" y1="88" x2="320" y2="88" stroke="var(--md-border)" stroke-width="0.5"/>
-              </svg>
-              <span class="md-chart-label md-chart-y-max">{{ (() => { const m = Math.max(1, ...trafficHistory.map(p => Math.max(p.up, p.down))); return formatSpeedY(m); })() }}</span>
-              <span class="md-chart-label md-chart-x-start">{{ formatXLabel(trafficHistory.length, 0) }}</span>
-              <span class="md-chart-label md-chart-x-mid">{{ formatXLabel(trafficHistory.length, Math.floor(trafficHistory.length/2)) }}</span>
-              <span class="md-chart-label md-chart-x-end">{{ formatXLabel(trafficHistory.length, trafficHistory.length-1) }}</span>
-            </div>
+            <ComputerChart
+              :series="trafficChartSeries()"
+              :max="trafficChartMax()"
+              :name="locale === 'cn' ? '组网流量' : 'Network traffic'"
+              :format="formatSpeedBps"
+              :area="false"
+              :x-start-label="formatXLabel(trafficHistory.length, 0)"
+              :sample-interval-secs="3"
+              :capacity="TRAFFIC_MAX_POINTS"
+              :locale="locale"
+            />
           </div>
 
           <!-- Network Devices -->
           <div v-if="netPeers.length" class="md-section">
-            <div class="md-sec-hdr"><span class="md-sec-title">{{ tt('networkDevices') }}</span><span class="md-badge">{{ netPeers.length }}</span></div>
-            <div v-for="(p, pi) in sortedPeers" :key="peerKey(p)" class="md-card md-card-item md-card-enter" :style="{ animationDelay: (pi * 0.1) + 's' }" @click="netExpanded[peerKey(p)] = !netExpanded[peerKey(p)]" @animationend="$event.target.classList.remove('md-card-enter')">
-              <div class="md-row md-row-top">
-                <div class="flex-1 min-w-0 flex items-center gap-2">
-                  <span class="md-name">{{ formatIp(p.route?.ipv4_addr) }}</span>
-                  <span v-if="p.route?.hostname" class="md-sub" style="margin-top:0;opacity:0.6">{{ p.route.hostname }}</span>
+            <div class="md-sec-hdr"><span class="md-sec-title">{{ tt('networkDevices') }} ({{ netPeers.length }})</span></div>
+            <article
+              v-for="(p, pi) in sortedPeers"
+              :key="peerKey(p)"
+              class="net-peer-card"
+              :class="{ 'net-peer-card-open': netExpanded[peerKey(p)] }"
+              :style="{ '--card-i': pi + 2 }"
+              role="button"
+              tabindex="0"
+              :aria-expanded="!!netExpanded[peerKey(p)]"
+              @click="netExpanded[peerKey(p)] = !netExpanded[peerKey(p)]"
+              @keydown.enter.prevent="netExpanded[peerKey(p)] = !netExpanded[peerKey(p)]"
+              @keydown.space.prevent="netExpanded[peerKey(p)] = !netExpanded[peerKey(p)]"
+            >
+              <div class="net-peer-main">
+                <div class="net-peer-avatar" aria-hidden="true">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12 21l3.5-4.36c-.9-.56-1.94-.9-3.5-.9s-2.6.34-3.5.9L12 21zm0-8c1.8 0 3.4.72 4.6 1.88l1.4-1.76C16.9 11.9 14.6 11 12 11s-4.9.9-6 2.12l1.4 1.76C8.6 13.72 10.2 13 12 13zm0-5c3.03 0 5.78 1.21 7.78 3.17l1.42-1.76C18.22 7.22 15.32 6 12 6S5.78 7.22 2.8 9.41l1.42 1.76C6.22 9.21 8.97 8 12 8z"/></svg>
                 </div>
-                <span v-if="buildDetail(p).lat" class="md-quality" :class="qualityCls(buildDetail(p).lat, buildDetail(p).loss)">{{ qualityText(buildDetail(p).lat, buildDetail(p).loss) }}</span>
-              </div>
-              <div class="md-row md-row-bot">
-                <div class="flex-1 min-w-0 flex flex-col justify-end">
-                  <div class="md-sub">
-                    <template v-if="buildDetail(p).up || buildDetail(p).down">
-                      <span v-if="buildDetail(p).up" class="md-traffic-up-sub">{{ buildDetail(p).up }}</span><template v-if="buildDetail(p).up && buildDetail(p).down"> &middot; </template><span v-if="buildDetail(p).down" class="md-traffic-down-sub">{{ buildDetail(p).down }}</span>
-                    </template>
+                <div class="net-peer-body">
+                  <div class="net-peer-row">
+                    <div class="net-peer-title">
+                      <span class="net-peer-name" :title="netPeerTitle(p, false)">{{ netPeerTitle(p, false) }}</span>
+                      <template v-if="netPeerInlineIp(p)">
+                        <span class="net-peer-dot" aria-hidden="true">·</span>
+                        <span class="net-peer-ip mono">{{ netPeerInlineIp(p) }}</span>
+                      </template>
+                    </div>
+                    <span v-if="buildDetail(p).lat" class="net-peer-ping">{{ qualityText(buildDetail(p).lat, buildDetail(p).loss) }}</span>
+                    <span v-else class="net-peer-ping net-peer-ping-muted">--</span>
                   </div>
-                  <div v-if="buildDetail(p).ver" class="md-sub" style="margin-top:2px;opacity:0.5">v{{ buildDetail(p).ver }}</div>
-                </div>
-                <div class="md-card-tags" :data-peer-key="peerKey(p)">
-                  <span class="md-rt" :class="costCls(p.route?.cost)">{{ costLabel(p.route?.cost) }}</span>
-                  <span v-if="buildDetail(p).tun" class="md-chip md-chip-proto">{{ tunnelDisplay(p) }}</span>
-                  <span v-if="natLabel(p.route?.stun_info).text" class="md-chip md-chip-nat" :class="natLabel(p.route?.stun_info).cls">{{ natLabel(p.route?.stun_info).text }}</span>
+                  <div class="net-peer-row net-peer-row-bottom">
+                    <div class="net-peer-left">
+                      <span v-if="buildDetail(p).up || buildDetail(p).down" class="net-peer-flow">
+                        <span v-if="buildDetail(p).up" class="net-peer-flow-up">{{ buildDetail(p).up }}</span>
+                        <span v-if="buildDetail(p).down" class="net-peer-flow-down">{{ buildDetail(p).down }}</span>
+                      </span>
+                    </div>
+                    <div class="md-card-tags net-peer-tags" :data-peer-key="peerKey(p)">
+                      <span class="md-rt" :class="costCls(p.route?.cost)">{{ costLabel(p.route?.cost) }}</span>
+                      <span v-if="buildDetail(p).tun" class="md-chip md-chip-proto">{{ tunnelDisplay(p) }}</span>
+                      <span v-if="natLabel(p.route?.stun_info).text" class="md-chip md-chip-nat" :class="natLabel(p.route?.stun_info).cls">{{ natLabel(p.route?.stun_info).text }}</span>
+                    </div>
+                  </div>
                 </div>
               </div>
-              <div v-if="netExpanded[peerKey(p)] && buildDetail(p).tunFull" class="md-extra">{{ tt('protocols') }}: {{ buildDetail(p).tunFull }}</div>
-            </div>
+              <div class="net-peer-expand" :inert="!netExpanded[peerKey(p)]">
+                <div class="net-peer-expand-inner">
+                  <div class="net-peer-info">
+                    <span>{{ tt('version') }} <b class="mono">{{ netPeerVersion(p) }}</b></span>
+                  </div>
+                </div>
+              </div>
+            </article>
           </div>
 
           <!-- Servers -->
           <div v-if="netServers.length" class="md-section">
-            <div class="md-sec-hdr"><span class="md-sec-title">{{ tt('servers') }}</span><span class="md-badge">{{ netServers.length }}</span></div>
-            <div v-for="(p, si) in sortedServers" :key="peerKey(p)" class="md-card md-card-item md-card-enter" :style="{ animationDelay: (si * 0.1) + 's' }" @click="netExpanded[peerKey(p)] = !netExpanded[peerKey(p)]" @animationend="$event.target.classList.remove('md-card-enter')">
-              <div class="md-row md-row-top">
-                <div class="flex-1 min-w-0 flex items-center gap-2">
-                  <span class="md-name truncate">{{ displayHostname(p.route?.hostname) || tt('server') }}</span>
+            <div class="md-sec-hdr"><span class="md-sec-title">{{ tt('servers') }} ({{ netServers.length }})</span></div>
+            <article
+              v-for="(p, si) in sortedServers"
+              :key="peerKey(p)"
+              class="net-peer-card net-peer-card-server"
+              :class="{ 'net-peer-card-open': netExpanded[peerKey(p)] }"
+              :style="{ '--card-i': si + 2 }"
+              role="button"
+              tabindex="0"
+              :aria-expanded="!!netExpanded[peerKey(p)]"
+              @click="netExpanded[peerKey(p)] = !netExpanded[peerKey(p)]"
+              @keydown.enter.prevent="netExpanded[peerKey(p)] = !netExpanded[peerKey(p)]"
+              @keydown.space.prevent="netExpanded[peerKey(p)] = !netExpanded[peerKey(p)]"
+            >
+              <div class="net-peer-main">
+                <div class="net-peer-avatar" aria-hidden="true">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M20 13H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1v-6c0-.55-.45-1-1-1zM7 19c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zM20 3H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1V4c0-.55-.45-1-1-1zM7 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z"/></svg>
                 </div>
-                <span v-if="buildDetail(p).lat" class="md-quality" :class="qualityCls(buildDetail(p).lat, buildDetail(p).loss)">{{ qualityText(buildDetail(p).lat, buildDetail(p).loss) }}</span>
-              </div>
-              <div class="md-row md-row-bot">
-                <div class="flex-1 min-w-0 flex flex-col justify-end">
-                  <div class="md-sub">
-                    <template v-if="buildDetail(p).up"><span class="md-traffic-up-sub">{{ buildDetail(p).up }}</span></template>
-                    <template v-if="buildDetail(p).down"> &middot; <span class="md-traffic-down-sub">{{ buildDetail(p).down }}</span></template>
+                <div class="net-peer-body">
+                  <div class="net-peer-row">
+                    <span class="net-peer-name" :title="netPeerTitle(p, true)">{{ netPeerTitle(p, true) }}</span>
+                    <span v-if="buildDetail(p).lat" class="net-peer-ping">{{ qualityText(buildDetail(p).lat, buildDetail(p).loss) }}</span>
+                    <span v-else class="net-peer-ping net-peer-ping-muted">--</span>
                   </div>
-                  <div v-if="buildDetail(p).ver" class="md-sub" style="margin-top:2px;opacity:0.5">v{{ buildDetail(p).ver }}</div>
-                </div>
-                <div class="md-card-tags" :data-peer-key="peerKey(p)">
-                  <span class="md-rt" :class="costCls(p.route?.cost)">{{ costLabel(p.route?.cost) }}</span>
-                  <span v-if="buildDetail(p).tun" class="md-chip md-chip-proto">{{ tunnelDisplay(p) }}</span>
-                  <span v-if="natLabel(p.route?.stun_info).text" class="md-chip md-chip-nat" :class="natLabel(p.route?.stun_info).cls">{{ natLabel(p.route?.stun_info).text }}</span>
+                  <div class="net-peer-row net-peer-row-bottom">
+                    <div class="net-peer-left">
+                      <span v-if="buildDetail(p).up || buildDetail(p).down" class="net-peer-flow">
+                        <span v-if="buildDetail(p).up" class="net-peer-flow-up">{{ buildDetail(p).up }}</span>
+                        <span v-if="buildDetail(p).down" class="net-peer-flow-down">{{ buildDetail(p).down }}</span>
+                      </span>
+                    </div>
+                    <div class="md-card-tags net-peer-tags" :data-peer-key="peerKey(p)">
+                      <span class="md-rt" :class="costCls(p.route?.cost)">{{ costLabel(p.route?.cost) }}</span>
+                      <span v-if="buildDetail(p).tun" class="md-chip md-chip-proto">{{ tunnelDisplay(p) }}</span>
+                      <span v-if="natLabel(p.route?.stun_info).text" class="md-chip md-chip-nat" :class="natLabel(p.route?.stun_info).cls">{{ natLabel(p.route?.stun_info).text }}</span>
+                    </div>
+                  </div>
                 </div>
               </div>
-              <div v-if="netExpanded[peerKey(p)] && buildDetail(p).tunFull" class="md-extra">{{ tt('protocols') }}: {{ buildDetail(p).tunFull }}</div>
-            </div>
+              <div class="net-peer-expand" :inert="!netExpanded[peerKey(p)]">
+                <div class="net-peer-expand-inner">
+                  <div class="net-peer-info">
+                    <span>{{ tt('version') }} <b class="mono">{{ netPeerVersion(p) }}</b></span>
+                  </div>
+                </div>
+              </div>
+            </article>
           </div>
 
           <div v-if="!netPeers.length && !netServers.length" class="flex flex-col items-center justify-center py-12 gap-3 opacity-50">
@@ -2144,15 +3399,12 @@ onUnmounted(() => { window.removeEventListener('easytier-native-transfer', onNat
     </div>
 
     <!-- ==================== Router Tab ==================== -->
-    <div v-show="activeTab === 'luci'" class="md-page">
+    <div v-show="activeTab === 'luci'" class="md-page" :class="{ 'page-active': activeTab === 'luci' }">
       <header class="md-hdr">
         <span class="md-hdr-title">{{ currentLuciRouter?.ip || tt('routers') }}</span>
         <span v-if="currentLuciRouter && getWolPathType() === 'tunnel'" class="md-chip">{{ tt('etLan') }}</span>
         <span v-else-if="currentLuciRouter && getWolPathType() === 'lan'" class="md-chip">{{ tt('lanDirect') }}</span>
         <div class="flex-1" />
-        <button class="md-hdr-btn md-hdr-btn-glass" @click="openLuciEditorFn" :title="tt('editConfig')">
-          <svg width="20" height="20" viewBox="0 0 1024 1024" fill="currentColor"><path d="M714.965 128l-85.333 85.333H213.333v597.334h597.334V394.368L896 309.035v544.298A42.667 42.667 0 0 1 853.333 896H170.667A42.667 42.667 0 0 1 128 853.333V170.667A42.667 42.667 0 0 1 170.667 128h544.298z m159.062-38.4l60.373 60.416-392.192 392.192-60.245 0.128-0.086-60.459L874.027 89.6z"/></svg>
-        </button>
         <button v-if="proxyUrl" class="md-hdr-btn md-hdr-btn-glass" @click="refreshLuciIframe" :title="tt('refresh')">
           <svg width="20" height="20" viewBox="0 0 1024 1024" fill="currentColor"><path d="M128 170.666667l92.330667 92.330666A382.378667 382.378667 0 0 1 512 128c211.754667 0 384 172.288 384 384h-85.333333c0-164.693333-134.016-298.666667-298.666667-298.666667a297.557333 297.557333 0 0 0-231.125333 110.208L384 426.666667H128V170.666667z m768 682.666666v-256h-256l103.125333 103.125334A297.514667 297.514667 0 0 1 512 810.666667c-164.650667 0-298.666667-134.016-298.666667-298.666667H128c0 211.754667 172.245333 384 384 384a382.378667 382.378667 0 0 0 291.669333-134.997333L896 853.333333z"/></svg>
         </button>
@@ -2163,14 +3415,13 @@ onUnmounted(() => { window.removeEventListener('easytier-native-transfer', onNat
           <div v-if="showLuciMenu" class="md-switch-menu md-card" @click.stop>
             <div class="md-sw-item" @click="openLuciEditorFn">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="var(--md-primary)"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-              <span style="color:var(--md-primary);font-weight:500">{{ tt('addRouter') }}</span>
+              <span style="color:var(--md-primary);font-weight:500">{{ tt('editRouter') }}</span>
             </div>
             <div class="md-sw-divider" />
             <div v-for="(r, i) in luciRouters" :key="r.ip" class="md-sw-item" @click="switchLuciRouter(i)">
               <span v-if="i === luciIdx" class="md-sw-check">&#10003;</span>
               <span v-else style="width:18px;display:inline-block" />
               <span class="flex-1 truncate" :style="i === luciIdx ? 'color:var(--md-primary);font-weight:500' : ''">{{ r.ip }}</span>
-              <button class="md-sw-del" @click="deleteLuciRouter(i, $event)">&times;</button>
             </div>
         </div>
       </div>
@@ -2190,7 +3441,7 @@ onUnmounted(() => { window.removeEventListener('easytier-native-transfer', onNat
     </div>
 
     <!-- ==================== Settings Tab ==================== -->
-    <div v-show="activeTab === 'settings'" class="md-page">
+    <div v-show="activeTab === 'settings'" class="md-page md-page-bg" :class="{ 'page-active': activeTab === 'settings' }">
       <header class="md-hdr">
         <span class="md-hdr-title">{{ tt('settings') }}</span>
         <div class="flex-1" />
@@ -2202,7 +3453,7 @@ onUnmounted(() => { window.removeEventListener('easytier-native-transfer', onNat
         <div class="md-card md-hero md-hero-blue">
           <div class="md-hero-head">
             <div class="flex-1 min-w-0">
-              <div class="md-hero-title">EasyTier + WOLPlus</div>
+              <div class="md-hero-title">EasyTier</div>
               <div class="md-hero-text">{{ locale === 'cn' ? '异地组网和远程设备管理' : 'Virtual networking & remote device management' }}</div>
             </div>
             <button class="md-settings-btn md-settings-btn-primary" style="white-space:nowrap" @click="showAboutDlg = true">
@@ -2325,19 +3576,19 @@ onUnmounted(() => { window.removeEventListener('easytier-native-transfer', onNat
     <!-- ==================== Bottom Tab Bar ==================== -->
     <nav class="md-tabs" aria-label="Tab bar">
       <button class="md-tab" :class="{ 'md-tab-active': activeTab === 'wol' }" @click="switchTab('wol')" :aria-current="activeTab === 'wol' ? 'page' : 'false'">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="3"/><path d="M7 9h10"/><path d="M7 13h6"/></svg>
+        <span class="md-tab-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="3"/><path d="M7 9h10"/><path d="M7 13h6"/></svg></span>
         <span class="md-tab-label">{{ tt('wol') }}</span>
       </button>
       <button class="md-tab" :class="{ 'md-tab-active': activeTab === 'luci' }" @click="switchTab('luci')" :aria-current="activeTab === 'luci' ? 'page' : 'false'">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="m14.6 9.4-1.7 4.7-4.7 1.7 1.7-4.7 4.7-1.7Z"/></svg>
+        <span class="md-tab-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="m14.6 9.4-1.7 4.7-4.7 1.7 1.7-4.7 4.7-1.7Z"/></svg></span>
         <span class="md-tab-label">{{ tt('routers') }}</span>
       </button>
       <button class="md-tab" :class="{ 'md-tab-active': activeTab === 'net' }" @click="switchTab('net')" :aria-current="activeTab === 'net' ? 'page' : 'false'">
-        <svg viewBox="-4 -4 32 32" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/></svg>
+        <span class="md-tab-icon"><svg viewBox="-4 -4 32 32" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/></svg></span>
         <span class="md-tab-label">{{ tt('network') }}</span>
       </button>
       <button class="md-tab" :class="{ 'md-tab-active': activeTab === 'settings' }" @click="switchTab('settings')" :aria-current="activeTab === 'settings' ? 'page' : 'false'">
-        <svg viewBox="-4 -4 32 32" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <span class="md-tab-icon"><svg viewBox="-4 -4 32 32" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
         <span class="md-tab-label">{{ tt('settings') }}</span>
       </button>
     </nav>
@@ -2378,6 +3629,139 @@ onUnmounted(() => { window.removeEventListener('easytier-native-transfer', onNat
           <div class="flex-1" />
           <button class="md-dlg-btn" @click="showLuciEditor = false">{{ tt('cancel') }}</button>
           <button class="md-dlg-btn md-dlg-btn-save" @click="saveLuciConfig">{{ tt('save') }}</button>
+        </div>
+      </template>
+    </Dialog>
+
+    <!-- Computer custom command manager -->
+    <Dialog
+      v-model:visible="commandManager.visible"
+      modal
+      :header="locale === 'cn' ? '管理自定义命令' : 'Manage custom commands'"
+      :style="{ width: '92vw', maxWidth: '560px' }"
+      class="md-dialog"
+      :pt="{ closeButton: { style: 'display:none' }, header: { class: 'md-dialog-hdr' }, content: { class: 'md-dialog-content' }, footer: { class: 'md-dialog-ft' } }"
+    >
+      <div class="pc-manager">
+        <label class="pc-field">
+          <span>{{ locale === 'cn' ? '命令凭据（Agent Token）' : 'Command credential (Agent token)' }}</span>
+          <input v-model="commandManager.token" type="password" autocomplete="off" :placeholder="locale === 'cn' ? '输入 wol-agent 命令令牌' : 'Enter wol-agent command token'" />
+        </label>
+
+        <div v-if="commandPolicies[commandManager.deviceId]" class="pc-policy">
+          <div>{{ locale === 'cn' ? '允许目录' : 'Allowed directories' }}</div>
+          <code>{{ commandPolicies[commandManager.deviceId]!.allowed_program_dirs.join(', ') || '—' }}</code>
+          <div>{{ locale === 'cn' ? '禁止 Shell 执行' : 'Shell execution disabled' }}</div>
+        </div>
+
+        <div class="pc-manager-title">{{ locale === 'cn' ? '已保存命令' : 'Saved commands' }}</div>
+        <div v-if="!(deviceCommands[commandManager.deviceId] || []).length" class="pc-command-empty">
+          {{ locale === 'cn' ? '暂无命令' : 'No commands' }}
+        </div>
+        <div v-else class="pc-manager-list">
+          <div v-for="command in deviceCommands[commandManager.deviceId] || []" :key="command.id" class="pc-manager-item">
+            <div class="pc-command-text">
+              <span>{{ command.name }}</span>
+              <small class="mono" :title="formatDisplayCommand(command)">{{ formatDisplayCommand(command) }}</small>
+            </div>
+            <button class="pc-icon-btn pc-danger-icon" type="button" :aria-label="locale === 'cn' ? `删除 ${command.name}` : `Delete ${command.name}`" @click="deleteComputerCommand(command)">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="pc-manager-title">{{ locale === 'cn' ? '新建命令' : 'New command' }}</div>
+        <div v-if="commandManager.error" class="pc-run-error">{{ commandManager.error }}</div>
+
+        <label class="pc-field">
+          <span>{{ locale === 'cn' ? '名称' : 'Name' }}</span>
+          <input v-model="commandManager.name" maxlength="64" autocomplete="off" :placeholder="locale === 'cn' ? '例如：刷新 DNS 缓存' : 'Example: Flush DNS cache'" />
+        </label>
+
+        <label class="pc-field">
+          <span>{{ locale === 'cn' ? '可执行文件（绝对路径）' : 'Program (absolute path)' }}</span>
+          <input v-model="commandManager.program" class="mono" autocomplete="off" spellcheck="false" placeholder="C:\Tools\diag.exe" />
+        </label>
+
+        <label class="pc-field">
+          <span>{{ locale === 'cn' ? '参数（每行一个，可为空）' : 'Arguments (one per line, optional)' }}</span>
+          <Textarea v-model="commandManager.argsText" rows="3" class="w-full mono" :placeholder="locale === 'cn' ? '--quick' : '--quick'" />
+        </label>
+
+        <div class="pc-field-row">
+          <label class="pc-field">
+            <span>{{ locale === 'cn' ? '超时（秒）' : 'Timeout (seconds)' }}</span>
+            <input v-model.number="commandManager.timeoutSecs" type="number" min="1" :max="commandPolicies[commandManager.deviceId]?.max_timeout_secs || 600" />
+          </label>
+          <label class="pc-field">
+            <span>{{ locale === 'cn' ? '风险' : 'Risk' }}</span>
+            <select v-model="commandManager.risk">
+              <option value="normal">{{ locale === 'cn' ? '普通' : 'Normal' }}</option>
+              <option value="high">{{ locale === 'cn' ? '高风险' : 'High' }}</option>
+            </select>
+          </label>
+        </div>
+
+        <label class="pc-check-field">
+          <input v-model="commandManager.cancelable" type="checkbox" />
+          <span>{{ locale === 'cn' ? '允许取消' : 'Cancelable' }}</span>
+        </label>
+      </div>
+
+      <template #footer>
+        <div class="md-dlg-ft">
+          <button class="md-dlg-btn" @click="commandManager.visible = false">{{ tt('cancel') }}</button>
+          <div class="flex-1" />
+          <button class="md-dlg-btn" :disabled="commandManager.saving" @click="addComputerCommand">
+            {{ locale === 'cn' ? '添加' : 'Add' }}
+          </button>
+          <button class="md-dlg-btn md-dlg-btn-save" @click="finishCommandManager">{{ tt('save') }}</button>
+        </div>
+      </template>
+    </Dialog>
+
+    <!-- Computer command confirmation -->
+    <Dialog
+      v-model:visible="commandConfirm.visible"
+      modal
+      :header="locale === 'cn' ? '确认执行命令' : 'Confirm command'"
+      :style="{ width: '90vw', maxWidth: '440px' }"
+      class="md-dialog"
+      :pt="{ closeButton: { style: 'display:none' }, header: { class: 'md-dialog-hdr' }, content: { class: 'md-dialog-content' }, footer: { class: 'md-dialog-ft' } }"
+    >
+      <div v-if="confirmedCommand()" class="pc-confirm">
+        <div class="pc-confirm-icon" aria-hidden="true">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><path d="M20 4H4c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 14H4V8h16v10zm-2-1h-6v-2h6v2zM7.5 17l-1.41-1.41L8.67 13l-2.59-2.59L7.5 9l4 4-4 4z"/></svg>
+        </div>
+        <h3>{{ confirmedCommand()!.command.name }}</h3>
+        <p>{{ locale === 'cn' ? '目标设备' : 'Target device' }}：<b>{{ confirmedCommand()!.device.name }}</b></p>
+        <pre class="pc-confirm-command mono">{{ formatDisplayCommand(confirmedCommand()!.command) }}</pre>
+        <div class="pc-confirm-meta">
+          <span>{{ locale === 'cn' ? '超时' : 'Timeout' }}：{{ confirmedCommand()!.command.timeoutSecs }}s</span>
+          <span :class="{ 'pc-risk-high': confirmedCommand()!.command.risk === 'high' }">
+            {{ confirmedCommand()!.command.risk === 'high' ? (locale === 'cn' ? '高风险' : 'High risk') : (locale === 'cn' ? '普通风险' : 'Normal risk') }}
+          </span>
+        </div>
+
+        <label v-if="confirmedCommand()!.command.risk === 'high'" class="pc-field">
+          <span>{{ locale === 'cn' ? `输入设备名称“${confirmedCommand()!.device.name}”确认` : `Type “${confirmedCommand()!.device.name}” to confirm` }}</span>
+          <input v-model="commandConfirm.confirmText" autocomplete="off" />
+        </label>
+
+        <div v-if="commandConfirm.error" class="pc-run-error">{{ commandConfirm.error }}</div>
+      </div>
+
+      <template #footer>
+        <div class="md-dlg-ft" style="justify-content:flex-end;gap:8px">
+          <button class="md-dlg-btn" @click="commandConfirm.visible = false">{{ tt('cancel') }}</button>
+          <button
+            class="md-dlg-btn"
+            :class="{ 'md-dlg-btn-del': confirmedCommand()?.command.risk === 'high' }"
+            :disabled="confirmedCommand()?.command.risk === 'high' && commandConfirm.confirmText.trim() !== confirmedCommand()?.device.name"
+            @click="executeConfirmedCommand"
+          >
+            {{ locale === 'cn' ? '确认执行' : 'Run command' }}
+          </button>
         </div>
       </template>
     </Dialog>
@@ -2554,6 +3938,36 @@ onUnmounted(() => { window.removeEventListener('easytier-native-transfer', onNat
   --chart-disk-w: #ff9800;
   --chart-net-up: #43a047;
   --chart-net-down: #1e88e5;
+  --pc-series-1: #2a78d6;
+  --pc-series-2: #eb6834;
+  --pc-grid: rgba(68, 71, 78, .14);
+  --pc-good: #0ca30c;
+  --pc-warn: #fab219;
+  --pc-off: #8e9099;
+  --pc-bg: #f9f9ff;
+  --pc-surface-lowest: #fff;
+  --pc-surface-low: #f3f3fa;
+  --pc-surface: #ededf4;
+  --pc-surface-high: #e7e8ee;
+  --pc-surface-highest: #e2e2e9;
+  --pc-card-bg: #fff;
+  --pc-card-open-bg: #fff;
+  --pc-child-bg: #f5f6f9;
+  --pc-child-icon-bg: #fff;
+  --pc-on-surface: #191c20;
+  --pc-on-surface-var: #44474e;
+  --pc-outline: #74777f;
+  --pc-outline-var: #c4c6d0;
+  --pc-primary: #415f91;
+  --pc-primary-container: #d6e3ff;
+  --pc-on-primary-container: #001b3e;
+  --pc-secondary-container: #dae2f9;
+  --pc-on-secondary-container: #131c2b;
+  --pc-error: #ba1a1a;
+  --pw-on-bg: var(--n3-good-container);
+  --pw-on-fg: var(--n3-on-good-container);
+  --pw-off-bg: var(--n3-error-container);
+  --pw-off-fg: var(--n3-on-error-container);
   --md-primary: #0a84ff;
   --md-text: #0d1117;
   --md-secondary: #6f716f;
@@ -2561,6 +3975,35 @@ onUnmounted(() => { window.removeEventListener('easytier-native-transfer', onNat
   --md-border: rgba(36, 38, 36, 0.12);
   --md-shadow: 0 12px 34px rgba(45, 57, 76, 0.08);
   --md-radius: 22px;
+  --n3-surface: #fff;
+  --n3-surface-container-low: #f3f4f9;
+  --n3-surface-container-high: #e6e8ee;
+  --n3-on-surface-var: #44474e;
+  --n3-outline-variant: #d9dbe2;
+  --n3-primary: #2f6fed;
+  --n3-primary-container: #d9e7ff;
+  --n3-on-primary-container: #001b3f;
+  --n3-secondary-container: #e0e2ec;
+  --n3-on-secondary-container: #1a1c22;
+  --n3-tertiary-container: #e8def8;
+  --n3-on-tertiary-container: #1d192b;
+  --n3-good: #1e7d3f;
+  --n3-good-container: #e2f4e7;
+  --n3-on-good-container: #0f3d1e;
+  --n3-warn: #8a5a00;
+  --n3-warn-container: #fdeecd;
+  --n3-on-warn-container: #2b1d00;
+  --n3-error: #d93025;
+  --n3-error-container: #fde7e5;
+  --n3-on-error-container: #410002;
+  --n3-card-border: transparent;
+  --n3-card-shadow: 0 1px 2px rgba(16, 18, 24, .08), 0 1px 3px 1px rgba(16, 18, 24, .06);
+  --n3-hero-pink-a: #fdeef1;
+  --n3-hero-pink-b: #fdf4f6;
+  --n3-hero-green-a: #e6f5ec;
+  --n3-hero-green-b: #f1f9f4;
+  --n3-hero-blue-a: #e8f1ff;
+  --n3-hero-blue-b: #f3f7ff;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
@@ -2575,12 +4018,71 @@ html[data-theme="dark"] {
   --accent: #8ab4f8;
   --accent-soft: rgba(138, 180, 248, 0.18);
   --green: #44d46f;
+  --pc-series-1: #3987e5;
+  --pc-series-2: #d95926;
+  --pc-grid: rgba(196, 198, 208, .12);
+  --pc-good: #8fdc8a;
+  --pc-warn: #fab219;
+  --pc-off: #8e9099;
+  --pc-bg: #000;
+  --pc-surface-lowest: #000;
+  --pc-surface-low: #0b0b0d;
+  --pc-surface: #111214;
+  --pc-surface-high: #18191c;
+  --pc-surface-highest: #202125;
+  --pc-card-bg: #1c1f24;
+  --pc-card-open-bg: #1c1f24;
+  --pc-child-bg: #000;
+  --pc-child-icon-bg: #111214;
+  --pc-on-surface: #e2e2e9;
+  --pc-on-surface-var: #c4c6d0;
+  --pc-outline: #8e9099;
+  --pc-outline-var: #2e3137;
+  --pc-primary: #aac7ff;
+  --pc-primary-container: #1d3a66;
+  --pc-on-primary-container: #d6e3ff;
+  --pc-secondary-container: #262d3a;
+  --pc-on-secondary-container: #dae2f9;
+  --pc-error: #ffb4ab;
+  --pw-on-bg: var(--n3-good-container);
+  --pw-on-fg: var(--n3-on-good-container);
+  --pw-off-bg: var(--n3-error-container);
+  --pw-off-fg: var(--n3-on-error-container);
   --md-primary: #8ab4f8;
   --md-text: #f7f7f7;
   --md-secondary: #a0a0a0;
   --md-muted: #a0a0a0;
   --md-border: rgba(255, 255, 255, 0.13);
   --md-shadow: 0 12px 34px rgba(0, 0, 0, 0.5);
+  --n3-surface: #1c1f24;
+  --n3-surface-container-low: #181a1f;
+  --n3-surface-container-high: #2a2d33;
+  --n3-on-surface-var: #c4c6d0;
+  --n3-outline-variant: #3a3d44;
+  --n3-primary: #a9c7ff;
+  --n3-primary-container: #1d3a66;
+  --n3-on-primary-container: #d6e3ff;
+  --n3-secondary-container: #2c3038;
+  --n3-on-secondary-container: #e0e2ec;
+  --n3-tertiary-container: #4a4458;
+  --n3-on-tertiary-container: #e6dff8;
+  --n3-good: #8fd6a4;
+  --n3-good-container: #1e3d28;
+  --n3-on-good-container: #b8ecc6;
+  --n3-warn: #eec26a;
+  --n3-warn-container: #3d2e10;
+  --n3-on-warn-container: #fdeecd;
+  --n3-error: #ffb4ab;
+  --n3-error-container: #5c0a0a;
+  --n3-on-error-container: #ffdad6;
+  --n3-card-border: #26282e;
+  --n3-card-shadow: none;
+  --n3-hero-pink-a: #2c1d23;
+  --n3-hero-pink-b: #20181d;
+  --n3-hero-green-a: #18271d;
+  --n3-hero-green-b: #161e18;
+  --n3-hero-blue-a: #121c28;
+  --n3-hero-blue-b: #0d1319;
   background: #000;
 }
 
@@ -2592,6 +4094,8 @@ html[data-theme="dark"] {
   background: var(--bg);
 }
 .md-page { position:absolute; inset:0; }
+/* Net & settings pages reuse the computer page background (light #f9f9ff / dark #000) */
+.md-page-bg { background: var(--pc-bg); }
 
 .md-dialog {
   --p-dialog-border-radius: 20px;
@@ -2660,17 +4164,20 @@ html[data-theme="dark"] .md-hdr::before {
 }
 .md-hdr-title { font-size:1.28rem; font-weight:820; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; letter-spacing:-0.01em; margin-left:2px; }
 .md-connected-text { font-size:0.78rem; color:var(--green); font-weight:600; white-space:nowrap; }
-.md-hdr-btn { display:flex; align-items:center; border:none; background:none; padding:8px; border-radius:50%; cursor:pointer; color:var(--md-secondary); transition:transform 160ms ease, background-color 160ms ease; }
-.md-hdr-btn:active { transform:scale(0.92); background:rgba(0,0,0,0.06); }
-html[data-theme="dark"] .md-hdr-btn:active { background:rgba(255,255,255,0.08); }
-.md-hdr-btn-glass {
-  background:rgba(255,255,255,0.15);
-  backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px);
-  box-shadow:inset 0 0 0 1px rgba(255,255,255,0.2), 0 2px 8px rgba(0,0,0,0.06);
+.md-hdr-btn {
+  display:inline-grid; place-items:center; width:40px; height:40px; flex:none;
+  padding:0; border:none; border-radius:20px; background:transparent;
+  color:var(--n3-on-surface-var); cursor:pointer;
+  transition:transform 120ms ease, background-color 180ms ease, color 180ms ease;
 }
-.md-hdr-btn-glass:active { background:rgba(255,255,255,0.25); transform:scale(0.92); }
-html[data-theme="dark"] .md-hdr-btn-glass { background:rgba(255,255,255,0.08); box-shadow:inset 0 0 0 1px rgba(255,255,255,0.1), 0 2px 8px rgba(0,0,0,0.2); }
-html[data-theme="dark"] .md-hdr-btn-glass:active { background:rgba(255,255,255,0.14); }
+.md-hdr-btn:hover:not(:disabled) { transform:scale(1.04); }
+.md-hdr-btn:active:not(:disabled) { transform:scale(.94); background:color-mix(in srgb, currentColor 10%, transparent); }
+.md-hdr-btn-glass {
+  background:transparent;
+  backdrop-filter:none; -webkit-backdrop-filter:none;
+  box-shadow:none;
+}
+.md-hdr-btn-glass:active:not(:disabled) { background:color-mix(in srgb, currentColor 12%, transparent); transform:scale(.94); }
 
 /* Scroll view */
 .md-scroll-view {
@@ -2680,58 +4187,44 @@ html[data-theme="dark"] .md-hdr-btn-glass:active { background:rgba(255,255,255,0
 }
 .md-scroll-view::-webkit-scrollbar { display:none; }
 .md-scroll-content {
-  padding:calc(var(--safe-top) + 66px) 12px calc(var(--safe-bottom) + 64px);
+  padding:calc(var(--safe-top) + 66px) 12px calc(var(--safe-bottom) + 88px);
 }
 /* For Router tab iframe area */
 .md-iframe-area {
-  position:absolute; top:calc(var(--safe-top) + 56px); bottom:calc(var(--safe-bottom) + 64px); left:0; right:0;
+  position:absolute; top:calc(var(--safe-top) + 56px); bottom:calc(var(--safe-bottom) + 76px); left:0; right:0;
 }
 /* Connection info is now integrated into the hero card (no separate bar) */
-.md-hero-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.md-hero-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
 /* Connected hero card: green-tinted accent */
 .md-hero-connected {
-  background:linear-gradient(135deg, rgba(48,209,88,0.20), rgba(255,255,255,0.82)), linear-gradient(180deg, rgba(255,255,255,0.84), rgba(255,255,255,0.68)) !important;
+  background:linear-gradient(135deg, var(--n3-hero-green-a), var(--n3-hero-green-b)) !important;
 }
 html[data-theme="dark"] .md-hero-connected {
-  background:linear-gradient(135deg, rgba(68,212,111,0.20), rgba(12,12,12,0.9)), linear-gradient(180deg, rgba(18,18,18,0.92), rgba(0,0,0,0.8)) !important;
+  background:linear-gradient(135deg, var(--n3-hero-green-a), var(--n3-hero-green-b)) !important;
 }
-.md-status-pill { display:inline-flex; align-items:center; gap:5px; padding:4px 10px; border-radius:999px; background:rgba(48,209,88,0.16); color:var(--green); font-size:0.7rem; font-weight:700; flex-shrink:0; box-shadow:inset 0 0 0 1px rgba(48,209,88,0.18); }
-.md-status-dot { width:6px; height:6px; border-radius:50%; background:var(--green); }
+.md-status-pill {
+  display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 12px;
+  border-radius:8px; background:var(--n3-good-container); color:var(--n3-on-good-container);
+  font-size:13px; font-weight:500; flex-shrink:0;
+}
+.md-status-dot { width:8px; height:8px; border-radius:50%; background:currentColor; }
 .md-hero-head-right { display:inline-flex; align-items:center; gap:6px; flex-shrink:0; }
 .md-hero-conn-info { display:flex; align-items:center; flex-wrap:wrap; gap:6px 10px; margin-top:4px; }
 .md-hero-iface { margin-top:10px; }
 .md-hero-iface-row { font-size:0.72rem; color:var(--muted); line-height:1.6; word-break:break-all; }
-.md-hero-ip { font-size:0.86rem; font-weight:780; color:var(--ink); font-variant-numeric:tabular-nums; }
-
-/* Tonal buttons */
-.md-wake-btn, .md-shutdown-btn {
-  display:inline-flex; align-items:center; gap:6px;
-  min-height:34px; padding:0 14px; border:none; border-radius:999px;
-  font-size:0.85rem; font-weight:800; cursor:pointer;
-  transition:transform 160ms ease, background-color 160ms ease; flex-shrink:0;
-}
-.md-wake-btn { background:color-mix(in srgb, var(--accent) 15%, var(--panel-strong)); color:var(--accent); }
-.md-wake-btn:active { transform:scale(0.92); }
-html[data-theme="dark"] .md-wake-btn { background:color-mix(in srgb, var(--accent) 15%, var(--panel-strong)); color:var(--accent); }
-.md-shutdown-btn { background:color-mix(in srgb, #ef5350 15%, var(--panel-strong)); color:#ef5350; }
-.md-shutdown-btn:active { transform:scale(0.92); }
-html[data-theme="dark"] .md-shutdown-btn { background:color-mix(in srgb, #ef9a9a 15%, var(--panel-strong)); color:#ef9a9a; }
+.md-hero-ip { font-size:14px; font-weight:400; color:var(--n3-on-surface-var); font-variant-numeric:tabular-nums; }
 
 /* Chips */
-.md-chip { display:inline-flex; align-items:center; min-height:30px; padding:0 12px; border-radius:999px; font-size:0.75rem; font-weight:780; background:rgba(10,132,255,0.12); color:var(--accent); box-shadow:inset 0 0 0 1px rgba(10,132,255,0.16); }
-html[data-theme="dark"] .md-chip { background:rgba(100,181,255,0.14); color:var(--accent); box-shadow:inset 0 0 0 1px rgba(100,181,255,0.16); }
+.md-chip {
+  display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 12px;
+  border-radius:8px; background:var(--n3-primary-container); color:var(--n3-on-primary-container);
+  font-size:13px; font-weight:500; white-space:nowrap;
+}
 
 /* NAT colors (chip with semantic colors) */
-.md-nat-g { background:rgba(48,209,88,0.12); color:var(--green); box-shadow:inset 0 0 0 1px rgba(48,209,88,0.16); }
-.md-nat-b { background:rgba(10,132,255,0.12); color:var(--accent); box-shadow:inset 0 0 0 1px rgba(10,132,255,0.16); }
-.md-nat-o { background:rgba(255,159,10,0.12); color:#ff9f0a; box-shadow:inset 0 0 0 1px rgba(255,159,10,0.16); }
-
-/* Quality */
-.md-quality { font-size:0.72rem; font-weight:600; flex-shrink:0; white-space:nowrap; }
-.md-q-good { color:var(--green); }
-.md-q-info { color:var(--accent); }
-.md-q-warn { color:#ff9f0a; }
-.md-q-bad { color:#ef5350; }
+.md-nat-g { background:var(--n3-good-container); color:var(--n3-on-good-container); }
+.md-nat-b { background:var(--n3-primary-container); color:var(--n3-on-primary-container); }
+.md-nat-o { background:var(--n3-tertiary-container); color:var(--n3-on-tertiary-container); }
 
 .md-connect-btn {
   position:relative; overflow:visible;
@@ -2739,7 +4232,7 @@ html[data-theme="dark"] .md-chip { background:rgba(100,181,255,0.14); color:var(
   padding:30px 44px; border:none; border-radius:26px; min-width:140px;
   background:var(--accent); color:#fff;
   font-size:1.05rem; font-weight:700; cursor:pointer;
-  box-shadow:var(--md-shadow), inset 0 0 0 1px rgba(255,255,255,0.18);
+  box-shadow:var(--md-shadow);
   transition: background 0.4s ease, color 0.4s ease, box-shadow 0.4s ease, transform 0.15s ease;
 }
 .md-connect-ico { position:relative; width:32px; height:32px; flex-shrink:0; }
@@ -2754,7 +4247,7 @@ html[data-theme="dark"] .md-chip { background:rgba(100,181,255,0.14); color:var(
 .md-connect-btn-loading {
   background:color-mix(in srgb, var(--accent) 60%, rgba(0,0,0,0.25));
   color:#fff; cursor:not-allowed;
-  box-shadow:inset 0 0 0 1px rgba(255,255,255,0.12);
+  box-shadow:none;
 }
 .md-connect-btn-loading::before,
 .md-connect-btn-loading::after {
@@ -2771,7 +4264,10 @@ html[data-theme="dark"] .md-chip { background:rgba(100,181,255,0.14); color:var(
   transform:scale(1); opacity:0;
   animation-delay:0.55s;
 }
-html[data-theme="dark"] .md-connect-btn-loading::before, html[data-theme="dark"] .md-connect-btn-loading::after { background:color-mix(in srgb, var(--accent) 60%, transparent); }
+html[data-theme="dark"] .md-connect-btn { background:var(--n3-primary-container); color:var(--n3-on-primary-container); box-shadow:var(--md-shadow); }
+html[data-theme="dark"] .md-connect-btn-loading { background:color-mix(in srgb, var(--n3-primary-container) 65%, rgba(0,0,0,0.35)); color:var(--n3-on-primary-container); box-shadow:none; }
+html[data-theme="dark"] .md-connect-btn-loading::before, html[data-theme="dark"] .md-connect-btn-loading::after { background:color-mix(in srgb, var(--n3-primary-container) 60%, transparent); }
+html[data-theme="dark"] .md-connect-btn-loading svg { color:color-mix(in srgb, var(--n3-on-primary-container) 85%, transparent); }
 .md-connect-btn-loading svg { color:rgba(255,255,255,0.8); }
 .md-connect-btn-loading:active { transform:none; }
 @keyframes connect-ripple {
@@ -2781,18 +4277,17 @@ html[data-theme="dark"] .md-connect-btn-loading::before, html[data-theme="dark"]
 
 /* Section */
 .md-section { margin-bottom:4px; }
-.md-sec-hdr { display:flex; align-items:center; gap:8px; padding:10px 2px 8px; }
-.md-sec-title { font-size:0.75rem; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; flex:1; }
-.md-badge { font-size:0.7rem; font-weight:700; padding:2px 10px; border-radius:999px; background:var(--accent); color:#fff; line-height:1.2; }
+.md-sec-hdr { display:flex; align-items:center; gap:8px; padding:2px 8px 12px; }
+.md-sec-title { font-size:14px; font-weight:500; color:var(--pc-primary); letter-spacing:.1px; flex:1; }
 
 /* Card */
 .md-card {
   background:var(--panel-strong); border-radius:var(--md-radius);
-  box-shadow:var(--md-shadow), inset 0 0 0 1px rgba(255,255,255,0.76);
+  box-shadow:var(--md-shadow);
   margin-bottom:10px; cursor:pointer; transition:opacity 0.3s, box-shadow 0.3s, transform 0.3s;
 }
 html[data-theme="dark"] .md-card {
-  box-shadow:var(--md-shadow), inset 0 0 0 1px rgba(255,255,255,0.08);
+  box-shadow:var(--md-shadow);
 }
 .md-card-dim { opacity:0.55; }
 .md-card-item { margin-bottom:10px; }
@@ -2821,10 +4316,14 @@ html[data-theme="dark"] .md-card {
 .animate-pulse { animation:pulse 1.5s ease-in-out infinite; }
 
 /* Route tag (chip with semantic colors) */
-.md-rt { display:inline-flex; align-items:center; min-height:30px; padding:0 12px; border-radius:999px; font-size:0.75rem; font-weight:780; text-transform:uppercase; letter-spacing:0.3px; flex-shrink:0; }
-.md-rt-l { background:rgba(48,209,88,0.12); color:var(--green); box-shadow:inset 0 0 0 1px rgba(48,209,88,0.16); }
-.md-rt-p { background:rgba(48,209,88,0.12); color:var(--green); box-shadow:inset 0 0 0 1px rgba(48,209,88,0.16); }
-.md-rt-r { background:rgba(255,159,10,0.12); color:#ff9f0a; box-shadow:inset 0 0 0 1px rgba(255,159,10,0.16); }
+.md-rt {
+  display:inline-flex; align-items:center; height:28px; padding:0 10px;
+  border-radius:8px; font-size:12px; font-weight:500;
+  text-transform:uppercase; letter-spacing:0; flex-shrink:0;
+}
+.md-rt-l { background:var(--n3-primary-container); color:var(--n3-on-primary-container); }
+.md-rt-p { background:var(--n3-good-container); color:var(--n3-on-good-container); }
+.md-rt-r { background:var(--n3-secondary-container); color:var(--n3-on-secondary-container); }
 
 /* Switch menu */
 .md-switch-menu {
@@ -2853,76 +4352,74 @@ html[data-theme="dark"] .md-sw-item:active { background:rgba(255,255,255,0.06); 
 .md-about-ver { font-size:0.75rem; font-weight:400; color:var(--muted); margin-left:8px; }
 
 /* Toggle switch */
-.md-toggle { width:48px; height:30px; border-radius:999px; background:rgba(120,120,120,0.24); flex-shrink:0; position:relative; transition:background 0.2s; box-shadow:inset 0 0 0 1px rgba(120,120,120,0.18); cursor:pointer; }
-.md-toggle::after { content:''; position:absolute; top:4px; left:4px; width:22px; height:22px; border-radius:50%; background:#fff; transition:transform 0.2s, background-color 0.2s; box-shadow:0 2px 8px rgba(0,0,0,0.18); }
-.md-toggle-on { background:var(--accent); }
-.md-toggle-on::after { transform:translateX(18px); }
+.md-toggle { width:48px; height:28px; border-radius:999px; background:var(--n3-surface-container-high); border:2px solid var(--pc-outline); box-sizing:border-box; flex-shrink:0; position:relative; cursor:pointer; transition:background 0.2s, border-color 0.2s; }
+.md-toggle::after { content:''; position:absolute; top:50%; left:4px; width:16px; height:16px; border-radius:50%; background:var(--pc-outline); transform:translateY(-50%); transition:left 0.25s cubic-bezier(0.2,0,0,1), width 0.25s cubic-bezier(0.2,0,0,1), height 0.25s cubic-bezier(0.2,0,0,1), background-color 0.2s; }
+.md-toggle-on { background:var(--accent); border-color:var(--accent); }
+.md-toggle-on::after { left:20px; width:22px; height:22px; background:#fff; }
+html[data-theme="dark"] .md-toggle-on::after { background:#0d1117; }
 
 /* Select dropdown — matches button style */
 .md-select {
-  padding:0 28px 0 14px; border:none; border-radius:999px;
-  font-size:0.85rem; font-weight:800; cursor:pointer; min-height:34px; line-height:34px;
-  background-color:rgba(127,127,127,0.08); color:var(--muted); flex-shrink:0;
+  height:34px; padding:0 26px 0 12px; border:none; border-radius:17px;
+  font-size:13px; font-weight:500; cursor:pointer; line-height:34px;
+  background-color:var(--n3-secondary-container); color:var(--n3-on-secondary-container); flex-shrink:0;
   appearance:none; -webkit-appearance:none;
   background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24'%3E%3Cpath d='M7 10l5 5 5-5z' fill='%236f716f'/%3E%3C/svg%3E");
-  background-repeat:no-repeat; background-position:right 10px center; background-size:10px 10px;
+  background-repeat:no-repeat; background-position:right 8px center; background-size:9px 9px;
   transition:transform 160ms ease, background-color 160ms ease;
 }
 .md-select::-webkit-calendar-picker-indicator { opacity:0; width:0; height:0; }
-.md-select:active { transform:scale(0.92); background-color:rgba(127,127,127,0.16); }
-html[data-theme="dark"] .md-select {
-  background-color:rgba(255,255,255,0.08); color:#f2f2f2;
-}
-html[data-theme="dark"] .md-select:active {
-  background-color:rgba(255,255,255,0.16);
-}
+.md-select:active { transform:scale(.95); background-color:var(--n3-surface-container-high); }
 .md-select:focus { outline:none; }
 
-/* ===== Glass Tab Bar ===== */
+/* ===== Bottom Navigation ===== */
 .md-tabs {
   position:absolute; bottom:0; left:0; right:0;
-  height:calc(var(--safe-bottom) + 64px);
-  display:grid; grid-template-columns:repeat(4, 1fr); gap:6px;
-  padding:6px 10px calc(var(--safe-bottom) + 6px);
+  height:calc(var(--safe-bottom) + 76px);
+  display:grid; grid-template-columns:repeat(4, 1fr);
+  padding:6px 16px calc(var(--safe-bottom) + 8px);
   overflow:hidden;
-  background:linear-gradient(180deg, rgba(252,255,255,0.075), rgba(222,244,255,0.018)), rgba(246,252,255,0.04);
+  background:linear-gradient(180deg, rgba(252,255,255,.075), rgba(222,244,255,.018)), rgba(246,252,255,.04);
   backdrop-filter:brightness(1.045) saturate(520%) contrast(1.03) blur(14px);
   -webkit-backdrop-filter:brightness(1.045) saturate(520%) contrast(1.03) blur(14px);
-  border-top:1px solid rgba(38,56,82,0.07);
-  box-shadow:0 -5px 16px rgba(36,52,76,0.038), inset 0 1px 0 rgba(255,255,255,0.14);
+  border-top:1px solid rgba(38,56,82,.07);
+  box-shadow:0 -5px 16px rgba(36,52,76,.038), inset 0 1px 0 rgba(255,255,255,.14);
   z-index:10;
 }
 .md-tabs::before {
   content:""; position:absolute; inset:0; z-index:0;
   background:
-    linear-gradient(180deg, transparent 66%, #FCFCFC 100%),
-    linear-gradient(180deg, rgba(255,255,255,0.055), rgba(211,239,255,0.015));
-  opacity:1;
+    linear-gradient(180deg, transparent 66%, rgba(252,252,252,.96) 100%),
+    linear-gradient(180deg, rgba(255,255,255,.055), rgba(211,239,255,.015));
   pointer-events:none;
 }
 .md-tabs > * { position:relative; z-index:1; }
 html[data-theme="dark"] .md-tabs {
-  background:linear-gradient(180deg, rgba(10,10,10,0.1), rgba(0,0,0,0.02)), rgba(0,0,0,0.06);
-  border-top-color:rgba(255,255,255,0.085);
-  box-shadow:0 -5px 16px rgba(0,0,0,0.34), inset 0 1px 0 rgba(255,255,255,0.07);
+  background:linear-gradient(180deg, rgba(10,10,10,.1), rgba(0,0,0,.02)), rgba(0,0,0,.06);
+  border-top-color:rgba(255,255,255,.085);
+  box-shadow:0 -5px 16px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.07);
 }
 html[data-theme="dark"] .md-tabs::before {
   background:
-    linear-gradient(180deg, transparent 66%, var(--bg) 100%),
-    linear-gradient(180deg, rgba(255,255,255,0.025), rgba(255,255,255,0.008));
+    linear-gradient(180deg, transparent 66%, #000 100%),
+    linear-gradient(180deg, rgba(255,255,255,.025), rgba(255,255,255,.008));
 }
 .md-tab {
-  display:grid; place-items:center; align-content:center; gap:3px; min-width:0;
-  border-radius:18px; background:transparent;
-  border:none; cursor:pointer;
-  color:#758093; transition:color 180ms ease, background-color 180ms ease, transform 180ms ease;
+  display:flex; flex-direction:column; align-items:center; justify-content:flex-start; gap:4px;
+  min-width:0; padding:4px 0; border-radius:0; background:transparent; border:none;
+  color:var(--n3-on-surface-var); cursor:pointer;
+  font-size:12px; font-weight:500;
+  transition:color 180ms ease, transform 120ms ease;
 }
-html[data-theme="dark"] .md-tab { color:#93a2b5; }
-.md-tab:active { transform:scale(0.94); }
-.md-tab-active { color:var(--accent); background:rgba(10,132,255,0.055); box-shadow:inset 0 0 0 1px rgba(10,132,255,0.08); }
-html[data-theme="dark"] .md-tab-active { background:rgba(100,181,255,0.095); box-shadow:inset 0 0 0 1px rgba(100,181,255,0.1); }
-.md-tab svg { width:21px; height:21px; }
-.md-tab-label { font-size:10px; line-height:1; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%; }
+.md-tab:active { transform:scale(.96); }
+.md-tab-active { color:var(--n3-primary); background:transparent; box-shadow:none; }
+.md-tab-icon {
+  display:grid; place-items:center; width:56px; height:32px; border-radius:16px;
+  transition:background-color 180ms ease, color 180ms ease;
+}
+.md-tab-active .md-tab-icon { background:var(--n3-primary-container); color:var(--n3-on-primary-container); }
+.md-tab-icon svg { width:22px; height:22px; }
+.md-tab-label { font-size:12px; line-height:16px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%; }
 
 @keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
 .animate-spin { animation:spin 1s linear infinite; }
@@ -2947,14 +4444,98 @@ html[data-theme="dark"] .md-tab-active { background:rgba(100,181,255,0.095); box
 @keyframes md-snack-in { from{opacity:0;transform:translateX(-50%) translateY(12px)} to{opacity:1;transform:translateX(-50%) translateY(0)} }
 
 /* Traffic speed chart */
-.md-traffic-card { padding:12px 16px 4px; margin-top:6px; margin-bottom:10px; cursor:default; }
-.md-traffic-hdr { display:flex; justify-content:space-between; font-size:0.7rem; font-weight:600; margin-bottom:2px; }
-.md-traffic-label { margin-right:12px; }
-.md-traffic-total { text-align:right; font-size:0.68rem; color:var(--muted); flex-shrink:0; }
+.md-traffic-card {
+  --panel: var(--panel-strong);
+  --muted: var(--n3-on-surface-var);
+  padding:16px; margin-top:6px; margin-bottom:16px; cursor:default;
+}
+/* Dark mode: list-style cards share the network list item surface */
+html[data-theme="dark"] .md-settings-card,
+html[data-theme="dark"] .md-traffic-card { background:var(--n3-surface); }
+.md-traffic-hdr { display:flex; align-items:center; justify-content:space-between; gap:12px; font-size:12px; font-weight:600; margin-bottom:6px; }
+.md-traffic-label { display:inline-flex; align-items:center; margin:0; white-space:nowrap; }
+.md-traffic-total,
+.md-traffic-current { display:flex; align-items:center; gap:12px; font-size:12px; font-weight:600; flex-shrink:0; }
+.md-traffic-total { text-align:left; }
+.md-traffic-current { justify-content:flex-end; }
 .md-traffic-up-sub { color:var(--green); font-size:0.7rem; }
 .md-traffic-down-sub { color:var(--accent); font-size:0.7rem; }
-.md-traffic-svg { width:100%; height:90px; display:block; }
-.md-traffic-chart-wrap { position:relative; }
+
+/* Network peer / server cards: n3 list layout, no hover state. */
+.net-peer-card {
+  margin-bottom:12px;
+  overflow:hidden;
+  border:0;
+  border-radius:24px;
+  background:var(--n3-surface);
+  box-shadow:var(--md-shadow);
+  cursor:pointer;
+  transition:background-color .3s, border-color .3s, box-shadow .3s;
+}
+.net-peer-card:focus-visible { outline:2px solid var(--n3-primary); outline-offset:2px; }
+.net-peer-main { display:flex; align-items:center; gap:12px; padding:12px 14px; }
+.net-peer-avatar {
+  display:grid; place-items:center; width:40px; height:40px; flex:none;
+  border-radius:12px; background:var(--n3-secondary-container); color:var(--n3-on-secondary-container);
+}
+.net-peer-body { display:flex; flex:1; flex-direction:column; gap:4px; min-width:0; }
+.net-peer-row { display:flex; align-items:center; justify-content:space-between; gap:12px; min-width:0; }
+.net-peer-row-bottom { align-items:center; }
+.net-peer-title { display:flex; align-items:baseline; gap:4px; flex:1; min-width:0; }
+.net-peer-dot { flex:none; color:var(--n3-on-surface-var); font-size:12px; line-height:16px; opacity:.6; }
+.net-peer-name {
+  flex:0 1 auto; min-width:0; overflow:hidden;
+  font-size:15px; line-height:22px; font-weight:500;
+  text-overflow:ellipsis; white-space:nowrap;
+}
+.net-peer-ping {
+  flex:none; color:var(--n3-primary);
+  font-size:12px; line-height:16px; font-weight:500;
+  font-variant-numeric:tabular-nums; white-space:nowrap;
+}
+.net-peer-ping-muted { color:var(--n3-on-surface-var); }
+.net-peer-left { display:flex; flex:1; align-items:center; min-width:0; }
+.net-peer-ip {
+  flex:none;
+  color:var(--n3-on-surface-var); font-size:12px; line-height:16px;
+  font-variant-numeric:tabular-nums; white-space:nowrap;
+}
+.net-peer-flow {
+  display:flex; align-items:center; gap:8px;
+  color:var(--n3-on-surface-var); font-size:11px; line-height:15px; font-weight:700;
+  font-variant-numeric:tabular-nums; white-space:nowrap;
+}
+.net-peer-flow-up { color:var(--n3-good); }
+.net-peer-flow-down { color:var(--n3-primary); }
+.net-peer-tags {
+  display:flex; flex:0 1 auto; flex-wrap:wrap; justify-content:flex-end; align-content:center;
+  gap:8px; max-width:58%; min-width:0;
+}
+.net-peer-tags .md-chip { height:24px; padding:0 8px; font-size:11px; }
+.net-peer-tags .md-rt { height:24px; padding:0 8px; font-size:11px; }
+.net-peer-expand {
+  display:grid; grid-template-rows:0fr;
+  transition:grid-template-rows .4s cubic-bezier(.2,0,0,1);
+}
+.net-peer-card-open .net-peer-expand { grid-template-rows:1fr; }
+.net-peer-expand-inner { min-height:0; overflow:hidden; }
+.net-peer-info {
+  display:flex; flex-wrap:wrap; gap:8px;
+  margin:0 14px 12px; padding-top:10px;
+  border-top:1px solid var(--n3-outline-variant);
+  opacity:0; transform:translateY(-4px);
+  transition:opacity .25s ease, transform .35s cubic-bezier(.2,0,0,1);
+}
+.net-peer-card-open .net-peer-info { opacity:1; transform:none; }
+.net-peer-info span {
+  display:inline-flex; align-items:center; min-width:0; height:28px; padding:0 12px;
+  border-radius:8px; background:var(--n3-secondary-container); color:var(--n3-on-surface-var);
+  font-size:12px;
+}
+.net-peer-info b {
+  max-width:100%; margin-left:6px; overflow:hidden;
+  color:var(--ink); font-weight:500; text-overflow:ellipsis; white-space:nowrap;
+}
 
 /* Parent-child hierarchy: parent remains primary, children form an indented tree workspace */
 .md-device-group { position:relative; margin-bottom:12px; }
@@ -3007,9 +4588,6 @@ html[data-theme="dark"] .md-tab-active { background:rgba(100,181,255,0.095); box
   border-radius:999px;
   background:color-mix(in srgb, var(--accent) 26%, transparent);
 }
-.md-animated { animation:stats-slide-in 0.35s ease-out both; animation-delay:calc(var(--i, 0) * 0.08s); }
-.md-card-enter { animation:stats-slide-in 0.35s ease-out both; }
-@keyframes stats-slide-in { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
 .md-device-children > .md-stats-card:last-of-type { margin-bottom:6px; }
 .md-stats-loading-card { padding:8px 16px; }
 .md-stats-info-card { padding:10px 16px; }
@@ -3035,43 +4613,34 @@ html[data-theme="dark"] .md-tab-active { background:rgba(100,181,255,0.095); box
 .md-disk-total-usage, .md-part-usage { position:relative; z-index:1; font-size:0.64rem; color:var(--ink); flex-shrink:0; margin-left:auto; opacity:0.7; }
 .md-part-label { position:relative; z-index:1; font-size:0.68rem; color:var(--muted); flex-shrink:0; }
 
-.md-chart-label { position:absolute; font-size:0.5rem; color:var(--muted); font-family:sans-serif; pointer-events:none; white-space:nowrap; }
-.md-chart-y-max { left:2px; top:1px; }
-.md-chart-x-start { left:2px; bottom:0; }
-.md-chart-x-mid { left:50%; transform:translateX(-50%); bottom:0; }
-.md-chart-x-end { right:2px; bottom:0; }
-
 /* LuCI iframe */
 .luci-iframe { width:100%; height:100%; border:none; }
 
 /* Settings action buttons (tonal-btn style) */
 .md-settings-btn {
-  display:inline-flex; align-items:center; gap:6px;
-  min-height:34px; padding:0 14px; border:none; border-radius:999px;
-  font-size:0.85rem; font-weight:800; cursor:pointer;
-  transition:transform 160ms ease, background-color 160ms ease; flex-shrink:0;
-  background:rgba(127,127,127,0.08); color:var(--muted);
+  display:inline-flex; align-items:center; justify-content:center; gap:8px;
+  height:40px; padding:0 18px; border:none; border-radius:20px;
+  font-size:14px; font-weight:500; cursor:pointer; flex-shrink:0;
+  transition:transform 120ms ease, background-color 200ms ease, color 200ms ease;
+  background:var(--n3-secondary-container); color:var(--n3-on-secondary-container);
 }
-.md-settings-btn svg { width:18px; height:18px; flex-shrink:0; }
-.md-hdr .md-settings-btn { min-height:30px; padding:0 10px; gap:5px; font-size:0.78rem; font-weight:700; }
+.md-settings-btn svg { width:20px; height:20px; flex-shrink:0; }
+.md-hdr .md-settings-btn { height:34px; padding:0 12px; gap:6px; font-size:0.78rem; font-weight:500; border-radius:17px; }
 .md-hdr .md-settings-btn svg { width:16px; height:16px; }
 .md-refresh-icon { display:inline-block; }
-.md-settings-btn:active { transform:scale(0.92); }
-html[data-theme="dark"] .md-settings-btn { background:rgba(255,255,255,0.08); }
-.md-settings-btn-export { background:color-mix(in srgb, var(--green) 15%, var(--panel-strong)); color:var(--green); }
-.md-settings-btn-export:active { transform:scale(0.92); }
-.md-settings-btn-primary { background:color-mix(in srgb, var(--accent) 15%, var(--panel-strong)); color:var(--accent); }
-.md-settings-btn-primary:active { transform:scale(0.92); }
-html[data-theme="dark"] .md-settings-btn-primary { background:color-mix(in srgb, var(--accent) 15%, var(--panel-strong)); color:var(--accent); }
-.md-settings-btn-white { background:rgba(127,127,127,0.12); color:var(--ink); }
-.md-settings-btn-white:active { transform:scale(0.92); background:rgba(127,127,127,0.2); }
-html[data-theme="dark"] .md-settings-btn-white { background:rgba(255,255,255,0.12); color:#f2f2f2; }
-html[data-theme="dark"] .md-settings-btn-white:active { background:rgba(255,255,255,0.2); }
-.md-settings-btn-green { background:color-mix(in srgb, var(--green) 15%, var(--panel-strong)); color:var(--green); }
-.md-settings-btn-green:active { transform:scale(0.92); }
-.md-settings-btn-red { background:color-mix(in srgb, #ef5350 15%, var(--panel-strong)); color:#ef5350; }
-.md-settings-btn-red:active { transform:scale(0.92); }
-html[data-theme="dark"] .md-settings-btn-red { background:color-mix(in srgb, #ef5350 15%, var(--panel-strong)); color:#ef9a9a; }
+.md-settings-btn:hover:not(:disabled) { transform:scale(1.02); }
+.md-settings-btn:active:not(:disabled) { transform:scale(.95); }
+.md-settings-btn:disabled { opacity:.4; cursor:default; }
+.md-settings-btn-export,
+.md-settings-btn-green { background:var(--n3-good-container); color:var(--n3-on-good-container); }
+.md-settings-btn-primary { background:var(--n3-primary-container); color:var(--n3-on-primary-container); }
+.md-settings-btn-white { background:var(--n3-secondary-container); color:var(--n3-on-secondary-container); }
+.md-settings-btn-red { background:var(--n3-error-container); color:var(--n3-on-error-container); }
+/* Compact tonal buttons inside hero cards and settings rows */
+.md-hero .md-settings-btn,
+.md-settings-card .md-settings-btn { height:34px; padding:0 12px; gap:6px; border-radius:17px; font-size:13px; }
+.md-hero .md-settings-btn svg,
+.md-settings-card .md-settings-btn svg { width:16px; height:16px; }
 
 /* Help / About dialog content */
 .md-help-section { padding:12px 0; }
@@ -3106,49 +4675,1339 @@ html[data-theme="dark"] .md-help-note { background:rgba(255,255,255,0.04); }
 .md-symbol svg { width:22px; height:22px; stroke-width:2.15; }
 .md-settings-card .md-symbol { width:40px; height:40px; border-radius:14px; }
 .md-settings-card .md-symbol svg { width:18px; height:18px; }
+.md-settings-card .md-name { font-size:16px; line-height:24px; font-weight:400; }
 /* Label stack (right-aligned meta info) — bordered label style */
-.md-label-stack { display:grid; gap:3px; justify-items:end; flex-shrink:0; padding:6px 12px; border-radius:10px; background:rgba(127,127,127,0.05); box-shadow:inset 0 0 0 1px var(--line); }
-.md-label-stack b { color:var(--ink); font-size:0.75rem; line-height:1; font-weight:700; }
-.md-label-stack span { color:var(--muted); font-size:0.68rem; line-height:1; }
-html[data-theme="dark"] .md-label-stack { background:rgba(255,255,255,0.04); }
+.md-label-stack {
+  display:grid; gap:2px; justify-items:end; flex-shrink:0;
+  padding:4px 10px; border-radius:8px;
+  background:var(--n3-secondary-container); color:var(--n3-on-secondary-container);
+}
+.md-label-stack b { color:currentColor; font-size:11px; line-height:14px; font-weight:500; }
+.md-label-stack span { color:currentColor; font-size:10px; line-height:12px; opacity:.72; }
 
 /* Hero card (top of each tab) */
-/* Hero cards: no inset border — background gradient blends with card fill */
 .md-hero {
-  padding:18px; margin-bottom:10px;
-  background:linear-gradient(135deg, rgba(10,132,255,0.14), rgba(255,255,255,0.82)), linear-gradient(180deg, rgba(255,255,255,0.84), rgba(255,255,255,0.68));
+  display:flex; flex-direction:column; gap:12px;
+  padding:20px; margin-bottom:16px;
+  border:0; border-radius:28px;
   box-shadow:var(--md-shadow);
+  background:linear-gradient(135deg, var(--n3-hero-blue-a), var(--n3-hero-blue-b));
+  cursor:default;
 }
 html[data-theme="dark"] .md-hero {
-  background:linear-gradient(135deg, rgba(138,180,248,0.12), rgba(12,12,12,0.9)), linear-gradient(180deg, rgba(18,18,18,0.92), rgba(0,0,0,0.8));
+  background:linear-gradient(135deg, var(--n3-hero-blue-a), var(--n3-hero-blue-b));
   box-shadow:var(--md-shadow);
 }
 /* Per-tab hero tints: 电脑=粉, 组网=绿, 设置=蓝 */
 .md-hero-purple {
-  background:linear-gradient(135deg, rgba(251,146,180,0.28), rgba(255,255,255,0.82)), linear-gradient(180deg, rgba(255,255,255,0.84), rgba(255,255,255,0.68)) !important;
+  background:linear-gradient(135deg, var(--n3-hero-pink-a), var(--n3-hero-pink-b)) !important;
 }
 html[data-theme="dark"] .md-hero-purple {
-  background:linear-gradient(135deg, rgba(251,146,180,0.24), rgba(12,12,12,0.9)), linear-gradient(180deg, rgba(18,18,18,0.92), rgba(0,0,0,0.8)) !important;
+  background:linear-gradient(135deg, var(--n3-hero-pink-a), var(--n3-hero-pink-b)) !important;
 }
 .md-hero-blue {
-  background:linear-gradient(135deg, rgba(10,132,255,0.22), rgba(255,255,255,0.82)), linear-gradient(180deg, rgba(255,255,255,0.84), rgba(255,255,255,0.68)) !important;
+  background:linear-gradient(135deg, var(--n3-hero-blue-a), var(--n3-hero-blue-b)) !important;
 }
 html[data-theme="dark"] .md-hero-blue {
-  background:linear-gradient(135deg, rgba(138,180,248,0.22), rgba(12,12,12,0.9)), linear-gradient(180deg, rgba(18,18,18,0.92), rgba(0,0,0,0.8)) !important;
+  background:linear-gradient(135deg, var(--n3-hero-blue-a), var(--n3-hero-blue-b)) !important;
 }
-.md-hero-title { font-size:1.1rem; font-weight:820; line-height:1.15; flex:1; min-width:0; word-break:break-word; }
-.md-hero-text { margin-top:6px; color:var(--muted); font-size:0.8rem; line-height:1.55; font-weight:520; }
-.md-hero-metrics { display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; margin-top:14px; }
+.md-hero-title { margin:0; font-size:20px; font-weight:500; line-height:28px; flex:1; min-width:0; word-break:break-word; }
+.md-hero-text { margin-top:4px; color:var(--n3-on-surface-var); font-size:13px; line-height:20px; font-weight:400; }
+.md-hero-metrics { display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; }
 .md-hero-metric {
-  padding:10px 8px; border-radius:16px;
-  background:rgba(255,255,255,0.55);
-  box-shadow:inset 0 0 0 1px rgba(255,255,255,0.72);
+  padding:10px 14px 8px; border-radius:16px;
+  border:0;
+  background:var(--n3-surface);
+  box-shadow:none;
 }
 html[data-theme="dark"] .md-hero-metric {
-  background:rgba(255,255,255,0.06);
-  box-shadow:inset 0 0 0 1px rgba(255,255,255,0.08);
+  background:#111214;
+  box-shadow:none;
 }
-.md-hero-mv { font-size:0.95rem; font-weight:820; line-height:1.1; }
-.md-hero-ml { margin-top:2px; color:var(--muted); font-size:0.68rem; line-height:1.25; font-weight:650; }
+.md-hero-mv { font-size:15px; font-weight:500; line-height:22px; letter-spacing:.15px; font-variant-numeric:tabular-nums; }
+.md-hero-ml { margin-top:2px; color:var(--n3-on-surface-var); font-size:12px; line-height:16px; font-weight:400; }
 
+
+/* ===== n2 computer list ===== */
+.pc-page {
+  color: var(--pc-on-surface);
+  background: var(--pc-bg);
+}
+
+.pc-page .md-scroll-content {
+  width: 100%;
+  max-width: 1040px;
+  margin: 0 auto;
+  padding-right: 16px;
+  padding-left: 16px;
+}
+
+.pc-empty-state {
+  display: flex;
+  min-height: min(52vh, 420px);
+  align-items: center;
+  justify-content: center;
+  color: var(--pc-on-surface-var);
+}
+
+.pc-head.sl {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.pc-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 8px 12px;
+  color: var(--pc-on-surface-var);
+}
+
+.pc-list-head h2 {
+  margin: 0;
+  color: var(--pc-primary);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: .1px;
+}
+
+.pc-list-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.pc-list-hint svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+.pc-card {
+  --card-i: var(--pc-i, 0);
+  position: relative;
+  margin-bottom: 12px;
+  overflow: hidden;
+  border-radius: 24px;
+  background: var(--pc-card-bg);
+  box-shadow: var(--md-shadow);
+  transition: background-color .3s, box-shadow .3s, opacity .3s;
+}
+
+@keyframes pc-card-in {
+  from { opacity: 0; transform: translateY(14px); }
+  to { transform: translateY(0); }
+}
+
+html[data-theme="dark"] .pc-card {
+  background: var(--pc-card-bg);
+  box-shadow: var(--md-shadow);
+}
+
+.pc-card-open {
+  background: var(--pc-card-open-bg);
+}
+
+.pc-card-dim {
+  opacity: .55;
+}
+
+.pc-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto auto;
+  grid-template-areas: "av ti st pw mo ch";
+  align-items: center;
+  gap: 4px 14px;
+  min-width: 0;
+  padding: 12px 12px 12px 16px;
+  border-radius: 24px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.pc-avatar {
+  grid-area: av;
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  margin-inline: 8px;
+  flex: none;
+  border-radius: 16px;
+  background: var(--n3-secondary-container);
+  color: var(--n3-on-secondary-container);
+  transition: background-color .3s, color .3s;
+}
+
+.pc-card-open .pc-avatar {
+  background: var(--n3-secondary-container);
+  color: var(--n3-on-secondary-container);
+}
+
+.pc-avatar-online,
+.pc-card-open .pc-avatar-online {
+  background: var(--n3-secondary-container);
+  color: var(--n3-on-secondary-container);
+}
+
+.pc-title {
+  grid-area: ti;
+  min-width: 0;
+}
+
+.pc-name {
+  margin: 0;
+  overflow: hidden;
+  color: var(--pc-on-surface);
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 24px;
+  letter-spacing: .15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pc-meta {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--pc-on-surface-var);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.pc-ip {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pc-os {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pc-os::before {
+  content: "·";
+  margin-right: 8px;
+}
+
+.pc-status {
+  grid-area: st;
+  display: inline-flex;
+  align-items: center;
+  justify-self: end;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  height: 24px;
+  min-height: 24px;
+  max-height: 24px;
+  box-sizing: border-box;
+  overflow: hidden;
+  margin-right: 8px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--n3-secondary-container);
+  color: var(--pc-on-surface-var);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.pc-status > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pc-status-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--pc-off);
+}
+
+.pc-status-online {
+  background: var(--n3-good-container);
+  color: var(--n3-on-good-container);
+}
+
+.pc-status-online .pc-status-dot {
+  background: var(--pc-good);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pc-good) 22%, transparent);
+}
+
+.pc-status-checking .pc-status-dot,
+.pc-status-routerOffline .pc-status-dot {
+  background: var(--pc-off);
+  animation: pc-pulse 1.2s ease-in-out infinite;
+}
+
+.pc-status-waking .pc-status-dot,
+.pc-status-shutting .pc-status-dot {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--pc-warn);
+  border-right-color: transparent;
+  background: transparent;
+  animation: pc-spin .9s linear infinite;
+}
+
+@keyframes pc-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes pc-pulse {
+  50% { opacity: .35; transform: scale(.82); }
+}
+
+.pc-icon-btn {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: 20px;
+  background: transparent;
+  color: var(--pc-on-surface-var);
+  cursor: pointer;
+  transition: transform .12s ease, background-color .18s ease, color .18s ease;
+}
+
+.pc-icon-btn:not(:disabled):hover { transform: scale(1.04); }
+.pc-icon-btn:not(:disabled):active { transform: scale(.94); background: color-mix(in srgb, currentColor 12%, transparent); }
+.pc-icon-btn:disabled { opacity: .38; cursor: default; }
+
+.pc-power {
+  grid-area: pw;
+  border: 0;
+  transition: background-color .25s, color .25s;
+}
+
+.pc-power-on {
+  background: var(--pw-on-bg);
+  color: var(--pw-on-fg);
+}
+
+.pc-power-off {
+  background: var(--pw-off-bg);
+  color: var(--pw-off-fg);
+}
+
+html[data-theme="dark"] .pc-power-on {
+  background: var(--pw-on-bg);
+  color: var(--pw-on-fg);
+}
+
+html[data-theme="dark"] .pc-power-off {
+  background: var(--pw-off-bg);
+  color: var(--pw-off-fg);
+}
+
+.pc-power:disabled {
+  background: transparent;
+  color: var(--pc-on-surface-var);
+  box-shadow: inset 0 0 0 1px var(--n3-outline-variant);
+}
+
+.pc-more { grid-area: mo; }
+.pc-chevron { grid-area: ch; }
+
+.pc-chevron svg {
+  transition: transform .35s cubic-bezier(.2, 0, 0, 1);
+}
+
+.pc-card-open .pc-chevron svg {
+  transform: rotate(180deg);
+}
+
+.pc-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows .4s cubic-bezier(.2, 0, 0, 1);
+}
+
+.pc-body-open {
+  grid-template-rows: 1fr;
+}
+
+.pc-body-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.pc-panel {
+  position: relative;
+  padding: 4px 20px 16px;
+  opacity: 0;
+  transform: translateY(-8px);
+  transition: opacity .25s, transform .4s cubic-bezier(.2, 0, 0, 1);
+}
+
+.pc-body-open .pc-panel {
+  opacity: 1;
+  transform: none;
+}
+
+.pc-info {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 12px;
+}
+
+.pc-info span {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 8px;
+  background: var(--pc-surface-high);
+  color: var(--pc-on-surface-var);
+  font-size: 12px;
+}
+
+.pc-info b {
+  max-width: 220px;
+  margin-left: 6px;
+  overflow: hidden;
+  color: var(--pc-on-surface);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pc-offline-state,
+.pc-loading-state,
+.pc-error-state,
+.pc-command-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 150px;
+  padding: 28px 16px;
+  border-radius: 16px;
+  background: var(--pc-child-bg);
+  color: var(--pc-on-surface-var);
+  text-align: center;
+}
+
+.pc-offline-state p,
+.pc-error-state p,
+.pc-command-empty p {
+  margin: 0;
+}
+
+.pc-loading-state {
+  min-height: 96px;
+  flex-direction: row;
+}
+
+.pc-busy-spinner {
+  color: var(--pc-primary);
+  animation: pc-spin .9s linear infinite;
+}
+
+.pc-error-state {
+  color: var(--pc-error);
+}
+
+html[data-theme="dark"] .pc-error-state {
+  color: var(--pc-error);
+}
+
+.pc-inline-error {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--pc-error) 28%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--pc-error) 8%, var(--pc-surface-lowest));
+  color: var(--pc-error);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.pc-inline-error .pc-tonal-btn {
+  min-height: 32px;
+  flex: none;
+  padding: 0 12px;
+  font-size: 12px;
+}
+
+.pc-tonal-btn,
+.pc-danger-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 20px;
+  background: var(--n3-secondary-container);
+  color: var(--n3-on-secondary-container);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.pc-tonal-btn:disabled,
+.pc-danger-btn:disabled {
+  opacity: .38;
+  cursor: default;
+}
+
+.pc-tonal-btn.pc-power-on {
+  background: var(--pw-on-bg);
+  color: var(--pw-on-fg);
+}
+
+html[data-theme="dark"] .pc-tonal-btn.pc-power-on {
+  background: var(--pw-on-bg);
+  color: var(--pw-on-fg);
+}
+
+.pc-danger-btn {
+  background: var(--n3-error-container);
+  color: var(--n3-on-error-container);
+}
+
+.pc-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.pc-metric {
+  --panel: var(--pc-child-bg);
+  --muted: var(--pc-on-surface-var);
+  --chart-grid: var(--pc-grid);
+  min-width: 0;
+  padding: 16px 16px 12px;
+  border-radius: 16px;
+  background: var(--pc-child-bg);
+  transition: background-color .3s;
+}
+
+html[data-theme="dark"] .pc-metric {
+  background: var(--pc-child-bg);
+}
+
+.pc-metric-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.pc-metric-head + .computer-chart {
+  margin-top: 12px;
+}
+
+.pc-metric-icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  border-radius: 12px;
+  background: var(--pc-child-icon-bg);
+  color: var(--pc-on-surface-var);
+}
+
+.pc-metric-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.pc-metric-label {
+  color: var(--pc-on-surface);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.pc-metric-spec {
+  overflow: hidden;
+  color: var(--pc-on-surface-var);
+  font-size: 12px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pc-metric-value {
+  flex: none;
+  color: var(--pc-on-surface);
+  font-size: 28px;
+  font-weight: 400;
+  line-height: 36px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pc-metric-value small {
+  margin-left: 2px;
+  color: var(--pc-on-surface-var);
+  font-size: 14px;
+}
+
+.pc-metric-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 16px;
+  min-height: 20px;
+  margin: 8px 0;
+  color: var(--pc-on-surface-var);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pc-metric-sub b {
+  color: var(--pc-on-surface);
+  font-weight: 500;
+}
+
+.pc-disk-sub {
+  gap: 6px 10px;
+}
+
+.pc-usage-bar {
+  display: block;
+  flex: 1 1 100%;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--pc-surface-highest);
+}
+
+.pc-usage-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  background: var(--pc-series-1);
+}
+
+.pc-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pc-key::before {
+  width: 12px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--pc-key);
+  content: "";
+}
+
+.pc-partitions {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.pc-partition {
+  display: grid;
+  grid-template-columns: minmax(48px, auto) minmax(60px, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  color: var(--pc-on-surface-var);
+  font-size: 11px;
+}
+
+.pc-debug-info {
+  margin: 12px 0 0;
+  grid-column: 1 / -1;
+  overflow: hidden;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--pc-surface-high);
+  color: var(--pc-on-surface-var);
+  font-family: monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pc-collapse-btn {
+  display: flex;
+  width: max-content;
+  max-width: 100%;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 12px auto 0;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 20px;
+  background: var(--n3-secondary-container);
+  color: var(--n3-on-secondary-container);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.pc-collapse-btn:hover {
+  background: var(--n3-surface-container-high);
+}
+
+.pc-command-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 12px;
+}
+
+.pc-command-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.pc-command-title {
+  color: var(--pc-on-surface);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.pc-command-sub {
+  margin-top: 2px;
+  color: var(--pc-on-surface-var);
+  font-size: 11px;
+}
+
+.pc-command-list,
+.pc-manager-list {
+  display: grid;
+  gap: 4px;
+}
+
+.pc-command-item,
+.pc-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 48px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--pc-surface-high);
+  color: var(--pc-on-surface);
+  text-align: left;
+  cursor: pointer;
+}
+
+.pc-command-item:disabled,
+.pc-menu-item:disabled {
+  opacity: .38;
+  cursor: default;
+}
+
+.pc-command-item:hover:not(:disabled),
+.pc-menu-item:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--pc-primary) 10%, var(--pc-surface-high));
+}
+
+.pc-command-icon,
+.pc-menu-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border-radius: 10px;
+  background: var(--pc-surface-highest);
+  color: var(--pc-on-surface-var);
+}
+
+.pc-command-text,
+.pc-menu-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.pc-command-text small,
+.pc-menu-text small {
+  overflow: hidden;
+  color: var(--pc-on-surface-var);
+  font-size: 11px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pc-risk-badge,
+.pc-running-badge {
+  flex: none;
+  padding: 3px 7px;
+  border-radius: 8px;
+  background: var(--n3-error-container);
+  color: var(--n3-on-error-container);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.pc-running-badge {
+  background: var(--n3-good-container);
+  color: var(--n3-on-good-container);
+}
+
+.pc-run-view {
+  margin: 12px 0 0;
+  padding: 12px;
+  border-radius: 16px;
+  background: var(--pc-child-bg);
+}
+
+.pc-run-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.pc-run-title {
+  color: var(--pc-on-surface);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.pc-run-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-top: 4px;
+  color: var(--pc-on-surface-var);
+  font-size: 11px;
+}
+
+.pc-run-status {
+  padding: 2px 7px;
+  border-radius: 8px;
+  background: var(--pc-surface-high);
+  color: var(--pc-on-surface-var);
+  font-weight: 700;
+}
+
+.pc-run-succeeded { background: color-mix(in srgb, var(--pc-good) 16%, transparent); color: var(--pc-good); }
+.pc-run-failed,
+.pc-run-timed_out,
+.pc-run-interrupted { background: color-mix(in srgb, var(--pc-error) 12%, transparent); color: var(--pc-error); }
+.pc-run-running,
+.pc-run-queued { background: color-mix(in srgb, var(--pc-primary) 14%, transparent); color: var(--pc-primary); }
+
+.pc-run-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.pc-run-actions .pc-tonal-btn,
+.pc-run-actions .pc-danger-btn {
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+
+.pc-output-filters {
+  display: flex;
+  gap: 4px;
+  margin: 10px 0 6px;
+}
+
+.pc-output-filters button {
+  padding: 5px 10px;
+  border: 1px solid var(--pc-outline-var);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--pc-on-surface-var);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.pc-filter-active {
+  border-color: color-mix(in srgb, var(--pc-primary) 45%, transparent) !important;
+  background: color-mix(in srgb, var(--pc-primary) 12%, transparent) !important;
+  color: var(--pc-primary) !important;
+}
+
+.pc-output {
+  max-height: 260px;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, .72);
+  color: #e6edf3;
+  font-family: "Roboto Mono", "JetBrains Mono", Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overscroll-behavior: contain;
+}
+
+.pc-run-note,
+.pc-run-error {
+  margin-top: 6px;
+  color: var(--pc-on-surface-var);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.pc-run-error {
+  color: var(--pc-error);
+}
+
+html[data-theme="dark"] .pc-run-error {
+  color: var(--pc-error);
+}
+
+.pc-menu {
+  position: fixed;
+  z-index: 80;
+  min-width: 240px;
+  max-width: min(340px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  padding: 8px 0;
+  overflow: auto;
+  border: 1px solid var(--pc-outline-var);
+  border-radius: 12px;
+  background: var(--pc-surface-high);
+  color: var(--pc-on-surface);
+  box-shadow: 0 2px 6px 2px rgba(0, 0, 0, .12), 0 1px 2px rgba(0, 0, 0, .2);
+  transform-origin: top right;
+  animation: pc-menu-in .18s cubic-bezier(.2, 0, 0, 1);
+}
+
+@keyframes pc-menu-in {
+  from { opacity: 0; transform: scale(.92); }
+}
+
+.pc-menu-label,
+.pc-menu-note {
+  padding: 8px 16px 4px;
+  color: var(--pc-on-surface-var);
+  font-size: 12px;
+}
+
+.pc-menu-label {
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pc-menu-note {
+  padding-bottom: 8px;
+}
+
+.pc-menu .pc-menu-item {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  border-radius: 0;
+  background: transparent;
+}
+
+.pc-menu .pc-menu-item::before {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: currentColor;
+  content: "";
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .15s;
+}
+
+.pc-menu .pc-menu-item:not(:disabled):hover::before {
+  opacity: .08;
+}
+
+.pc-menu .pc-menu-item:not(:disabled):active::before {
+  opacity: .12;
+}
+
+.pc-menu-divider {
+  height: 1px;
+  margin: 8px 0;
+  background: var(--pc-outline-var);
+}
+
+.pc-manager {
+  display: grid;
+  gap: 12px;
+}
+
+.pc-manager-title {
+  color: var(--pc-primary);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.pc-field {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  color: var(--pc-on-surface-var);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.pc-field input,
+.pc-field select {
+  width: 100%;
+  min-width: 0;
+  height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--pc-outline);
+  border-radius: 10px;
+  outline: none;
+  background: rgba(255, 255, 255, .55);
+  color: var(--pc-on-surface);
+  font-size: 14px;
+}
+
+html[data-theme="dark"] .pc-field input,
+html[data-theme="dark"] .pc-field select {
+  background: rgba(255, 255, 255, .06);
+}
+
+.pc-field input:focus,
+.pc-field select:focus {
+  border-color: var(--pc-primary);
+}
+
+.pc-field-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+}
+
+.pc-check-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--pc-on-surface);
+  font-size: 13px;
+}
+
+.pc-policy {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--pc-primary) 8%, var(--pc-surface-high));
+  color: var(--pc-on-surface-var);
+  font-size: 11px;
+}
+
+.pc-policy code {
+  overflow-wrap: anywhere;
+  color: var(--pc-on-surface);
+}
+
+.pc-manager-list {
+  display: grid;
+  gap: 4px;
+  margin-left: 0;
+}
+
+.pc-manager-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px 6px 12px;
+  border-radius: 12px;
+  background: var(--pc-surface-high);
+}
+
+.pc-danger-icon {
+  color: var(--pc-error);
+}
+
+.pc-confirm {
+  display: grid;
+  gap: 10px;
+}
+
+.pc-confirm-icon {
+  justify-self: center;
+  color: var(--pc-primary);
+}
+
+.pc-confirm h3 {
+  margin: 0;
+  text-align: center;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.pc-confirm p {
+  margin: 0;
+  color: var(--pc-on-surface-var);
+  font-size: 13px;
+}
+
+.pc-confirm-command {
+  max-height: 140px;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, .72);
+  color: #e6edf3;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.pc-confirm-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  color: var(--pc-on-surface-var);
+  font-size: 12px;
+}
+
+.pc-risk-high {
+  color: var(--pc-error);
+  font-weight: 700;
+}
+
+html[data-theme="dark"] .pc-risk-high {
+  color: var(--pc-error);
+}
+
+/* Shared page-entry animation: replays whenever a tab becomes active. */
+.md-page.page-active .md-hero,
+.md-page.page-active .md-hero-metric,
+.md-page.page-active .md-settings-card,
+.md-page.page-active .md-traffic-card,
+.md-page.page-active .net-peer-card,
+.md-page.page-active .pc-card {
+  animation: pc-card-in .35s ease-out both;
+  animation-delay: calc(var(--card-i, 0) * 60ms);
+}
+
+.md-page.page-active .md-hero { --card-i: 0; }
+.md-page.page-active .md-hero-metric:nth-child(2) { --card-i: 1; }
+.md-page.page-active .md-hero-metric:nth-child(3) { --card-i: 2; }
+.md-page.page-active .md-hero-metric:nth-child(4) { --card-i: 3; }
+.md-page.page-active .md-settings-card:nth-child(2) { --card-i: 1; }
+.md-page.page-active .md-settings-card:nth-child(3) { --card-i: 2; }
+.md-page.page-active .md-settings-card:nth-child(4) { --card-i: 3; }
+.md-page.page-active .md-settings-card:nth-child(5) { --card-i: 4; }
+.md-page.page-active .md-settings-card:nth-child(6) { --card-i: 5; }
+.md-page.page-active .md-settings-card:nth-child(7) { --card-i: 6; }
+.md-page.page-active .md-settings-card:nth-child(8) { --card-i: 7; }
+.md-page.page-active .md-settings-card:nth-child(9) { --card-i: 8; }
+.md-page.page-active .md-traffic-card { --card-i: 1; }
+
+@media (max-width: 720px) {
+  .pc-metrics {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 600px) {
+  .pc-page .md-scroll-content {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .pc-list-head {
+    padding: 0 4px 8px;
+  }
+
+  .pc-list-hint {
+    display: none;
+  }
+
+  .pc-head {
+    grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+    grid-template-areas:
+      "av ti pw mo ch"
+      "av st pw mo ch";
+    gap: 2px 10px;
+    padding: 12px 8px 12px 12px;
+  }
+
+  .pc-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+  }
+
+  .pc-status {
+    justify-self: start;
+    margin: 0;
+    padding: 0 8px;
+    background: var(--n3-secondary-container);
+    font-size: 11px;
+  }
+
+  .pc-status-online {
+    background: var(--n3-good-container);
+  }
+
+  .pc-os {
+    display: none;
+  }
+
+  .pc-panel {
+    padding: 4px 12px 12px;
+  }
+
+  .pc-info b {
+    max-width: 150px;
+  }
+
+  .pc-metric {
+    padding: 14px 12px 10px;
+  }
+
+  .pc-metric-value {
+    font-size: 24px;
+    line-height: 32px;
+  }
+
+  .pc-metric-icon {
+    width: 32px;
+    height: 32px;
+  }
+
+  .pc-metric-head {
+    gap: 8px;
+  }
+
+  .pc-avatar {
+    margin-inline: 4px;
+  }
+
+  .pc-run-head {
+    flex-direction: column;
+  }
+
+  .pc-command-toolbar {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .pc-command-actions {
+    justify-content: flex-start;
+  }
+
+  .pc-run-actions {
+    justify-content: flex-start;
+  }
+
+  .pc-menu {
+    max-width: calc(100vw - 16px);
+  }
+
+  .pc-field-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .net-peer-main {
+    gap: 10px;
+    padding: 14px;
+  }
+
+  .net-peer-name {
+    font-size: 15px;
+  }
+
+  .net-peer-tags {
+    max-width: 62%;
+    gap: 6px;
+  }
+
+}
+
+@media (max-width: 380px) {
+  .pc-head {
+    gap: 2px 7px;
+    padding-left: 10px;
+  }
+
+  .pc-icon-btn {
+    width: 36px;
+    height: 36px;
+    border-radius: 18px;
+  }
+
+  .pc-name {
+    font-size: 15px;
+  }
+
+  .pc-meta {
+    font-size: 12px;
+  }
+
+  .pc-metric-value {
+    font-size: 21px;
+    line-height: 28px;
+  }
+
+  .pc-info span {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pc-card,
+  .md-page.page-active .md-hero,
+  .md-page.page-active .md-hero-metric,
+  .md-page.page-active .md-settings-card,
+  .md-page.page-active .md-traffic-card,
+  .md-page.page-active .net-peer-card,
+  .net-peer-expand,
+  .net-peer-info,
+  .pc-body,
+  .pc-panel,
+  .pc-chevron svg,
+  .pc-status-dot,
+  .pc-menu {
+    transition: none !important;
+    animation: none !important;
+  }
+}
 </style>

@@ -173,6 +173,32 @@ export async function httpPost(url: string, proxy?: string, timeoutSecs?: number
   return await invoke<string>('http_post', { url, proxy: proxy || null, timeoutSecs: timeoutSecs ?? null })
 }
 
+export interface HttpRequestOptions {
+  method: string
+  url: string
+  proxy?: string
+  timeoutSecs?: number
+  headers?: Record<string, string>
+  body?: string
+}
+
+export interface HttpRequestResult {
+  status: number
+  headers: Record<string, string>
+  body: string
+}
+
+export async function httpRequest(options: HttpRequestOptions): Promise<HttpRequestResult> {
+  return await invoke<HttpRequestResult>('http_request', {
+    method: options.method,
+    url: options.url,
+    proxy: options.proxy || null,
+    timeoutSecs: options.timeoutSecs ?? 10,
+    headers: options.headers || null,
+    body: options.body ?? null,
+  })
+}
+
 export async function tcpPing(host: string, port: number) {
   return await invoke<string>('tcp_ping', { host, port })
 }

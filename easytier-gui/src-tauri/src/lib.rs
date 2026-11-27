@@ -690,6 +690,75 @@ async fn http_post(
         .map_err(|e| format!("Failed to read response: {}", e))
 }
 
+#[derive(serde::Serialize)]
+struct HttpRequestResponse {
+    status: u16,
+    headers: std::collections::HashMap<String, String>,
+    body: String,
+}
+
+#[tauri::command]
+async fn http_request(
+    method: String,
+    url: String,
+    proxy: Option<String>,
+    timeout_secs: Option<u64>,
+    headers: Option<std::collections::HashMap<String, String>>,
+    body: Option<String>,
+) -> Result<HttpRequestResponse, String> {
+    let method = reqwest::Method::from_bytes(method.as_bytes())
+        .map_err(|e| format!("Invalid HTTP method: {}", e))?;
+    let mut builder = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(timeout_secs.unwrap_or(10)));
+    if let Some(ref p) = proxy {
+        builder =
+            builder.proxy(reqwest::Proxy::all(p).map_err(|e| format!("Invalid proxy: {}", e))?);
+    }
+    let client = builder
+        .build()
+        .map_err(|e| format!("Failed to create client: {}", e))?;
+
+    let mut request = client.request(method, &url);
+    if let Some(headers) = headers {
+        for (name, value) in headers {
+            let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+                .map_err(|e| format!("Invalid header name: {}", e))?;
+            let value = reqwest::header::HeaderValue::from_str(&value)
+                .map_err(|e| format!("Invalid header value for {}: {}", name, e))?;
+            request = request.header(name, value);
+        }
+    }
+    if let Some(body) = body {
+        request = request.body(body);
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("HTTP request failed: {}", e))?;
+    let status = response.status().as_u16();
+    let response_headers = response
+        .headers()
+        .iter()
+        .map(|(name, value)| {
+            (
+                name.as_str().to_string(),
+                value.to_str().unwrap_or_default().to_string(),
+            )
+        })
+        .collect();
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read response: {}", e))?;
+
+    Ok(HttpRequestResponse {
+        status,
+        headers: response_headers,
+        body,
+    })
+}
+
 #[tauri::command]
 async fn tcp_ping(host: String, port: u16) -> Result<String, String> {
     let addr = format!("{}:{}", host, port);
@@ -2731,6 +2800,7 @@ pub fn run_gui() -> std::process::ExitCode {
             is_web_client_connected,
             http_get,
             http_post,
+            http_request,
             tcp_ping,
             luci_proxy_start,
             luci_proxy_stop,

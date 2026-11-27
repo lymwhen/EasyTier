@@ -9,25 +9,42 @@ declare global {
   const EffectScope: typeof import('vue')['EffectScope']
   const MenuItemExit: typeof import('./composables/tray')['MenuItemExit']
   const MenuItemShow: typeof import('./composables/tray')['MenuItemShow']
+  const WOL_FAILURE_GRACE: typeof import('./composables/wol_status')['WOL_FAILURE_GRACE']
   const acceptHMRUpdate: typeof import('pinia')['acceptHMRUpdate']
   const addVpnPortalClient: typeof import('./composables/backend')['addVpnPortalClient']
   const applyTheme: typeof import('./composables/theme')['applyTheme']
+  const applyWolFailure: typeof import('./composables/wol_status')['applyWolFailure']
+  const applyWolRouterFailure: typeof import('./composables/wol_status')['applyWolRouterFailure']
+  const applyWolRouterSuccess: typeof import('./composables/wol_status')['applyWolRouterSuccess']
+  const applyWolSuccess: typeof import('./composables/wol_status')['applyWolSuccess']
+  const cancelCommandRun: typeof import('./composables/computer_commands')['cancelCommandRun']
   const clearVpnPortalClients: typeof import('./composables/backend')['clearVpnPortalClients']
   const collectNetworkInfo: typeof import('./composables/backend')['collectNetworkInfo']
   const computed: typeof import('vue')['computed']
   const consumePendingMobileVpnTileAction: typeof import('./composables/mobile_vpn')['consumePendingMobileVpnTileAction']
   const createApp: typeof import('vue')['createApp']
+  const createCommandId: typeof import('./composables/computer_commands')['createCommandId']
+  const createCommandRun: typeof import('./composables/computer_commands')['createCommandRun']
   const createPinia: typeof import('pinia')['createPinia']
+  const createUuid: typeof import('./composables/computer_commands')['createUuid']
+  const createWolDeviceStatus: typeof import('./composables/wol_status')['createWolDeviceStatus']
+  const createWolRouterStatus: typeof import('./composables/wol_status')['createWolRouterStatus']
   const customRef: typeof import('vue')['customRef']
   const defineAsyncComponent: typeof import('vue')['defineAsyncComponent']
   const defineComponent: typeof import('vue')['defineComponent']
   const defineStore: typeof import('pinia')['defineStore']
   const deleteNetworkInstance: typeof import('./composables/backend')['deleteNetworkInstance']
   const effectScope: typeof import('vue')['effectScope']
+  const effectiveWolState: typeof import('./composables/wol_status')['effectiveWolState']
   const executeVpnTileAction: typeof import('./composables/mobile_vpn_tile')['executeVpnTileAction']
+  const forceWolOffline: typeof import('./composables/wol_status')['forceWolOffline']
+  const formatDisplayCommand: typeof import('./composables/computer_commands')['formatDisplayCommand']
   const generateMenuItem: typeof import('./composables/tray')['generateMenuItem']
   const generateNetworkConfig: typeof import('./composables/backend')['generateNetworkConfig']
   const getActivePinia: typeof import('pinia')['getActivePinia']
+  const getCommandOutput: typeof import('./composables/computer_commands')['getCommandOutput']
+  const getCommandPolicy: typeof import('./composables/computer_commands')['getCommandPolicy']
+  const getCommandRun: typeof import('./composables/computer_commands')['getCommandRun']
   const getConfig: typeof import('./composables/backend')['getConfig']
   const getCurrentInstance: typeof import('vue')['getCurrentInstance']
   const getCurrentScope: typeof import('vue')['getCurrentScope']
@@ -38,6 +55,7 @@ declare global {
   const h: typeof import('vue')['h']
   const httpGet: typeof import('./composables/backend')['httpGet']
   const httpPost: typeof import('./composables/backend')['httpPost']
+  const httpRequest: typeof import('./composables/backend')['httpRequest']
   const initMobileVpnService: typeof import('./composables/mobile_vpn')['initMobileVpnService']
   const initRpcConnection: typeof import('./composables/backend')['initRpcConnection']
   const initService: typeof import('./composables/backend')['initService']
@@ -49,8 +67,11 @@ declare global {
   const isReadonly: typeof import('vue')['isReadonly']
   const isRef: typeof import('vue')['isRef']
   const isWebClientConnected: typeof import('./composables/backend')['isWebClientConnected']
+  const listActiveCommandRuns: typeof import('./composables/computer_commands')['listActiveCommandRuns']
   const listNetworkInstanceIds: typeof import('./composables/backend')['listNetworkInstanceIds']
   const listenGlobalEvents: typeof import('./composables/event')['listenGlobalEvents']
+  const loadDeviceCommandToken: typeof import('./composables/computer_commands')['loadDeviceCommandToken']
+  const loadDeviceCommands: typeof import('./composables/computer_commands')['loadDeviceCommands']
   const loadLastNetworkInstanceId: typeof import('./composables/config')['loadLastNetworkInstanceId']
   const loadMode: typeof import('./composables/mode')['loadMode']
   const luciGetLastPath: typeof import('./composables/backend')['luciGetLastPath']
@@ -62,6 +83,7 @@ declare global {
   const mapStores: typeof import('pinia')['mapStores']
   const mapWritableState: typeof import('pinia')['mapWritableState']
   const markRaw: typeof import('vue')['markRaw']
+  const markWolChecking: typeof import('./composables/wol_status')['markWolChecking']
   const nextTick: typeof import('vue')['nextTick']
   const normalizeConfigSource: typeof import('./composables/config_source')['normalizeConfigSource']
   const onActivated: typeof import('vue')['onActivated']
@@ -92,6 +114,8 @@ declare global {
   const resolveComponent: typeof import('vue')['resolveComponent']
   const resolveTheme: typeof import('./composables/theme')['resolveTheme']
   const runNetworkInstance: typeof import('./composables/backend')['runNetworkInstance']
+  const saveDeviceCommandToken: typeof import('./composables/computer_commands')['saveDeviceCommandToken']
+  const saveDeviceCommands: typeof import('./composables/computer_commands')['saveDeviceCommands']
   const saveLastNetworkInstanceId: typeof import('./composables/config')['saveLastNetworkInstanceId']
   const saveMode: typeof import('./composables/mode')['saveMode']
   const saveNetworkConfig: typeof import('./composables/backend')['saveNetworkConfig']
@@ -151,25 +175,42 @@ declare module 'vue' {
     readonly EffectScope: UnwrapRef<typeof import('vue')['EffectScope']>
     readonly MenuItemExit: UnwrapRef<typeof import('./composables/tray')['MenuItemExit']>
     readonly MenuItemShow: UnwrapRef<typeof import('./composables/tray')['MenuItemShow']>
+    readonly WOL_FAILURE_GRACE: UnwrapRef<typeof import('./composables/wol_status')['WOL_FAILURE_GRACE']>
     readonly acceptHMRUpdate: UnwrapRef<typeof import('pinia')['acceptHMRUpdate']>
     readonly addVpnPortalClient: UnwrapRef<typeof import('./composables/backend')['addVpnPortalClient']>
     readonly applyTheme: UnwrapRef<typeof import('./composables/theme')['applyTheme']>
+    readonly applyWolFailure: UnwrapRef<typeof import('./composables/wol_status')['applyWolFailure']>
+    readonly applyWolRouterFailure: UnwrapRef<typeof import('./composables/wol_status')['applyWolRouterFailure']>
+    readonly applyWolRouterSuccess: UnwrapRef<typeof import('./composables/wol_status')['applyWolRouterSuccess']>
+    readonly applyWolSuccess: UnwrapRef<typeof import('./composables/wol_status')['applyWolSuccess']>
+    readonly cancelCommandRun: UnwrapRef<typeof import('./composables/computer_commands')['cancelCommandRun']>
     readonly clearVpnPortalClients: UnwrapRef<typeof import('./composables/backend')['clearVpnPortalClients']>
     readonly collectNetworkInfo: UnwrapRef<typeof import('./composables/backend')['collectNetworkInfo']>
     readonly computed: UnwrapRef<typeof import('vue')['computed']>
     readonly consumePendingMobileVpnTileAction: UnwrapRef<typeof import('./composables/mobile_vpn')['consumePendingMobileVpnTileAction']>
     readonly createApp: UnwrapRef<typeof import('vue')['createApp']>
+    readonly createCommandId: UnwrapRef<typeof import('./composables/computer_commands')['createCommandId']>
+    readonly createCommandRun: UnwrapRef<typeof import('./composables/computer_commands')['createCommandRun']>
     readonly createPinia: UnwrapRef<typeof import('pinia')['createPinia']>
+    readonly createUuid: UnwrapRef<typeof import('./composables/computer_commands')['createUuid']>
+    readonly createWolDeviceStatus: UnwrapRef<typeof import('./composables/wol_status')['createWolDeviceStatus']>
+    readonly createWolRouterStatus: UnwrapRef<typeof import('./composables/wol_status')['createWolRouterStatus']>
     readonly customRef: UnwrapRef<typeof import('vue')['customRef']>
     readonly defineAsyncComponent: UnwrapRef<typeof import('vue')['defineAsyncComponent']>
     readonly defineComponent: UnwrapRef<typeof import('vue')['defineComponent']>
     readonly defineStore: UnwrapRef<typeof import('pinia')['defineStore']>
     readonly deleteNetworkInstance: UnwrapRef<typeof import('./composables/backend')['deleteNetworkInstance']>
     readonly effectScope: UnwrapRef<typeof import('vue')['effectScope']>
+    readonly effectiveWolState: UnwrapRef<typeof import('./composables/wol_status')['effectiveWolState']>
     readonly executeVpnTileAction: UnwrapRef<typeof import('./composables/mobile_vpn_tile')['executeVpnTileAction']>
+    readonly forceWolOffline: UnwrapRef<typeof import('./composables/wol_status')['forceWolOffline']>
+    readonly formatDisplayCommand: UnwrapRef<typeof import('./composables/computer_commands')['formatDisplayCommand']>
     readonly generateMenuItem: UnwrapRef<typeof import('./composables/tray')['generateMenuItem']>
     readonly generateNetworkConfig: UnwrapRef<typeof import('./composables/backend')['generateNetworkConfig']>
     readonly getActivePinia: UnwrapRef<typeof import('pinia')['getActivePinia']>
+    readonly getCommandOutput: UnwrapRef<typeof import('./composables/computer_commands')['getCommandOutput']>
+    readonly getCommandPolicy: UnwrapRef<typeof import('./composables/computer_commands')['getCommandPolicy']>
+    readonly getCommandRun: UnwrapRef<typeof import('./composables/computer_commands')['getCommandRun']>
     readonly getConfig: UnwrapRef<typeof import('./composables/backend')['getConfig']>
     readonly getCurrentInstance: UnwrapRef<typeof import('vue')['getCurrentInstance']>
     readonly getCurrentScope: UnwrapRef<typeof import('vue')['getCurrentScope']>
@@ -180,6 +221,7 @@ declare module 'vue' {
     readonly h: UnwrapRef<typeof import('vue')['h']>
     readonly httpGet: UnwrapRef<typeof import('./composables/backend')['httpGet']>
     readonly httpPost: UnwrapRef<typeof import('./composables/backend')['httpPost']>
+    readonly httpRequest: UnwrapRef<typeof import('./composables/backend')['httpRequest']>
     readonly initMobileVpnService: UnwrapRef<typeof import('./composables/mobile_vpn')['initMobileVpnService']>
     readonly initRpcConnection: UnwrapRef<typeof import('./composables/backend')['initRpcConnection']>
     readonly initService: UnwrapRef<typeof import('./composables/backend')['initService']>
@@ -191,8 +233,11 @@ declare module 'vue' {
     readonly isReadonly: UnwrapRef<typeof import('vue')['isReadonly']>
     readonly isRef: UnwrapRef<typeof import('vue')['isRef']>
     readonly isWebClientConnected: UnwrapRef<typeof import('./composables/backend')['isWebClientConnected']>
+    readonly listActiveCommandRuns: UnwrapRef<typeof import('./composables/computer_commands')['listActiveCommandRuns']>
     readonly listNetworkInstanceIds: UnwrapRef<typeof import('./composables/backend')['listNetworkInstanceIds']>
     readonly listenGlobalEvents: UnwrapRef<typeof import('./composables/event')['listenGlobalEvents']>
+    readonly loadDeviceCommandToken: UnwrapRef<typeof import('./composables/computer_commands')['loadDeviceCommandToken']>
+    readonly loadDeviceCommands: UnwrapRef<typeof import('./composables/computer_commands')['loadDeviceCommands']>
     readonly loadLastNetworkInstanceId: UnwrapRef<typeof import('./composables/config')['loadLastNetworkInstanceId']>
     readonly loadMode: UnwrapRef<typeof import('./composables/mode')['loadMode']>
     readonly luciGetLastPath: UnwrapRef<typeof import('./composables/backend')['luciGetLastPath']>
@@ -204,6 +249,7 @@ declare module 'vue' {
     readonly mapStores: UnwrapRef<typeof import('pinia')['mapStores']>
     readonly mapWritableState: UnwrapRef<typeof import('pinia')['mapWritableState']>
     readonly markRaw: UnwrapRef<typeof import('vue')['markRaw']>
+    readonly markWolChecking: UnwrapRef<typeof import('./composables/wol_status')['markWolChecking']>
     readonly nextTick: UnwrapRef<typeof import('vue')['nextTick']>
     readonly normalizeConfigSource: UnwrapRef<typeof import('./composables/config_source')['normalizeConfigSource']>
     readonly onActivated: UnwrapRef<typeof import('vue')['onActivated']>
@@ -234,6 +280,8 @@ declare module 'vue' {
     readonly resolveComponent: UnwrapRef<typeof import('vue')['resolveComponent']>
     readonly resolveTheme: UnwrapRef<typeof import('./composables/theme')['resolveTheme']>
     readonly runNetworkInstance: UnwrapRef<typeof import('./composables/backend')['runNetworkInstance']>
+    readonly saveDeviceCommandToken: UnwrapRef<typeof import('./composables/computer_commands')['saveDeviceCommandToken']>
+    readonly saveDeviceCommands: UnwrapRef<typeof import('./composables/computer_commands')['saveDeviceCommands']>
     readonly saveLastNetworkInstanceId: UnwrapRef<typeof import('./composables/config')['saveLastNetworkInstanceId']>
     readonly saveMode: UnwrapRef<typeof import('./composables/mode')['saveMode']>
     readonly saveNetworkConfig: UnwrapRef<typeof import('./composables/backend')['saveNetworkConfig']>
